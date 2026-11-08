@@ -40,8 +40,8 @@ rayon 只用来并行派发图标批；像素处理本身已移到 GPU compute�
 | 图标取用 | `IconLoader` | 启动时窗口先出来，图标陆续补上；遮罩走 GPU compute |
 | 窗口枚举 | `Scanner` | 1.2 s / 100 ms 一轮，都在后台 |
 | 写 ini | `DiskWriter` | 停手 400 ms 后才写 |
-| 毛玻璃抓屏 | `frost::Live` | 100 ms 起步，桌面静止退避到 800 ms |
-| 毛玻璃模糊 | **UI 线程**（`shaders::frost` compute） | 每帧提交约 1.8 ms，零回读 |
+| 毛玻璃抓屏 | `frost::Live` | 变化时 50 ms / 静止退避到 800 ms；另有 25 ms 像素探针负责提前唤醒 |
+| 毛玻璃模糊 | **UI 线程**（`shaders::frost` compute） | 只重算变化的列，零回读；实验路径改为 `shaders::illusion` 色场重投影 |
 | 烟雾光栅 | **UI 线程**（`shaders::smoke` compute） | 每帧上传流场，输出直接注册为 egui 纹理 |
 
 ## 二、crate 依赖
@@ -85,11 +85,18 @@ API 变动都要改两处。
 
 返回 `FrameOutcome { cursor, repaint_delay }` —— 调用方只需要这两个值。
 
-毛玻璃背景不走上屏纹理上传：`frost::Live` 线程只抓屏并把字节用 `Arc`
-交给 UI 线程；`FrameRenderer` 在 `draw_frame` 前调用 `blur_gpu` 的 WGSL
-compute（两趟可分离高斯 + 圆角 coverage），输出 `Rgba8Unorm` 纹理直接
-注册给 egui，**零回读**。CPU `blur_rgba` / `compose` 保留为回退路径与
-像素级对照基准。
+毛玻璃背景不走上屏纹理上传：`frost::Live` 线程只抓屏（顺带算脏列范围与
+低频色场）并把字节用 `Arc` 交给 UI 线程；`FrameRenderer` 在 `draw_frame`
+前调用 `blur_gpu` 的 WGSL compute（两趟可分离高斯 + 圆角 coverage），
+输出 `Rgba8Unorm` 纹理直接注册给 egui，**零回读**。高斯逐像素独立，
+所以只 dispatch 变化列 `[x-r, x+r)`，其余像素留在纹理里不动。
+CPU `blur_rgba` / `compose` 保留为回退路径与像素级对照基准。
+
+`FrostIllusion` 打开后走另一条路：只在开窗时（以及色场大变且节流到期时）
+跑上面那次真高斯拿结构基底，其余帧由 `shaders::illusion` 用 24×16
+低频色场做**时域色彩重投影**，90 ms 插值过渡，每帧一个无循环 compute
+pass；过渡期间主动 `request_repaint_after`，静止时零提交。原算法不删，
+开关关掉就整幅回到它（见 ADR-073）。
 
 ### GPU shader 框架：`gpu/shaders/`
 
@@ -99,7 +106,8 @@ compute（两趟可分离高斯 + 圆角 coverage），输出 `Rgba8Unorm` 纹�
 
 | 模块 | GPU 做什么 | CPU 参考 |
 |---|---|---|
-| `frost.wgsl` | 两趟可分离高斯 + 圆角 + 预乘 | `frost::blur_rgba` |
+| `frost.wgsl` | 两趟可分离高斯 + 圆角 + 预乘（支持脏列范围） | `frost::blur_rgba` |
+| `illusion.wgsl` | 低频色场双线性重投影 + 时间插值（实验性） | `frost::color_field` |
 | `smoke.wgsl` | 双线性放大 + 三层噪声 + 调色 + pre/post | `Fluid::raster` / `post` |
 | `icon.wgsl` | 图标圆角 alpha 遮罩 | `core::icon::apply_round_mask` |
 | `puff.wgsl` | 64×64 软边烟团贴图 | `SmokeFx::puff_rgba_cpu` |
@@ -252,6 +260,7 @@ async 运行时带来的调度开销与栈占用都不划算。
 9. **拖放落点走 `GetCursorPos + ScreenToClient`**，不用 `DragQueryPoint`
    （坐标系文档不明确）。落点换算插入下标时，四边停靠的纵向轴不同：
    横排取 `x`，左/右停靠取 `y`。一批 `WM_DROPFILES` 只认第一条落点。
+   拿不到光标就退回追加末尾，不能退化成插到第 0 位。
 10. **没有周期动画的面板，`render()` 末尾必须把 `next_repaint` 推到未来**。
     这些窗口全靠事件把闹钟设回 `now`；若只设不推进，`due()` 在可见期间
     恒为真，主循环会把整个 Dock 拖进 60 fps 常驻提交。要周期动画的
@@ -281,7 +290,14 @@ async 运行时带来的调度开销与栈占用都不划算。
     所有几何计算里"检查尺寸 <= 0 就早退"必须写在 clamp **之前**，
     并同时挡 `NaN` / 无穷。可变上界的 clamp（如 `w as f32 - 1.001`）
     也要先保证上界非负。
-   拿不到光标就退回追加末尾，不能退化成插到第 0 位。
+16. **所有弹出面板的视觉样式只有一个来源**：`gpu::panel_style::PanelStyle`。
+    七个面板（日历 / 控制中心 / 计时器 / 资源 / 速记 / 分组 / 编辑）统一
+    走 `paint_frame()`（底色 → 磨砂叠加层 → 细边框）与
+    `ink / ink_sub / faint / card / card_hover / line`；圆角只用
+    `R_PANEL / R_CARD / R_FIELD / R_SMALL` 或 `pill(h)`，**不留锐角**。
+    注意 `argbc(a,r,g,b)` 是 alpha 在前，与 egui 的
+    `from_rgba_unmultiplied(r,g,b,a)` 相反 —— 这个项目已经因此错两次。
+    配置经进程级 `sync_prefs` 同步，不要在单个面板里另读 `Config`。
 
 ## 八、与 C 版的模块映射
 

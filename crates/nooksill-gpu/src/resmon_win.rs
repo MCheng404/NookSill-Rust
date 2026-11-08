@@ -9,7 +9,8 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
+use crate::panel_style::PanelStyle;
+use egui::{Align2, FontId, Rect as EguiRect, Stroke};
 use nooksill_platform::{CpuSampler, SysInfo};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
@@ -182,9 +183,10 @@ impl ResMonWindow {
         let hwnd = self.hwnd;
         let dark = self.dark;
         let info = self.info;
+        let frosted = self.renderer.frost_on();
         let raw = self.input.take(self.renderer.size(), self.ppp);
         self.renderer.render(gpu, raw, hwnd, pos, |ui| {
-            draw_panel(ui, dark, info);
+            draw_panel(ui, dark, frosted, info);
         })?;
         Ok(())
     }
@@ -225,27 +227,13 @@ impl ResMonWindow {
 /// 这里也用 painter 显式画 —— 用 egui 的布局做左右对齐时，
 /// 右边的数值会被挤没（实测过：`with_layout(right_to_left)` 在
 /// `horizontal` 里拿不到剩余宽度）。
-fn draw_panel(ui: &mut egui::Ui, dark: bool, info: SysInfo) {
+fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     let rect = ui.max_rect();
-    let bg = if dark {
-        Color32::from_rgba_unmultiplied(24, 25, 30, 250)
-    } else {
-        Color32::from_rgba_unmultiplied(246, 247, 250, 250)
-    };
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
-
-    let (tc, sub) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(255, 242, 242, 246),
-            Color32::from_rgba_unmultiplied(150, 200, 202, 214),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(255, 28, 28, 34),
-            Color32::from_rgba_unmultiplied(150, 90, 94, 108),
-        )
-    };
+    // 与 tool_win 同源的配色 bug（argbc 顺序），一并走共享样式。
+    let style = PanelStyle::current(dark, frosted);
+    style.paint_frame(painter, rect);
+    let (tc, sub) = (style.ink(), style.ink_sub());
     let accent = ui.visuals().selection.bg_fill;
 
     let pad = 16.0;
@@ -306,12 +294,12 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, info: SysInfo) {
             egui::pos2(rect.left() + pad, y),
             egui::vec2(rect.width() - 2.0 * pad, bar_h),
         );
-        painter.rect_filled(track, CornerRadius::same(3), sub);
+        painter.rect_filled(track, PanelStyle::pill(track.height()), sub);
         let pct = f32::from(pct.min(100));
         let filled =
             EguiRect::from_min_size(track.min, egui::vec2(track.width() * pct / 100.0, bar_h));
         if filled.width() > 1.0 {
-            painter.rect_filled(filled, CornerRadius::same(3), accent);
+            painter.rect_filled(filled, PanelStyle::pill(filled.height()), accent);
         }
         y += bar_h + 18.0;
     }

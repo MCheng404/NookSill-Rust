@@ -103,7 +103,7 @@ fn section_of_numeric(name: &str) -> &'static str {
         "LpFrost" => return "widgets.launchpad",
         // 设置窗口毛玻璃 / 栏体左右内边距 / 界面缩放。
         "UiFrost" | "HPad" | "UiScale" | "UiAccent" | "UiAccentDock" | "UiAccentDockIcons"
-        | "UiAccentCcIcons" => return "appearance",
+        | "UiAccentCcIcons" | "FrostIllusion" => return "appearance",
         // 帧率与同步（Rust 版自有）。
         "FrameCap" | "VSync" | "Msaa" => return "performance",
         // 更新器（Rust 版自有）。
@@ -314,6 +314,11 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("WidgetRadius", 0, 40, 0, false, false),
     ("WidgetGap", 0, 24, 6, false, false),
     ("WidgetBlur", 0, 14, 0, false, false),
+    // 弹出面板（小组件窗口卡片）。0 = 跟随毛玻璃自动选。
+    ("PanelOpacity", 0, 100, 0, false, false),
+    ("PanelOverlay", 0, 100, 28, false, false),
+    // 实验性：时域色彩重投影模糊（隐藏高级入口里的开关）。默认关 = 原高斯。
+    ("FrostIllusion", 0, 1, 0, true, false),
 ];
 
 impl Key {
@@ -549,6 +554,12 @@ impl Key {
     pub const WIDGET_GAP: Key = Key::Numeric(111);
     /// `WidgetBlur`：弹出层磨砂半径；0 = 跟随全局 `Blur`。
     pub const WIDGET_BLUR: Key = Key::Numeric(112);
+    /// `PanelOpacity`：小组件弹出面板底色不透明度；0 = 跟随毛玻璃。
+    pub const PANEL_OPACITY: Key = Key::Numeric(113);
+    /// `PanelOverlay`：面板叠加层（雾化）强度。
+    pub const PANEL_OVERLAY: Key = Key::Numeric(114);
+    /// `FrostIllusion`：实验性时域色彩重投影模糊；0 = 保留原高斯。
+    pub const FROST_ILLUSION: Key = Key::Numeric(115);
 
     /// `UiAccentDockIcons`：Dock 图标（内置条目 / 首字占位）是否应用主题色。
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);
@@ -714,6 +725,7 @@ impl Key {
         Key::UI_ACCENT_CC_ICONS,
         Key::NET_SECURE_DNS,
         Key::NET_MIRROR_ALL,
+        Key::FROST_ILLUSION,
     ];
 
     /// 需要读写的全部键：行序表在前，自有键在后。
@@ -969,6 +981,7 @@ impl Key {
             Key::WIDGET_RADIUS => (0, 40),
             Key::WIDGET_BLUR => (0, 14),
             Key::WIDGET_GAP => (0, 24),
+            Key::PANEL_OPACITY | Key::PANEL_OVERLAY => (0, 100),
             _ => return None,
         })
     }
@@ -1738,6 +1751,9 @@ mod tests {
             (Key::WIDGET_RADIUS, "WidgetRadius"),
             (Key::WIDGET_GAP, "WidgetGap"),
             (Key::WIDGET_BLUR, "WidgetBlur"),
+            (Key::PANEL_OPACITY, "PanelOpacity"),
+            (Key::PANEL_OVERLAY, "PanelOverlay"),
+            (Key::FROST_ILLUSION, "FrostIllusion"),
         ];
         for &(key, name) in pairs {
             assert_eq!(key.name(), name, "常量与表行错位");
@@ -2504,6 +2520,29 @@ mod tests {
         // 越界值夹回 0/1，不留悬空状态。
         ini.set("widgets", "PanelDismiss", "9");
         assert_eq!(Config::from_ini(&ini, 96).get_i32(Key::PANEL_DISMISS), 1);
+    }
+
+    /// 实验性模糊开关默认关（保留原高斯），落 `[appearance]` 段并能往返。
+    #[test]
+    fn frost_illusion_defaults_off_and_roundtrips() {
+        let c = Config::defaults(96);
+        assert_eq!(c.get_i32(Key::FROST_ILLUSION), 0);
+        assert_eq!(Key::FROST_ILLUSION.section(), "appearance");
+        // 必须进 EXTRA：否则 from_ini / write_ini 都遍历不到，开关重启就丢。
+        assert!(Key::EXTRA.contains(&Key::FROST_ILLUSION));
+        assert!(!Key::ALL.contains(&Key::FROST_ILLUSION));
+
+        let mut ini = Ini::new();
+        c.write_ini(&mut ini);
+        assert_eq!(ini.get("appearance", "FrostIllusion"), Some("0"));
+        ini.set("appearance", "FrostIllusion", "1");
+        assert_eq!(Config::from_ini(&ini, 96).get_i32(Key::FROST_ILLUSION), 1);
+        ini.set("appearance", "FrostIllusion", "7");
+        assert_eq!(
+            Config::from_ini(&ini, 96).get_i32(Key::FROST_ILLUSION),
+            1,
+            "布尔键越界要夹紧"
+        );
     }
 
     #[test]

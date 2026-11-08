@@ -64,6 +64,7 @@ pub mod mem;
 pub mod menu;
 pub mod note_win;
 pub mod offscreen;
+pub mod panel_style;
 pub mod perf;
 pub mod popup;
 pub mod present;

@@ -66,7 +66,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             ctx,
             ui,
             "高级",
-            "网络与更新行为，改动即时生效。",
+            "网络、更新与实验性渲染，改动即时生效。",
             |ctx, ui| {
                 super::widgets::toggle(
                     ctx,
@@ -81,6 +81,13 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                     Key::NET_MIRROR_ALL,
                     "镜像全部测速后再选",
                     "关闭：某个镜像够快就先下，不再等其余测完",
+                );
+                super::widgets::toggle(
+                    ctx,
+                    ui,
+                    Key::FROST_ILLUSION,
+                    "实验性：轻量实时磨砂",
+                    "视觉欺骗式模糊：一次真高斯保留结构，之后只用低频色场跟着桌面实时变色；大幅降低抓屏与卷积开销。关闭即回到原高斯算法",
                 );
             },
         );

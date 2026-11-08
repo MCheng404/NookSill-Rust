@@ -25,6 +25,8 @@ pub struct GpuBlur {
     h_pipeline: wgpu::ComputePipeline,
     v_pipeline: wgpu::ComputePipeline,
     target: Option<Target>,
+    /// 高斯权重只在半径/尺寸变化后才需要重传。
+    weights_ready: bool,
 }
 
 struct Target {
@@ -134,6 +136,7 @@ impl GpuBlur {
             h_pipeline: pipeline("h_blur"),
             v_pipeline: pipeline("v_blur"),
             target: None,
+            weights_ready: false,
         })
     }
 
@@ -143,7 +146,7 @@ impl GpuBlur {
         self.target.as_ref().map(|t| &t.view)
     }
 
-    /// Upload captured BGRA bytes, run both passes, return the output size.
+    /// Upload captured RGBA bytes, run both passes over the whole image.
     /// Returns `None` on invalid input so the caller can fall back to CPU.
     pub fn blur(
         &mut self,
@@ -153,6 +156,24 @@ impl GpuBlur {
         radius: u32,
         corner_px: f32,
     ) -> Option<(u32, u32)> {
+        self.blur_range(bits, w, h, radius, corner_px, 0..w)
+    }
+
+    /// 只重算 `cols` 这些列。
+    ///
+    /// 高斯卷积逐像素独立：源图第 x 列变化只影响输出 `[x-r, x+r]` 列，
+    /// 其余列在输出纹理里保持上一帧即可。桌面局部变化（时钟、光标、
+    /// 单个窗口拖动）时 GPU 工作量按比例下降，回读也更早完成。
+    /// 新建目标（尺寸/半径变了）时强制全量，避免未初始化像素。
+    pub fn blur_range(
+        &mut self,
+        bits: &[u8],
+        w: u32,
+        h: u32,
+        radius: u32,
+        corner_px: f32,
+        cols: std::ops::Range<u32>,
+    ) -> Option<(u32, u32)> {
         let pixels = (w as usize).checked_mul(h as usize)?;
         let bytes = pixels.checked_mul(4)?;
         if w == 0 || h == 0 || bits.len() < bytes {
@@ -160,7 +181,16 @@ impl GpuBlur {
         }
         let r = clamp_radius(radius);
         let weights = normalized_gaussian_weights(radius, sigma_for_radius(radius));
-        self.ensure(w, h, r)?;
+        let rebuilt = self.ensure(w, h, r)?;
+        let (x0, x1) = if rebuilt {
+            (0, w)
+        } else {
+            let a = cols.start.min(w);
+            (a, cols.end.clamp(a, w))
+        };
+        if x0 >= x1 {
+            return Some((w, h));
+        }
 
         let t = self.target.as_ref()?;
         let mut uniform = [0u8; 32];
@@ -169,13 +199,18 @@ impl GpuBlur {
         uniform[8..12].copy_from_slice(&r.to_ne_bytes());
         uniform[12..16].copy_from_slice(&(weights.len() as u32).to_ne_bytes());
         uniform[16..20].copy_from_slice(&corner_px.to_ne_bytes());
+        uniform[20..24].copy_from_slice(&x0.to_ne_bytes());
         self.rt.queue.write_buffer(&t.params, 0, &uniform);
 
-        let wb: Vec<u8> = weights.iter().flat_map(|f| f.to_ne_bytes()).collect();
-        self.rt.queue.write_buffer(&t.weights, 0, &wb);
+        if !self.weights_ready {
+            let wb: Vec<u8> = weights.iter().flat_map(|f| f.to_ne_bytes()).collect();
+            self.rt.queue.write_buffer(&t.weights, 0, &wb);
+            self.weights_ready = true;
+        }
         self.rt.queue.write_buffer(&t.src, 0, &bits[..bytes]);
 
-        let groups = (pixels as u32).div_ceil(WORKGROUP);
+        let work = (x1 - x0) * h;
+        let groups = work.div_ceil(WORKGROUP);
         let mut encoder = self
             .rt
             .device
@@ -197,10 +232,11 @@ impl GpuBlur {
         Some((w, h))
     }
 
-    fn ensure(&mut self, w: u32, h: u32, radius: u32) -> Option<()> {
+    /// `Some(true)` = 目标刚重建（这一帧必须全量算）。
+    fn ensure(&mut self, w: u32, h: u32, radius: u32) -> Option<bool> {
         if let Some(t) = &self.target {
             if t.w == w && t.h == h && t.radius == radius {
-                return Some(());
+                return Some(false);
             }
         }
         let pixels = u64::from(w) * u64::from(h);
@@ -289,7 +325,8 @@ impl GpuBlur {
             view,
             group,
         });
-        Some(())
+        self.weights_ready = false;
+        Some(true)
     }
 
     /// Read the output texture back to CPU. Test-only.
@@ -403,6 +440,59 @@ mod tests {
             worst = worst.max((i32::from(*a) - i32::from(*b)).abs());
         }
         assert!(worst <= 1, "worst pixel delta={worst}");
+    }
+
+    /// 局部重算 (dirty columns) 必须和整幅重算逐像素一致，且范围外
+    /// 的像素要原样保留上一帧 —— 这是脏列优化的正确性底线。
+    #[test]
+    #[ignore = "requires a GPU; run with --ignored"]
+    fn partial_blur_matches_full_blur_on_the_dirty_band() {
+        let gpu = Gpu::new("").expect("D3D12 adapter");
+        let (w, h) = (64u32, 48u32);
+        let radius = 6u32;
+        let a = sample(w as usize, h as usize);
+        let mut b = a.clone();
+        for y in 0..h as usize {
+            for x in 20..40usize {
+                let i = (y * w as usize + x) * 4;
+                b[i] = b[i].wrapping_add(90);
+                b[i + 1] = 255 - b[i + 1];
+                b[i + 2] = 17;
+            }
+        }
+
+        let mut partial = GpuBlur::new(&gpu.device, &gpu.queue).expect("pipeline");
+        partial.blur(&a, w, h, radius, 0.0).expect("full A");
+        let out_a = partial.readback().expect("readback A");
+
+        let mut full = GpuBlur::new(&gpu.device, &gpu.queue).expect("pipeline");
+        full.blur(&b, w, h, radius, 0.0).expect("full B");
+        let out_full = full.readback().expect("readback B");
+
+        // 源变化 20..40，半径 6 ⇒ 输出受影响 14..46。
+        partial
+            .blur_range(&b, w, h, radius, 0.0, 14..46)
+            .expect("partial B");
+        let out_partial = partial.readback().expect("readback partial");
+
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let i = (y * w as usize + x) * 4;
+                let want = if (14..46).contains(&x) {
+                    &out_full[i..i + 4]
+                } else {
+                    &out_a[i..i + 4]
+                };
+                for c in 0..4 {
+                    let got = i32::from(out_partial[i + c]);
+                    let expected = i32::from(want[c]);
+                    assert!(
+                        (got - expected).abs() <= 1,
+                        "({x},{y}) 通道 {c}：局部={got} 期望={expected}"
+                    );
+                }
+            }
+        }
     }
 
     /// GPU output must match the CPU reference byte-for-byte (tolerance 1 for

@@ -15,7 +15,8 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
+use crate::panel_style::PanelStyle;
+use egui::{Align2, Color32, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::calendar::{self, CalendarState};
 use nooksill_core::config::Edge;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -252,10 +253,11 @@ impl CalendarWindow {
         let state = self.state.clone();
         let today = self.today;
         let hover = self.hover;
+        let frosted = self.renderer.frost_on();
         let raw = self.input.take(self.renderer.size(), self.ppp);
         let mut hits = Hits::default();
         self.renderer.render(gpu, raw, hwnd, pos, |ui| {
-            hits = draw_panel(ui, dark, &state, today, hover);
+            hits = draw_panel(ui, dark, frosted, &state, today, hover);
         })?;
         self.hits = hits;
         // 画完就把闹钟推走。面板没有动画定时器，全靠事件唤醒；
@@ -325,6 +327,7 @@ impl CalendarWindow {
 fn draw_panel(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     state: &CalendarState,
     today: (i32, u32, u32),
     hover: Option<Hit>,
@@ -332,39 +335,14 @@ fn draw_panel(
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
 
-    let bg = if dark {
-        Color32::from_rgba_unmultiplied(24, 25, 30, 250)
-    } else {
-        Color32::from_rgba_unmultiplied(246, 247, 250, 250)
-    };
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
-
-    let (tc, sub, faded) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(240, 240, 245, 255),
-            Color32::from_rgba_unmultiplied(150, 154, 168, 255),
-            Color32::from_rgba_unmultiplied(200, 200, 210, 255),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(28, 28, 34, 255),
-            Color32::from_rgba_unmultiplied(112, 116, 130, 255),
-            Color32::from_rgba_unmultiplied(90, 90, 100, 255),
-        )
-    };
+    // 共享面板样式：底色 + 磨砂叠加层 + 细边框，以及三级文字层次。
+    let style = PanelStyle::current(dark, frosted);
+    style.paint_frame(&painter, rect);
+    let (tc, sub, faded) = (style.ink(), style.ink_sub(), style.faint());
     let accent = ui.visuals().selection.bg_fill;
     let red = Color32::from_rgba_unmultiplied(230, 74, 70, 255);
-    // 悬停底色：深色主题下是 8% 白，浅色主题下是 9% 黑。
-    let hover_bg = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 20)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 22)
-    };
-    let line_c = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 40)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 40)
-    };
+    let hover_bg = style.card_hover();
+    let line_c = style.line();
 
     // ---- 布局基准（全部来自CalDraw 的 Sc 数值）----
     let x0 = rect.left() + PM + 16.0;
@@ -391,7 +369,7 @@ fn draw_panel(
             let on = matches!(hover, Some(Hit::Nav(4)));
             painter.rect_filled(
                 hits.nav[i],
-                CornerRadius::same((nav_h * 0.5) as u8),
+                PanelStyle::pill(nav_h),
                 if on {
                     accent
                 } else {
@@ -400,11 +378,7 @@ fn draw_panel(
                 },
             );
         } else if matches!(hover, Some(Hit::Nav(j)) if j == i) {
-            painter.rect_filled(
-                hits.nav[i],
-                CornerRadius::same((nav_h * 0.5) as u8),
-                hover_bg,
-            );
+            painter.rect_filled(hits.nav[i], PanelStyle::pill(nav_h), hover_bg);
         }
     }
 

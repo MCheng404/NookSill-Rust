@@ -18,6 +18,7 @@
 //!
 //! 退格 / Esc / 回车走 `WM_KEYDOWN` → `Input::key`。
 
+use crate::panel_style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect as EguiRect, Sense, Stroke};
 use nooksill_settings::text_field::{text_field, FieldOpts, FIELD_H};
 use windows::core::w;
@@ -173,6 +174,8 @@ struct EditState {
     /// DPI 缩放。物理尺寸按它算，命中也要用它换算回逻辑坐标。
     ppp: f32,
     dark: bool,
+    /// 底层是否已有毛玻璃背景，决定面板底色用半透明 tint 还是实底。
+    frosted: bool,
     input: Input,
     ime: Ime,
     /// 弹窗里有没有多行字段。决定回车是"提交"还是"换行"。
@@ -402,6 +405,7 @@ pub fn show_edit(
         accepted: false,
         ppp,
         dark,
+        frosted: renderer.frost_on(),
         input: Input::default(),
         ime: Ime::new(),
         focused: false,
@@ -478,7 +482,13 @@ pub fn show_edit(
 /// 与 `settings_win::shell` 同一个理由：截图必须走**真实窗口那一帧**的
 /// 绘制代码。这里不建 Win32 窗口、不进模态循环，`focused` 直接置 true
 /// 以免离屏渲染往 egui 的焦点表里塞东西。
-pub fn paint_preview(ui: &mut egui::Ui, req: &EditRequest, values: &[String], dark: bool) {
+pub fn paint_preview(
+    ui: &mut egui::Ui,
+    req: &EditRequest,
+    values: &[String],
+    dark: bool,
+    frosted: bool,
+) {
     let mut st = EditState {
         multiline: req.fields.iter().any(|f| f.multiline),
         req: req.clone(),
@@ -487,6 +497,7 @@ pub fn paint_preview(ui: &mut egui::Ui, req: &EditRequest, values: &[String], da
         accepted: false,
         ppp: 1.0,
         dark,
+        frosted,
         input: Input::default(),
         ime: Ime::new(),
         focused: true,
@@ -499,32 +510,20 @@ pub fn paint_preview(ui: &mut egui::Ui, req: &EditRequest, values: &[String], da
 fn paint(ui: &mut egui::Ui, st: &mut EditState) {
     let rect = ui.max_rect();
     let dark = st.dark;
-    let bg = if dark {
-        Color32::from_rgba_unmultiplied(30, 30, 34, 246)
-    } else {
-        Color32::from_rgba_unmultiplied(250, 250, 252, 248)
-    };
-    let border = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 34)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 26)
-    };
-    let ink = if dark {
-        Color32::from_rgba_unmultiplied(240, 240, 245, 255)
-    } else {
-        Color32::from_rgba_unmultiplied(28, 28, 32, 255)
-    };
-    let faint = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 120)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 110)
-    };
+    // 与其余弹出面板共用同一套底色 / 磨砂叠加层 / 文字层级。
+    let style = PanelStyle::current(dark, st.frosted);
+    let (bg, border, ink, faint) = (style.bg(), style.border(), style.ink(), style.ink_sub());
 
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(12), bg);
+    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(PanelStyle::R_PANEL),
+        style.overlay(),
+    );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(12),
+        CornerRadius::same(PanelStyle::R_PANEL),
         Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );

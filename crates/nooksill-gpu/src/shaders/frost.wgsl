@@ -4,7 +4,9 @@ struct Params {
     radius: u32,
     taps: u32,
     corner: f32,
-    _pad0: f32,
+    // 脏列起点：只重算 [x0, width) 里 dispatch 覆盖到的那一段。
+    // 全量帧传 0，输出与原实现逐像素一致。
+    x0: u32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -45,11 +47,13 @@ fn coverage(x: f32, y: f32) -> f32 {
 @compute @workgroup_size(64)
 fn h_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= p.width * p.height) {
+    // 列优先：i 从脏列起点开始，x = x0 + i/height，y = i%height。
+    // 与 mid[x*height+y] 的转置布局对齐，两趟都只扫脏列。
+    let x = i32(p.x0) + i32(i / p.height);
+    if (x >= i32(p.width)) {
         return;
     }
-    let x = i32(i % p.width);
-    let y = i32(i / p.width);
+    let y = i32(i % p.height);
     let r = i32(p.radius);
     var acc = vec3<f32>(0.0);
     for (var k = 0u; k < p.taps; k = k + 1u) {
@@ -62,11 +66,11 @@ fn h_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(64)
 fn v_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= p.width * p.height) {
+    let x = i32(p.x0) + i32(i / p.height);
+    if (x >= i32(p.width)) {
         return;
     }
-    let x = i32(i % p.width);
-    let y = i32(i / p.width);
+    let y = i32(i % p.height);
     let r = i32(p.radius);
     var acc = vec3<f32>(0.0);
     for (var k = 0u; k < p.taps; k = k + 1u) {

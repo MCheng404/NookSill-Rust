@@ -18,8 +18,9 @@
 //! 用 `Rgba8Unorm` 时 egui 会自己做一次 gamma 编码，回读出来的面板
 //! 从 24 灰变成 81 灰。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use egui_wgpu::wgpu::TextureView;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
 use windows::Win32::Foundation::HWND;
 
@@ -27,6 +28,11 @@ use crate::gpu::{Gpu, GpuError};
 use crate::offscreen::Offscreen;
 use crate::present::LayeredPresenter;
 pub use crate::present::Reflection;
+
+/// 色场平均差超过这个值才算「桌面结构大变」，值得重跑真高斯。
+const REFRESH_DELTA: f32 = 18.0;
+/// 两次结构刷新之间的最小间隔，避免播视频时每帧都回到重卷积。
+const REFRESH_GAP: Duration = Duration::from_millis(300);
 
 /// 一帧渲染完成后，调用方真正需要知道的两件事。
 ///
@@ -68,6 +74,18 @@ pub struct FrameRenderer {
     shaders: crate::shaders::ShaderRuntime,
     /// Lazily created: only windows that enable frost pay for the pipeline.
     blur: Option<crate::shaders::frost::GpuBlur>,
+    /// 实验性时域色彩重投影；只在开关打开且毛玻璃启用时创建。
+    illusion: Option<crate::shaders::illusion::Illusion>,
+    /// 生成当前高斯基底时的低频色场（判断要不要刷新结构）。
+    base_field: Option<crate::frost::ColorField>,
+    /// 上一次全量高斯的时间，用于结构刷新节流。
+    last_full_blur: Option<Instant>,
+    /// 当前基底纹理的尺寸；尺寸变了必须重建基底。
+    frost_size: Option<(u32, u32)>,
+    /// 最近一帧捕获。开关切换而桌面静止（没有新帧）时用它立即重建。
+    last_frame: Option<crate::frost::FrostFrame>,
+    /// 上一帧用的模糊路径，用于检测开关变化。
+    last_mode: bool,
     /// Smoke compute output, registered after `run_ui` produces it.
     smoke: Option<crate::shaders::smoke::SharedLayer>,
     /// 倒影参数；`None` = 这一帧不画倒影（设置窗、菜单都为 None）。
@@ -144,6 +162,12 @@ impl FrameRenderer {
             queue: gpu.queue.clone(),
             shaders: crate::shaders::ShaderRuntime::new(&gpu.device, &gpu.queue),
             blur: None,
+            illusion: None,
+            base_field: None,
+            last_full_blur: None,
+            frost_size: None,
+            last_frame: None,
+            last_mode: false,
             smoke: None,
             reflection: None,
             frost: None,
@@ -190,22 +214,61 @@ impl FrameRenderer {
         spec: crate::frost::Spec,
         ppp: f32,
     ) -> bool {
+        let Some(view) = self.blur_frost(bits, w, h, spec, ppp, 0..w) else {
+            return false;
+        };
+        self.register_frost_view(&view);
+        true
+    }
+
+    /// 实验性路径的首帧：跑**一次完整高斯**拿到结构基底，之后由
+    /// [`Self::poll_frost`] 只用低频色场重投影。
+    pub fn set_frost_illusion(
+        &mut self,
+        bits: &[u8],
+        w: u32,
+        h: u32,
+        spec: crate::frost::Spec,
+        ppp: f32,
+    ) -> bool {
+        let Some(view) = self.blur_frost(bits, w, h, spec, ppp, 0..w) else {
+            return false;
+        };
+        let field = crate::frost::color_field(bits, w as usize, h as usize);
+        let ill = self.ensure_illusion();
+        ill.set_base(&field);
+        let Some(out) = ill.render(&view, w, h) else {
+            return false;
+        };
+        self.register_frost_view(&out);
+        self.base_field = Some(field);
+        self.last_full_blur = Some(Instant::now());
+        self.frost_size = Some((w, h));
+        true
+    }
+
+    /// 跑 GPU 卷积，返回输出纹理视图（不注册给 egui）。
+    /// `cols` 是脏列范围；全量帧传 `0..w`。
+    fn blur_frost(
+        &mut self,
+        bits: &[u8],
+        w: u32,
+        h: u32,
+        spec: crate::frost::Spec,
+        ppp: f32,
+        cols: std::ops::Range<u32>,
+    ) -> Option<TextureView> {
         if self.blur.is_none() {
             self.blur = crate::shaders::frost::GpuBlur::new(&self.device, &self.queue);
         }
-        let Some(blur) = self.blur.as_mut() else {
-            return false;
-        };
+        let blur = self.blur.as_mut()?;
         let scale = f32::from(crate::frost::CAPTURE_PCT) / 100.0;
-        if blur
-            .blur(bits, w, h, spec.radius, spec.corner_pt * ppp * scale)
-            .is_none()
-        {
-            return false;
-        }
-        let Some(view) = blur.view() else {
-            return false;
-        };
+        blur.blur_range(bits, w, h, spec.radius, spec.corner_pt * ppp * scale, cols)?;
+        blur.view().cloned()
+    }
+
+    /// 把某个 compute 输出注册（或原地刷新）为 egui 的毛玻璃纹理。
+    fn register_frost_view(&mut self, view: &TextureView) {
         let filter = egui_wgpu::wgpu::FilterMode::Linear;
         let id = match &self.frost {
             Some(FrostLayer::Gpu { id }) => {
@@ -222,7 +285,17 @@ impl FrameRenderer {
                 .register_native_texture(&self.device, view, filter),
         };
         self.frost = Some(FrostLayer::Gpu { id });
-        true
+    }
+
+    fn ensure_illusion(&mut self) -> &mut crate::shaders::illusion::Illusion {
+        if self.illusion.is_none() {
+            let device = self.device.clone();
+            let queue = self.queue.clone();
+            self.illusion = Some(crate::shaders::illusion::Illusion::new(&device, &queue));
+        }
+        self.illusion
+            .as_mut()
+            .expect("illusion was just created above")
     }
 
     /// CPU fallback: reuse the texture handle when the size is unchanged.
@@ -260,6 +333,11 @@ impl FrameRenderer {
     pub fn stop_live_frost(&mut self) {
         self.live = None;
         self.frost_spec = None;
+        self.illusion = None;
+        self.base_field = None;
+        self.last_full_blur = None;
+        self.frost_size = None;
+        self.last_frame = None;
     }
 
     /// 当前毛玻璃参数。
@@ -268,7 +346,8 @@ impl FrameRenderer {
         self.frost_spec
     }
 
-    /// Consume the newest captured frame and blur it on the GPU.
+    /// Consume the newest captured frame. The classic path re-convolves only
+    /// the changed columns; the experimental path re-projects a colour field.
     fn poll_frost(&mut self) -> bool {
         let Some(frame) = self.live.as_ref().and_then(crate::frost::Live::latest) else {
             return false;
@@ -276,7 +355,149 @@ impl FrameRenderer {
         let Some(spec) = self.frost_spec else {
             return false;
         };
-        self.set_frost_gpu(&frame.bits, frame.w, frame.h, spec, self.pixels_per_point)
+        // 缓存一份（Arc 共享，几乎零成本）：开关切换而桌面静止时，
+        // 没有新帧可用，就靠它把当前画面立刻重建成新路径的结果。
+        self.last_frame = Some(frame.clone());
+        if crate::frost::illusion() {
+            return self.poll_illusion(&frame, spec);
+        }
+
+        // 从实验路径切回来（或尺寸变了）时纹理里其它列可能是旧的，
+        // 必须整幅重算一次，不能沿用脏列优化。
+        let force_full = self.illusion.is_some() || self.frost_size != Some((frame.w, frame.h));
+        self.illusion = None;
+        self.base_field = None;
+        self.last_full_blur = None;
+        let pad = spec.radius.clamp(1, 12) + 2;
+        let cols = if force_full {
+            0..frame.w
+        } else {
+            frame.x0.saturating_sub(pad)..frame.x1.saturating_add(pad).min(frame.w)
+        };
+        let Some(view) = self.blur_frost(
+            &frame.bits,
+            frame.w,
+            frame.h,
+            spec,
+            self.pixels_per_point,
+            cols,
+        ) else {
+            return false;
+        };
+        self.register_frost_view(&view);
+        self.frost_size = Some((frame.w, frame.h));
+        true
+    }
+
+    /// 实验路径：只在「桌面大变」且节流到期时重跑真高斯，其余帧
+    /// 只把新色场交给重投影 shader。
+    fn poll_illusion(
+        &mut self,
+        frame: &crate::frost::FrostFrame,
+        spec: crate::frost::Spec,
+    ) -> bool {
+        let size_changed = self.frost_size != Some((frame.w, frame.h));
+        let big = self
+            .base_field
+            .as_ref()
+            .is_some_and(|b| crate::frost::field_delta(b, &frame.field) > REFRESH_DELTA);
+        let cooled = self
+            .last_full_blur
+            .is_some_and(|t| t.elapsed() >= REFRESH_GAP);
+        if self.illusion.is_none() || self.base_field.is_none() || size_changed || (big && cooled) {
+            return self.rebuild_illusion_base(frame, spec);
+        }
+        let Some(base) = self.blur.as_ref().and_then(|b| b.view()).cloned() else {
+            return false;
+        };
+        let ill = self.ensure_illusion();
+        ill.push(&frame.field);
+        let Some(out) = ill.render(&base, frame.w, frame.h) else {
+            return false;
+        };
+        self.register_frost_view(&out);
+        true
+    }
+
+    fn rebuild_illusion_base(
+        &mut self,
+        frame: &crate::frost::FrostFrame,
+        spec: crate::frost::Spec,
+    ) -> bool {
+        let Some(view) = self.blur_frost(
+            &frame.bits,
+            frame.w,
+            frame.h,
+            spec,
+            self.pixels_per_point,
+            0..frame.w,
+        ) else {
+            return false;
+        };
+        let field = (*frame.field).clone();
+        let ill = self.ensure_illusion();
+        ill.set_base(&field);
+        let Some(out) = ill.render(&view, frame.w, frame.h) else {
+            return false;
+        };
+        self.register_frost_view(&out);
+        self.base_field = Some(field);
+        self.last_full_blur = Some(Instant::now());
+        self.frost_size = Some((frame.w, frame.h));
+        true
+    }
+
+    /// 开关切换但这一帧没有新抓屏时，用最近的捕获帧立刻重建背景。
+    ///
+    /// 没有它会有一个隐蔽的坑：桌面静止时抓屏线程不产出新帧，开关打开后
+    /// `poll_frost` 一直早退，画面会停在旧路径上直到下一次抓屏（最长
+    /// 300 ms 兜底）。用户点完开关要下一帧就看到变化。
+    fn refresh_for_mode(&mut self, illusion: bool) {
+        let Some(frame) = self.last_frame.clone() else {
+            return;
+        };
+        let Some(spec) = self.frost_spec else {
+            return;
+        };
+        if illusion {
+            let _ = self.rebuild_illusion_base(&frame, spec);
+            return;
+        }
+        if let Some(view) = self.blur_frost(
+            &frame.bits,
+            frame.w,
+            frame.h,
+            spec,
+            self.pixels_per_point,
+            0..frame.w,
+        ) {
+            self.register_frost_view(&view);
+        }
+        self.illusion = None;
+        self.base_field = None;
+        self.last_full_blur = None;
+        self.frost_size = Some((frame.w, frame.h));
+    }
+
+    /// 推进颜色过渡；返回需要重新注册的输出纹理与「是否还要下一帧」。
+    fn advance_illusion(&mut self) -> (Option<TextureView>, bool) {
+        if !crate::frost::illusion() {
+            return (None, false);
+        }
+        let Some(base) = self.blur.as_ref().and_then(|b| b.view()).cloned() else {
+            return (None, false);
+        };
+        let Some((w, h)) = self.frost_size else {
+            return (None, false);
+        };
+        let Some(ill) = self.illusion.as_mut() else {
+            return (None, false);
+        };
+        let more = ill.advance();
+        if !ill.take_dirty() {
+            return (None, more);
+        }
+        (ill.render(&base, w, h), more)
     }
 
     /// 当前有没有背景层。面板据此决定底色用不透明还是半透明 tint。
@@ -367,7 +588,23 @@ impl FrameRenderer {
         mut build: impl FnMut(&mut egui::Ui),
     ) -> FrameOutcome {
         // A live frost frame must land before `run_ui` claims texture deltas.
-        self.poll_frost();
+        // 开关切换即便没有新帧也要立刻换路径（见 `refresh_for_mode`）。
+        let mode = crate::frost::illusion();
+        let mode_changed = mode != self.last_mode;
+        self.last_mode = mode;
+        let had_new = self.poll_frost();
+        if mode_changed && !had_new {
+            self.refresh_for_mode(mode);
+        }
+        // 实验路径的颜色过渡：过渡期间每帧推进一帧插值并主动要重绘，
+        // 于是桌面变色是连续渐变而不是「攒够一帧突然跳一下」。
+        let (illusion_view, animating) = self.advance_illusion();
+        if let Some(view) = illusion_view {
+            self.register_frost_view(&view);
+        }
+        if animating {
+            self.ctx.request_repaint_after(Duration::from_millis(16));
+        }
         let frost = self.frost.as_ref().map(FrostLayer::id);
         let full = self.ctx.run_ui(raw, |ui| {
             if let Some(id) = frost {

@@ -12,6 +12,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use crate::panel_style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
 use nooksill_core::tool::{format_ms, ToolMode, ToolState, MAX_TODOS};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -318,12 +319,14 @@ impl ToolWindow {
         let typing = self.typing;
         let typed = self.typed.clone();
         let composing = self.ime.composing().to_owned();
+        let frosted = self.renderer.frost_on();
         let mut hits = Hits::default();
 
         self.renderer.render(gpu, raw, hwnd, pos, |ui| {
             hits = draw_panel(
                 ui,
                 dark,
+                frosted,
                 state,
                 now_ms,
                 hover,
@@ -549,6 +552,7 @@ struct Input<'a> {
 fn draw_panel(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     state: &ToolState,
     now_ms: i64,
     hover: Option<egui::Pos2>,
@@ -556,39 +560,15 @@ fn draw_panel(
 ) -> Hits {
     let rect = ui.max_rect();
     let painter = ui.painter();
-    let bg = if dark {
-        Color32::from_rgba_unmultiplied(24, 25, 30, 250)
-    } else {
-        Color32::from_rgba_unmultiplied(246, 247, 250, 250)
-    };
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
-
-    let (tc, sub) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(255, 242, 242, 246),
-            Color32::from_rgba_unmultiplied(150, 200, 202, 214),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(255, 28, 28, 34),
-            Color32::from_rgba_unmultiplied(150, 90, 94, 108),
-        )
-    };
+    // 共享面板样式。旧版这里的 (tc, sub) 把 `argbc(a,r,g,b)` 当 RGBA 传，
+    // 深色得亮粉、浅色得红色 alpha 34，文字几乎读不出来。
+    let style = PanelStyle::current(dark, frosted);
+    style.paint_frame(painter, rect);
+    let (tc, sub) = (style.ink(), style.ink_sub());
     let accent = ui.visuals().selection.bg_fill;
-    // 次级按钮的底：白色 60/255（深色）或黑色 26/255（浅色）。
-    //
-    // **参数顺序是 (r, g, b, a)**，别写成 (a, r, g, b) —— 那样会得到
-    // 一个纯青色实心块（踩过：四个按钮全变亮青色）。
-    let pill = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 60)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 26)
-    };
-    let hover_bg = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 40)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 20)
-    };
+    // 次级胶囊按钮底 / 悬停底色：与子卡片共用同一套层级色。
+    let pill = style.card();
+    let hover_bg = style.card_hover();
 
     let pad = 16.0;
     let mut hits = Hits::default();
@@ -616,7 +596,7 @@ fn draw_panel(
         let active = state.mode == *mode;
         painter.rect_filled(
             r,
-            CornerRadius::same(13),
+            CornerRadius::same(PanelStyle::R_CARD),
             if active { accent } else { pill },
         );
         painter.text(
@@ -663,7 +643,7 @@ fn draw_panel(
         } else {
             pill
         };
-        painter.rect_filled(r, CornerRadius::same(10), fill);
+        painter.rect_filled(r, CornerRadius::same(PanelStyle::R_FIELD), fill);
         painter.text(
             r.center(),
             Align2::CENTER_CENTER,
@@ -690,14 +670,14 @@ fn draw_panel(
         let del = EguiRect::from_min_size(egui::pos2(r.right() - 24.0, ty), egui::vec2(24.0, 24.0));
         hits.deletes.push(del);
         if hover.is_some_and(|p| r.contains(p)) {
-            painter.rect_filled(r, CornerRadius::same(8), hover_bg);
+            painter.rect_filled(r, CornerRadius::same(PanelStyle::R_SMALL), hover_bg);
         }
         // 勾选框
         let box_rect =
             EguiRect::from_min_size(egui::pos2(x0 + 2.0, ty + 6.0), egui::vec2(12.0, 12.0));
         painter.rect_filled(
             box_rect,
-            CornerRadius::same(6),
+            CornerRadius::same(PanelStyle::R_SMALL),
             if todo.done { accent } else { pill },
         );
         if todo.done {
@@ -721,7 +701,7 @@ fn draw_panel(
     let add = EguiRect::from_min_size(egui::pos2(x0, ty), egui::vec2(w, 24.0));
     hits.add = add;
     if input.typing {
-        painter.rect_filled(add, CornerRadius::same(8), pill);
+        painter.rect_filled(add, PanelStyle::pill(add.height()), pill);
         // 已上屏的文字 + 正在组合的拼音。拼音下面画条线：让用户知道
         // "字还在输入法里，没丢"。
         let shown = format!("{}{}", input.typed, input.composing);
@@ -767,7 +747,7 @@ fn draw_panel(
         }
     } else {
         if hover.is_some_and(|p| add.contains(p)) {
-            painter.rect_filled(add, CornerRadius::same(8), hover_bg);
+            painter.rect_filled(add, PanelStyle::pill(add.height()), hover_bg);
         }
         painter.text(
             egui::pos2(x0 + 2.0, ty + 4.0),

@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use crate::glyph::{IconState, IconStyle};
+use crate::panel_style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
 use nooksill_core::control::{self, Tile};
 use nooksill_platform::audio::{Audio, Battery};
@@ -294,6 +295,7 @@ impl CcWindow {
         let hover = self.hover;
         let icon_accent = self.icon_accent;
         let battery = Battery::read();
+        let frosted = self.renderer.frost_on();
         let raw = self.input.take(self.renderer.size(), self.ppp);
         let mut hits = Vec::new();
         let mut slider = EguiRect::NOTHING;
@@ -301,6 +303,7 @@ impl CcWindow {
             let (h, s) = draw_panel(
                 ui,
                 dark,
+                frosted,
                 &tiles,
                 volume,
                 mute,
@@ -518,6 +521,7 @@ impl CcWindow {
 fn draw_panel(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     tiles: &[Tile],
     volume: u32,
     mute: bool,
@@ -530,37 +534,15 @@ fn draw_panel(
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
 
-    let bg = if dark {
-        Color32::from_rgba_unmultiplied(24, 25, 30, 250)
-    } else {
-        Color32::from_rgba_unmultiplied(246, 247, 250, 250)
-    };
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
-
-    let (tc, sub) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(242, 242, 246, 255),
-            Color32::from_rgba_unmultiplied(200, 202, 214, 255),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(28, 28, 34, 255),
-            Color32::from_rgba_unmultiplied(90, 94, 108, 255),
-        )
-    };
+    // 共享面板样式：底色 + 磨砂叠加层 + 细边框，以及三级文字层次。
+    let style = PanelStyle::current(dark, frosted);
+    style.paint_frame(&painter, rect);
+    let (tc, sub) = (style.ink(), style.ink_sub());
     let accent = ui.visuals().selection.bg_fill;
     // 图标主题色：独立开关（UiAccentCcIcons）控制，关掉就用中性前景色。
     let icon_color = icon_accent.unwrap_or(tc);
-    let tile_off = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 58)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 22)
-    };
-    let tile_off_hover = if dark {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 88)
-    } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, 38)
-    };
+    let tile_off = style.card();
+    let tile_off_hover = style.card_hover();
 
     // 标题
     painter.text(
@@ -597,7 +579,7 @@ fn draw_panel(
         } else {
             tile_off
         };
-        painter.rect_filled(r, CornerRadius::same(14), fill);
+        painter.rect_filled(r, CornerRadius::same(PanelStyle::R_CARD), fill);
 
         // off 态图标走 icon_color（开关开 = 主题色，关 = 中性前景色）；
         // on 态保持白图标压在主题色磁贴上。
@@ -664,7 +646,8 @@ fn draw_panel(
     } else {
         Color32::from_rgba_unmultiplied(0, 0, 0, 40)
     };
-    painter.rect_filled(track, CornerRadius::same(3), track_bg);
+    // 音量轨用胶囊：短边一半，不再留 3px 的近似直角。
+    painter.rect_filled(track, PanelStyle::pill(track.height()), track_bg);
 
     let frac = if has_audio {
         volume as f32 / 100.0
@@ -675,7 +658,7 @@ fn draw_panel(
     if filled_w > 1.0 {
         painter.rect_filled(
             EguiRect::from_min_size(track.min, egui::vec2(filled_w, track.height())),
-            CornerRadius::same(3),
+            PanelStyle::pill(track.height()),
             if has_audio { accent } else { sub },
         );
     }

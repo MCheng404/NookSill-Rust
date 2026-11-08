@@ -710,6 +710,10 @@ impl App {
         let mut msg = MSG::default();
         loop {
             let mut need_frame = false;
+            // 实验性模糊开关存在 Config 里，但抓屏线程与每个
+            // FrameRenderer 都要即时读到；每帧同步一次，设置界面改完
+            // 下一帧就切路径，不需要重启，也不必给每个面板发命令。
+            nooksill_gpu::frost::set_illusion(self.dock.cfg.get_i32(Key::FROST_ILLUSION) != 0);
 
             // ① 抽干消息队列：一条消息一帧会造成抖动。
             match pump(&mut msg) {
@@ -2914,6 +2918,9 @@ impl App {
     }
 
     fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // 面板样式走进程级偏好（七个弹出面板的构造函数没有 Config），
+        // 每帧同步一次，改设置下一帧就生效。开销是两次表查询 + 两次原子写。
+        nooksill_gpu::panel_style::sync_prefs(&self.dock.cfg);
         if trace::fps() {
             self.fps_frames += 1;
             let dt = self.fps_at.elapsed();

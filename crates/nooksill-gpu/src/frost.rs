@@ -9,9 +9,14 @@
 //! from screen capture (`WDA_EXCLUDEFROMCAPTURE`), otherwise GDI captures the
 //! panel itself. This also hides the panel from screenshots.
 //!
-//! `Live` polls at 100 ms and backs off to 800 ms on a static desktop. Captured
-//! bytes are shared with the UI thread via `Arc`, avoiding a second full copy.
+//! `Live` polls at 50–100 ms while the desktop moves and backs off to 800 ms
+//! on a static desktop. A 25 ms pixel probe detects change during the backoff,
+//! so the worst-case reaction time is ~25 ms instead of a full idle interval.
+//! Captured bytes are shared with the UI thread via `Arc`, avoiding a second
+//! full copy. Each frame also carries the changed column range, so the GPU
+//! convolution only recomputes the columns that actually changed.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -21,9 +26,10 @@ use egui::{Color32, ColorImage};
 use glass_backdrop::blur::{clamp_radius, normalized_gaussian_weights, sigma_for_radius};
 use glass_backdrop::capture::DesktopCapture;
 use glass_backdrop::glass::glass_sdf;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{ClientToScreen, GetDC, GetPixel, ReleaseDC, HDC};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+    GetClientRect, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
 };
 
 use crate::frame::FrameRenderer;
@@ -35,17 +41,47 @@ use crate::worker::Waker;
 /// 全屏 2560×1600 的起动台只需模糊 640×400 = 256k 像素。
 pub const CAPTURE_PCT: u8 = 25;
 
-/// 实时抓取的起始间隔（约 10 Hz）。
+/// 桌面正在变化时的抓取间隔（20 Hz）。
 ///
-/// 再快没有收益：抓屏本身就要 ~20 ms，而背景是糊的，肉眼分辨不出 15 Hz
-/// 与 30 Hz 的差别，CPU 却要翻倍。
+/// 以前是固定 100 ms（10 Hz），背景一动就能看出「跟手慢半拍」。探针负责
+/// 抓住第一帧变化，这个间隔负责之后的连续跟随；再快收益不大，抓屏本身
+/// 才是开销大头。
+const LIVE_ACTIVE: Duration = Duration::from_millis(50);
+
+/// 连续抓不到变化时的起始间隔（10 Hz），之后逐次翻倍退避。
 const LIVE_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 连续抓不到变化时退避到的上限。
 ///
-/// 桌面静止时没必要每 100 ms 花 20 ms 抓一遍；退到 800 ms 后开销降到 2%
-/// 量级，一旦发现变化立刻回到 [`LIVE_INTERVAL`]。
+/// 桌面静止时没必要每 100 ms 抓一遍；退避省 CPU，而 [`PROBE_INTERVAL`]
+/// 的像素探针保证这 800 ms **不再是感知延迟** —— 桌面一变，探针下一拍
+/// 就唤醒全量抓屏。
 const LIVE_IDLE_MAX: Duration = Duration::from_millis(800);
+
+/// 像素探针节拍。只读 20 个像素点，一次不到 0.1 ms，可以常年开着。
+const PROBE_INTERVAL: Duration = Duration::from_millis(25);
+
+/// 两次全量抓屏的最小间隔，防止动态桌面把探针每拍都变成一次抓屏。
+const MIN_CAPTURE_GAP: Duration = Duration::from_millis(40);
+
+/// 探针可能失效（例如某些远程桌面会话里屏幕 DC 读不到别的窗口）时的兜底：
+/// 静止时最多隔这么久也要完整抓一次。
+const PROBE_FORCE_GAP: Duration = Duration::from_millis(300);
+
+/// 实验性「视觉欺骗」模糊开关。进程级：所有面板共用一个开关，
+/// 由主循环每帧从配置同步（设置界面改配置后下一帧即生效）。
+static ILLUSION: AtomicBool = AtomicBool::new(false);
+
+/// 切换实验性模糊路径。原高斯算法始终保留，关掉即回到它。
+pub fn set_illusion(on: bool) {
+    ILLUSION.store(on, Ordering::Relaxed);
+}
+
+/// 当前是否走实验性模糊路径。
+#[must_use]
+pub fn illusion() -> bool {
+    ILLUSION.load(Ordering::Relaxed)
+}
 
 /// 一次开窗的毛玻璃参数。`None` = 这个功能没开。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +111,9 @@ impl Spec {
             renderer.clear_frost();
             return;
         };
+        if illusion() && renderer.set_frost_illusion(bits, w, h, self, ppp) {
+            return;
+        }
         if renderer.set_frost_gpu(bits, w, h, self, ppp) {
             return;
         }
@@ -104,12 +143,86 @@ pub fn allow_capture(hwnd: HWND) {
     }
 }
 
+/// 低频色场网格。实验性模糊只用它「跟着桌面变色」，不做卷积。
+pub const GRID_W: usize = 24;
+pub const GRID_H: usize = 16;
+
+/// 每个 tile 的平均 RGB（0..255）。
+pub type ColorField = Vec<[f32; 3]>;
+
+/// 把捕获图降成 [`GRID_W`]×[`GRID_H`] 个平均色。
+///
+/// 色场只承载 **低频** 颜色，高频细节由一次真高斯模糊的基底纹理保留。
+/// 逐像素累加（640×400 约 0.3 ms）而不是稀疏采样：跳着采会让部分 tile
+/// 一个采样点都落不到，在重投影里变成黑色方块。
+#[must_use]
+pub fn color_field(bits: &[u8], w: usize, h: usize) -> ColorField {
+    let mut sums = vec![[0f64; 3]; GRID_W * GRID_H];
+    let mut counts = vec![0u32; GRID_W * GRID_H];
+    if w == 0 || h == 0 || bits.len() < w.saturating_mul(h).saturating_mul(4) {
+        return vec![[0.0; 3]; GRID_W * GRID_H];
+    }
+    for y in 0..h {
+        let gy = (y * GRID_H / h).min(GRID_H - 1);
+        for x in 0..w {
+            let gx = (x * GRID_W / w).min(GRID_W - 1);
+            let off = (y * w + x) * 4;
+            let k = gy * GRID_W + gx;
+            sums[k][0] += f64::from(bits[off]);
+            sums[k][1] += f64::from(bits[off + 1]);
+            sums[k][2] += f64::from(bits[off + 2]);
+            counts[k] += 1;
+        }
+    }
+    // 图比网格还窄时会有空 tile：用全局平均兜底，绝不留黑洞。
+    let total: u32 = counts.iter().sum();
+    let global = [
+        sums.iter().map(|s| s[0]).sum::<f64>(),
+        sums.iter().map(|s| s[1]).sum::<f64>(),
+        sums.iter().map(|s| s[2]).sum::<f64>(),
+    ]
+    .map(|v| (v / f64::from(total.max(1))) as f32);
+    sums.iter()
+        .zip(&counts)
+        .map(|(s, &n)| {
+            if n == 0 {
+                global
+            } else {
+                let k = 1.0 / f64::from(n);
+                [(s[0] * k) as f32, (s[1] * k) as f32, (s[2] * k) as f32]
+            }
+        })
+        .collect()
+}
+
+/// 两张色场的平均绝对差（0..255）。用来判断「桌面大变」要不要重跑真模糊。
+#[must_use]
+pub fn field_delta(a: &ColorField, b: &ColorField) -> f32 {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let mut sum = 0f32;
+    for (p, q) in a[..n].iter().zip(&b[..n]) {
+        for c in 0..3 {
+            sum += (p[c] - q[c]).abs();
+        }
+    }
+    sum / (n * 3) as f32
+}
+
 /// One captured frame. Bytes are shared with the UI thread, not copied again.
 #[derive(Clone, Debug)]
 pub struct FrostFrame {
     pub bits: Arc<Vec<u8>>,
     pub w: u32,
     pub h: u32,
+    /// 源图里发生变化的列 `[x0, x1)`；全量帧为 `(0, w)`。
+    /// GPU 卷积只重算这些列，静止区域直接沿用上一帧纹理。
+    pub x0: u32,
+    pub x1: u32,
+    /// 该帧的低频色场（实验性模糊用；经典路径忽略）。
+    pub field: Arc<ColorField>,
 }
 
 /// Background capture thread for a visible panel.
@@ -142,13 +255,30 @@ impl Live {
     }
 
     /// Keep only the newest frame; stale backgrounds are worse than a drop.
+    ///
+    /// 丢帧时**必须把脏列并起来**：否则中间那帧改过的列在新帧里没变化，
+    /// GPU 就不会重算，那一竖条会永远停在上上帧的背景上。
     pub(crate) fn latest(&self) -> Option<FrostFrame> {
-        let mut newest = None;
+        let mut newest: Option<FrostFrame> = None;
         while let Ok(frame) = self.rx.try_recv() {
-            newest = Some(frame);
+            newest = Some(match newest {
+                Some(prev) => merge_frames(prev, frame),
+                None => frame,
+            });
         }
         newest
     }
+}
+
+/// 合并被丢弃的中间帧：内容取最新的，脏列取并集。
+fn merge_frames(prev: FrostFrame, frame: FrostFrame) -> FrostFrame {
+    let (x0, x1) = if (prev.x0 == 0 && prev.x1 == prev.w) || (frame.x0 == 0 && frame.x1 == frame.w)
+    {
+        (0, frame.w)
+    } else {
+        (prev.x0.min(frame.x0), prev.x1.max(frame.x1))
+    };
+    FrostFrame { x0, x1, ..frame }
 }
 
 impl Drop for Live {
@@ -158,58 +288,166 @@ impl Drop for Live {
     }
 }
 
+/// 极廉价的「桌面变了吗」探针。
+///
+/// 全量抓屏要读整块窗口矩形（最高 2560×1600），静止时退避到 800 ms，
+/// 用户看到的模糊就会慢半拍。这里只从屏幕 DC 上读 20 个像素点，
+/// 25 ms 一拍，成本可以忽略；一旦发现变化立刻唤醒全量抓屏。
+/// 窗口已被 `WDA_EXCLUDEFROMCAPTURE` 排除，所以读到的是它背后的桌面。
+struct Probe {
+    hdc: HDC,
+    last: u32,
+}
+
+impl Probe {
+    fn new() -> Option<Self> {
+        let hdc = unsafe { GetDC(None) };
+        if hdc.0.is_null() {
+            return None;
+        }
+        Some(Self { hdc, last: 0 })
+    }
+
+    /// 采样 5×4 个网格点，把颜色卷成一个校验和。
+    /// 拿不到窗口几何时返回 `true`（宁可多抓一次，也不要漏变化）。
+    fn changed(&mut self, hwnd: isize) -> bool {
+        let handle = HWND(hwnd as *mut std::ffi::c_void);
+        let mut rc = RECT::default();
+        if unsafe { GetClientRect(handle, &mut rc) }.is_err() {
+            return true;
+        }
+        let mut origin = POINT {
+            x: rc.left,
+            y: rc.top,
+        };
+        if !unsafe { ClientToScreen(handle, &mut origin) }.as_bool() {
+            return true;
+        }
+        let w = (rc.right - rc.left).max(1);
+        let h = (rc.bottom - rc.top).max(1);
+        let mut acc = 0u32;
+        for gy in 0..4 {
+            for gx in 0..5 {
+                let x = origin.x + w * (gx * 2 + 1) / 10;
+                let y = origin.y + h * (gy * 2 + 1) / 8;
+                let c = unsafe { GetPixel(self.hdc, x, y) }.0;
+                acc = acc.wrapping_mul(31).wrapping_add(c & 0x00ff_ffff);
+            }
+        }
+        let changed = acc != self.last;
+        self.last = acc;
+        changed
+    }
+}
+
+impl Drop for Probe {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseDC(None, self.hdc);
+        }
+    }
+}
+
+/// 两帧之间发生变化的列范围 `[x0, x1)`。
+///
+/// 高斯是局部算子：源图第 x 列变了，只可能影响输出 `[x-r, x+r]` 列。
+/// 调用方按半径外扩后只 dispatch 这一段，其余像素留在纹理里不动。
+fn dirty_columns(prev: &[u8], cur: &[u8], w: usize, h: usize) -> (u32, u32) {
+    let need = w.saturating_mul(h).saturating_mul(4);
+    if w == 0 || h == 0 || prev.len() < need || cur.len() < need {
+        return (0, w as u32);
+    }
+    let (mut x0, mut x1) = (w, 0usize);
+    for y in 0..h {
+        let base = y * w * 4;
+        let a = &prev[base..base + w * 4];
+        let b = &cur[base..base + w * 4];
+        for (x, (p, q)) in a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .enumerate()
+        {
+            if p != q {
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+            }
+        }
+    }
+    if x0 > x1 {
+        return (0, w as u32);
+    }
+    (x0 as u32, (x1 as u32 + 1).min(w as u32))
+}
+
 /// Capture loop. Blur and upload happen on the UI thread in `FrameRenderer`.
 fn run(hwnd: isize, out: &Sender<FrostFrame>, waker: Waker, stop: &Receiver<()>) {
     let Ok(mut cap) = DesktopCapture::new(true) else {
         return;
     };
+    let mut probe = Probe::new();
     let mut prev: Option<Arc<Vec<u8>>> = None;
     let mut dims = (0u32, 0u32);
     let mut interval = LIVE_INTERVAL;
+    let mut next_full = Instant::now();
+    let mut last_full = Instant::now() - PROBE_FORCE_GAP;
     let mut seq = 0u64;
 
     loop {
-        let started = Instant::now();
-        if let Ok(Some((bits, w, h))) = cap.capture_behind_pct(hwnd, CAPTURE_PCT) {
-            let same = dims == (w, h) && prev.as_deref().is_some_and(|p| p.as_slice() == bits);
-            if same {
-                interval = (interval * 2).min(LIVE_IDLE_MAX);
-            } else {
-                let diff = if trace() {
-                    count_diff(prev.as_deref().map_or(&[][..], Vec::as_slice), bits)
+        let now = Instant::now();
+        // 探针每拍都跑：它是「桌面突然变了」能被立刻发现的唯一渠道。
+        let hit = probe.as_mut().is_some_and(|p| p.changed(hwnd));
+        let force = now.duration_since(last_full) >= PROBE_FORCE_GAP;
+        let can_capture = now.duration_since(last_full) >= MIN_CAPTURE_GAP;
+        if now >= next_full || ((hit || force) && can_capture) {
+            let started = Instant::now();
+            last_full = now;
+            if let Ok(Some((bits, w, h))) = cap.capture_behind_pct(hwnd, CAPTURE_PCT) {
+                let same = dims == (w, h) && prev.as_deref().is_some_and(|p| p.as_slice() == bits);
+                if same {
+                    interval = (interval * 2).min(LIVE_IDLE_MAX);
                 } else {
-                    0
-                };
-                dims = (w, h);
-                let snapshot = Arc::new(bits.to_vec());
-                prev = Some(snapshot.clone());
-                interval = LIVE_INTERVAL;
-                if trace() {
-                    report(seq, bits, w, h, started.elapsed(), diff);
-                    seq += 1;
+                    let (x0, x1) = match prev.as_deref() {
+                        Some(p) if dims == (w, h) => dirty_columns(p, bits, w as usize, h as usize),
+                        _ => (0, w),
+                    };
+                    let diff = if trace() {
+                        count_diff(prev.as_deref().map_or(&[][..], Vec::as_slice), bits)
+                    } else {
+                        0
+                    };
+                    let field = Arc::new(color_field(bits, w as usize, h as usize));
+                    dims = (w, h);
+                    let snapshot = Arc::new(bits.to_vec());
+                    prev = Some(snapshot.clone());
+                    interval = LIVE_ACTIVE;
+                    if trace() {
+                        report(seq, bits, w, h, started.elapsed(), diff);
+                        seq += 1;
+                    }
+                    if out
+                        .send(FrostFrame {
+                            bits: snapshot,
+                            w,
+                            h,
+                            x0,
+                            x1,
+                            field,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    waker.wake();
                 }
-                if out
-                    .send(FrostFrame {
-                        bits: snapshot,
-                        w,
-                        h,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-                waker.wake();
             }
+            next_full = last_full + interval;
         }
 
-        // Subtract capture time so the interval is a real period.
-        // 但**必须留 1 ms 下限**：抓屏+模糊比 interval 还慢时（高分辨率、
-        // 弱 CPU），`saturating_sub` 会钳到 0，`recv_timeout(0)` 立刻返回
-        // Timeout，循环无退避地反复抓屏，单核长期满载。
-        let wait = interval
-            .saturating_sub(started.elapsed())
-            .max(Duration::from_millis(1));
-        match stop.recv_timeout(wait) {
+        // 固定 25 ms 节拍：探针驱动，全量抓屏由 `next_full` 与节流控制。
+        // `recv_timeout` 同时承担停止信号，面板一关立刻退出。
+        match stop.recv_timeout(PROBE_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -635,5 +873,85 @@ mod tests {
     fn frost_background_is_more_transparent() {
         assert!(panel_bg(true, true).a() < panel_bg(true, false).a());
         assert_eq!(panel_bg(true, false).a(), 250);
+    }
+
+    fn frame_with_cols(x0: u32, x1: u32, w: u32) -> FrostFrame {
+        FrostFrame {
+            bits: Arc::new(vec![0u8; 4]),
+            w,
+            h: 1,
+            x0,
+            x1,
+            field: Arc::new(vec![[0.0; 3]; GRID_W * GRID_H]),
+        }
+    }
+
+    /// 丢帧时脏列必须取并集，否则中间帧改过的那一竖条会永久残留。
+    #[test]
+    fn dropped_frames_union_their_dirty_columns() {
+        let merged = merge_frames(frame_with_cols(10, 20, 100), frame_with_cols(30, 40, 100));
+        assert_eq!((merged.x0, merged.x1), (10, 40));
+    }
+
+    /// 只要有一帧是全量，合并结果就必须是全量。
+    #[test]
+    fn a_full_frame_keeps_the_merge_full() {
+        let merged = merge_frames(frame_with_cols(10, 20, 100), frame_with_cols(0, 100, 100));
+        assert_eq!((merged.x0, merged.x1), (0, 100));
+        let merged = merge_frames(frame_with_cols(0, 100, 100), frame_with_cols(30, 40, 100));
+        assert_eq!((merged.x0, merged.x1), (0, 100));
+    }
+
+    /// 色场只保留低频：常量图处处同色，左右分色要分得开。
+    #[test]
+    fn color_field_keeps_low_frequency_colour() {
+        let (w, h) = (48usize, 32usize);
+        let mut flat = vec![0u8; w * h * 4];
+        for px in flat.as_chunks_mut::<4>().0 {
+            px[0] = 200;
+            px[1] = 100;
+            px[2] = 50;
+            px[3] = 255;
+        }
+        let f = color_field(&flat, w, h);
+        assert_eq!(f.len(), GRID_W * GRID_H);
+        assert!(f.iter().all(|c| (c[0] - 200.0).abs() < 0.01
+            && (c[1] - 100.0).abs() < 0.01
+            && (c[2] - 50.0).abs() < 0.01));
+
+        let mut split = flat;
+        for y in 0..h {
+            for x in w / 2..w {
+                let i = (y * w + x) * 4;
+                split[i] = 10;
+                split[i + 1] = 20;
+                split[i + 2] = 230;
+            }
+        }
+        let g = color_field(&split, w, h);
+        assert!(g[0][0] > 190.0, "左半应保持红色");
+        assert!(g[GRID_W - 1][2] > 220.0, "右半应变成蓝色");
+        assert!(field_delta(&f, &g) > 20.0);
+        assert_eq!(field_delta(&f, &f), 0.0);
+    }
+
+    /// 脏列检测：只报真正改过的列；无变化与坏输入都退回全量。
+    #[test]
+    fn dirty_columns_finds_the_changed_band() {
+        let (w, h) = (8usize, 4usize);
+        let mut a = vec![0u8; w * h * 4];
+        let mut b = a.clone();
+        for y in 0..h {
+            for x in [3usize, 5] {
+                b[(y * w + x) * 4] = 9;
+            }
+        }
+        assert_eq!(dirty_columns(&a, &b, w, h), (3, 6));
+        assert_eq!(dirty_columns(&a, &a, w, h), (0, w as u32));
+        assert_eq!(dirty_columns(&[], &b, w, h), (0, w as u32));
+        // 尺寸不同时（例如窗口刚 resize）不能直接按列比较。
+        assert_eq!(dirty_columns(&a, &b, w + 1, h), (0, (w + 1) as u32));
+        a.truncate(4);
+        assert_eq!(dirty_columns(&a, &b, w, h), (0, w as u32));
     }
 }

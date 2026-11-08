@@ -16,6 +16,7 @@
 use std::pin::Pin;
 use std::time::Instant;
 
+use crate::panel_style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::note::{Note, NoteBook};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -262,10 +263,11 @@ impl NoteWindow {
         let page = self.page;
         let hover = self.hover;
         let pages = self.pages();
+        let frosted = self.renderer.frost_on();
         let raw = self.input.take(self.renderer.size(), self.ppp);
         let mut action = None;
         self.renderer.render(gpu, raw, hwnd, pos, |ui| {
-            action = paint(ui, dark, &notes, page, pages, hover);
+            action = paint(ui, dark, frosted, &notes, page, pages, hover);
         })?;
         match action {
             // 翻页只改面板自己的状态，不占用主循环的动作通道。
@@ -354,18 +356,26 @@ fn row_at(x: f32, y: f32, total: usize, page: usize) -> Option<usize> {
 fn paint(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     notes: &[Note],
     page: usize,
     pages: usize,
     hover: Option<usize>,
 ) -> Option<NoteAction> {
     let rect = ui.max_rect();
-    let (bg, ink, faint, border, field) = palette(dark);
+    // 与四个小组件面板共用同一套底色 / 磨砂叠加层 / 文字层级。
+    let style = PanelStyle::current(dark, frosted);
+    let (bg, ink, faint, border, field) = palette(&style);
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
+    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(PanelStyle::R_PANEL),
+        style.overlay(),
+    );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(16),
+        CornerRadius::same(PanelStyle::R_PANEL),
         Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
@@ -384,7 +394,7 @@ fn paint(
         egui::vec2(BTN_W, BTN_H),
     );
     let new_resp = ui.interact(new_rect, egui::Id::unique("note-new"), egui::Sense::click());
-    painter.rect_filled(new_rect, CornerRadius::same(7), field);
+    painter.rect_filled(new_rect, CornerRadius::same(PanelStyle::R_SMALL), field);
     painter.text(
         new_rect.center(),
         Align2::CENTER_CENTER,
@@ -412,7 +422,7 @@ fn paint(
         let note = &notes[start + k];
         let r = row_rect(k);
         if hover == Some(k) {
-            painter.rect_filled(r, CornerRadius::same(9), field);
+            painter.rect_filled(r, CornerRadius::same(PanelStyle::R_CARD), field);
         }
         let row_resp = ui.interact(r, egui::Id::unique(("note-row", k)), egui::Sense::click());
         painter.text(
@@ -448,7 +458,7 @@ fn paint(
                 egui::Id::unique(("note-btn", k, label)),
                 egui::Sense::click(),
             );
-            painter.rect_filled(br, CornerRadius::same(6), field);
+            painter.rect_filled(br, PanelStyle::pill(br.height()), field);
             painter.text(
                 br.center(),
                 Align2::CENTER_CENTER,
@@ -501,7 +511,7 @@ fn paint(
         (prev_rect, "上一页", page > 0),
         (next_rect, "下一页", page + 1 < pages),
     ] {
-        painter.rect_filled(r, CornerRadius::same(6), field);
+        painter.rect_filled(r, CornerRadius::same(PanelStyle::R_SMALL), field);
         painter.text(
             r.center(),
             Align2::CENTER_CENTER,
@@ -532,6 +542,7 @@ fn page_count(total: usize) -> usize {
 pub fn paint_preview(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     book: &NoteBook,
     page: usize,
     hover: Option<usize>,
@@ -539,6 +550,7 @@ pub fn paint_preview(
     let _ = paint(
         ui,
         dark,
+        frosted,
         &book.notes,
         page,
         page_count(book.notes.len()),
@@ -546,24 +558,15 @@ pub fn paint_preview(
     );
 }
 
-fn palette(dark: bool) -> (Color32, Color32, Color32, Color32, Color32) {
-    if dark {
-        (
-            Color32::from_rgba_unmultiplied(30, 30, 34, 246),
-            Color32::from_rgba_unmultiplied(240, 240, 245, 255),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 130),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 34),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(250, 250, 252, 248),
-            Color32::from_rgba_unmultiplied(28, 28, 32, 255),
-            Color32::from_rgba_unmultiplied(0, 0, 0, 120),
-            Color32::from_rgba_unmultiplied(0, 0, 0, 26),
-            Color32::from_rgba_unmultiplied(23, 26, 35, 14),
-        )
-    }
+fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) {
+    // 保留五个语义名，调用方后续绘制代码不动；值全部来自共享样式。
+    (
+        style.bg(),
+        style.ink(),
+        style.ink_sub(),
+        style.border(),
+        style.card(),
+    )
 }
 
 /// 超宽就截断加省略号。

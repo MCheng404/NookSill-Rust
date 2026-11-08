@@ -299,8 +299,14 @@ fn 外观页小组件参数四条滑条() {
     let mut h = new_harness();
     h.state_mut().ui.page = Page::Appearance;
     h.run();
-    for label in ["卡片不透明度", "卡片圆角", "条带成员间距", "弹出层模糊半径"]
-    {
+    for label in [
+        "卡片不透明度",
+        "卡片圆角",
+        "条带成员间距",
+        "弹出层模糊半径",
+        "弹出面板不透明度",
+        "弹出面板叠加层",
+    ] {
         assert_eq!(h.query_all_by_label(label).count(), 1, "缺滑条：{label}");
     }
     assert_eq!(
@@ -319,6 +325,12 @@ fn 外观页小组件参数四条滑条() {
         0,
         "默认跟随全局 Blur"
     );
+    assert_eq!(
+        h.state().cfg.get_i32(Key::PANEL_OPACITY),
+        0,
+        "默认跟随毛玻璃"
+    );
+    assert_eq!(h.state().cfg.get_i32(Key::PANEL_OVERLAY), 28);
 }
 
 /// 交互页的四条延迟滑条都要能渲染，且沿用共享的 `card + slider`。
@@ -681,5 +693,34 @@ fn 连点版本号五次才解锁高级入口() {
         h.state().cfg.get_i32(Key::NET_MIRROR_ALL),
         0,
         "默认够快就先下"
+    );
+}
+
+/// 实验性模糊开关：解锁前不可见，解锁后默认关，点一下写进配置。
+#[test]
+fn 实验性模糊开关藏在高级入口且能切换() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::About;
+    h.run();
+    assert!(
+        h.query_by_label("实验性：轻量实时磨砂").is_none(),
+        "没解锁时不该出现在关于页"
+    );
+
+    for _ in 0..5 {
+        h.get_by_label("版本").click();
+        h.run();
+    }
+    assert_eq!(
+        h.state().cfg.get_i32(Key::FROST_ILLUSION),
+        0,
+        "默认走原高斯"
+    );
+    h.get_by_label("实验性：轻量实时磨砂").click();
+    h.run();
+    assert_eq!(
+        h.state().cfg.get_i32(Key::FROST_ILLUSION),
+        1,
+        "开关必须落到 Config，主循环才能同步给渲染层"
     );
 }

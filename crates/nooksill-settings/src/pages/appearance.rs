@@ -87,6 +87,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             slider(ctx, ui, Key::WIDGET_RADIUS, "卡片圆角", " px");
             slider(ctx, ui, Key::WIDGET_GAP, "条带成员间距", " px");
             slider(ctx, ui, Key::WIDGET_BLUR, "弹出层模糊半径", " px");
+            slider(ctx, ui, Key::PANEL_OPACITY, "弹出面板不透明度", " %");
+            slider(ctx, ui, Key::PANEL_OVERLAY, "弹出面板叠加层", " %");
         },
     );
 }

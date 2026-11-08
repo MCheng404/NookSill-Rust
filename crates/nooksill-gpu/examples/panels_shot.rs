@@ -15,6 +15,7 @@
 #[path = "common/bmp.rs"]
 mod bmp;
 
+use nooksill_core::config::{Config, Key};
 use nooksill_core::item::ItemKind;
 use nooksill_core::note::NoteBook;
 use nooksill_gpu::edit_win::{self, EditField, EditRequest};
@@ -49,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gh,
         ppp,
         dark,
-        |ui| group_win::paint_preview(ui, dark, "开发工具", &kids, Some(1)),
+        |ui| group_win::paint_preview(ui, dark, false, "开发工具", &kids, Some(1)),
     )?;
 
     // ② 速记面板：7 条（跨两页），第 1 条悬停。
@@ -77,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         nh,
         ppp,
         dark,
-        |ui| note_win::paint_preview(ui, dark, &book, 0, Some(0)),
+        |ui| note_win::paint_preview(ui, dark, false, &book, 0, Some(0)),
     )?;
 
     // ③ 空态：两条路径都要能画，不能因为列表为空就 panic。
@@ -88,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         nh,
         ppp,
         dark,
-        |ui| note_win::paint_preview(ui, dark, &NoteBook::default(), 0, None),
+        |ui| note_win::paint_preview(ui, dark, false, &NoteBook::default(), 0, None),
     )?;
 
     // ④ 编辑弹窗（速记的标题 + 多行正文）。多行框是后加的，
@@ -120,8 +121,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eh,
         ppp,
         dark,
-        |ui| edit_win::paint_preview(ui, &req, &values, dark),
+        |ui| edit_win::paint_preview(ui, &req, &values, dark, false),
     )?;
+
+    // ⑤ 磨砂叠加层：同一份绘制函数，底色改为半透明 tint 让背景透出来。
+    shot(
+        &gpu,
+        &format!("{dir}/panel_notes_frosted.bmp"),
+        nw,
+        nh,
+        ppp,
+        dark,
+        |ui| note_win::paint_preview(ui, dark, true, &book, 0, Some(0)),
+    )?;
+    shot(
+        &gpu,
+        &format!("{dir}/panel_group_frosted.bmp"),
+        gw,
+        gh,
+        ppp,
+        dark,
+        |ui| group_win::paint_preview(ui, dark, true, "开发工具", &kids, Some(1)),
+    )?;
+
+    // ⑥ 自定义透明度 + 更强叠加层：验证配置真的作用到了绘制。
+    let mut cfg = Config::default();
+    cfg.apply_i32(Key::PANEL_OPACITY, 45);
+    cfg.apply_i32(Key::PANEL_OVERLAY, 70);
+    nooksill_gpu::panel_style::sync_prefs(&cfg);
+    shot(
+        &gpu,
+        &format!("{dir}/panel_notes_custom.bmp"),
+        nw,
+        nh,
+        ppp,
+        dark,
+        |ui| note_win::paint_preview(ui, dark, false, &book, 0, Some(0)),
+    )?;
+    nooksill_gpu::panel_style::sync_prefs(&Config::default());
     Ok(())
 }
 

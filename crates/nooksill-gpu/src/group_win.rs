@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::time::Instant;
 
+use crate::panel_style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::item::ItemKind;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -319,6 +320,7 @@ impl GroupWindow {
         let kids = self.kids.clone();
         let hover = self.hover;
         let released = self.released;
+        let frosted = self.renderer.frost_on();
         let raw = self.input.take(self.renderer.size(), self.ppp);
 
         // 图标纹理要在这个上下文里上传。先把结果取出来（`drain` 不阻塞），
@@ -343,7 +345,8 @@ impl GroupWindow {
                 );
                 icons.insert(r.index, tex);
             }
-            let (kid_actions, dis) = paint(ui, dark, &title, &kids, &icons, hover, released);
+            let (kid_actions, dis) =
+                paint(ui, dark, frosted, &title, &kids, &icons, hover, released);
             actions = kid_actions;
             dissolve = dis;
         })?;
@@ -474,18 +477,24 @@ impl GroupWindow {
 pub fn paint_preview(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     title: &str,
     kids: &[GroupKid],
     hover: Option<usize>,
 ) {
     let empty: HashMap<usize, egui::TextureHandle> = HashMap::new();
-    let _ = paint(ui, dark, title, kids, &empty, hover, None);
+    let _ = paint(ui, dark, frosted, title, kids, &empty, hover, None);
 }
 
 /// 画面板。返回 `(子项动作列表, 要解散分组)`。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "样式、数据、悬停与释放状态集中在一处绘制，拆开要反复传 rect"
+)]
 fn paint(
     ui: &mut egui::Ui,
     dark: bool,
+    frosted: bool,
     title: &str,
     kids: &[GroupKid],
     icons: &HashMap<usize, egui::TextureHandle>,
@@ -493,26 +502,19 @@ fn paint(
     released: Option<usize>,
 ) -> (Vec<GroupAction>, bool) {
     let rect = ui.max_rect();
-    let (bg, ink, faint, border) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(30, 30, 34, 246),
-            Color32::from_rgba_unmultiplied(240, 240, 245, 255),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 130),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 34),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(250, 250, 252, 248),
-            Color32::from_rgba_unmultiplied(28, 28, 32, 255),
-            Color32::from_rgba_unmultiplied(0, 0, 0, 120),
-            Color32::from_rgba_unmultiplied(0, 0, 0, 26),
-        )
-    };
+    // 共享面板样式：底色 + 磨砂叠加层 + 细边框 + 三级文字层次。
+    let style = PanelStyle::current(dark, frosted);
+    let (bg, ink, faint, border) = (style.bg(), style.ink(), style.ink_sub(), style.border());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(16), bg);
+    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    painter.rect_filled(
+        rect,
+        CornerRadius::same(PanelStyle::R_PANEL),
+        style.overlay(),
+    );
     painter.rect_stroke(
         rect,
-        CornerRadius::same(16),
+        CornerRadius::same(PanelStyle::R_PANEL),
         Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
@@ -534,7 +536,11 @@ fn paint(
             egui::vec2(bw, bh),
         );
         let resp = ui.interact(br, egui::Id::unique("group-dissolve"), egui::Sense::click());
-        painter.rect_filled(br, CornerRadius::same(8), faint.linear_multiply(0.18));
+        painter.rect_filled(
+            br,
+            PanelStyle::pill(br.height()),
+            faint.linear_multiply(0.18),
+        );
         painter.text(
             br.center(),
             Align2::CENTER_CENTER,
@@ -554,7 +560,11 @@ fn paint(
         let cell = EguiRect::from_min_size(egui::pos2(cx, cy), egui::vec2(cw, ch));
         let hovered = hover == Some(k);
         if hovered {
-            painter.rect_filled(cell, CornerRadius::same(10), faint.linear_multiply(0.12));
+            painter.rect_filled(
+                cell,
+                CornerRadius::same(PanelStyle::R_CARD),
+                faint.linear_multiply(0.12),
+            );
         }
         // 图标。
         if let Some(tex) = icons.get(&k) {
