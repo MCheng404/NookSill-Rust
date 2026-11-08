@@ -603,6 +603,13 @@ SbPopFrost SbAutoOpaque TaskPeek FrostHold AnimSpeed FanReverse LogCollect
 这 35 个键在升级往返里**不会丢**，只是我们读不出来。等实现对应功能时再逐个
 进表，进表必须追加到 `NUMERIC_KEYS` 末尾（下标即 `Key::Numeric` 的值）。
 
+> **2026-11-08 追加 4 个 Rust 版独有键**：`HideDelay` / `ShowDelay` /
+> `HideDelayMax` / `ShowDelayMax`（`Key::Numeric(105..108)`），见
+> `CONFIG.md` 五之三。上游 C 版**没有对应功能** —— 它的自动隐藏宽限期是
+> 写死的常量、隐藏时碰到热区立即展开，光标在边缘抖动会频繁显隐。
+> 这四个键上游不认识，会原样保留；反向（拿上游 ini 给我们）走默认值。
+> 等价功能已向上游提交 [PR #14](https://github.com/wang01116/MiniDock/pull/14)。
+
 ### 9.3 已同步的行为修正
 
 | # | 上游出处 | 我们做了什么 |

@@ -226,6 +226,60 @@ pub struct DroppedBatch {
     pub group: Option<usize>,
 }
 
+/// 小组件卡片的**共享视觉参数**。
+///
+/// 之前每个 `paint_*_card` 各自写一套颜色、内边距、图标比例与字号比例，
+/// 结果是浅色模式下多处把 `argbc(240, 32, 30, 40)`（alpha 在前）误当
+/// RGBA 传给 `from_rgba_unmultiplied`，得到"红色 + alpha 40"的图标 ——
+/// 在浅色栏体上几乎看不见。集中到一处，深浅两套配色与所有比例只在
+/// 这里定义，新增卡片也不会再各自发挥。
+struct WidgetStyle;
+
+impl WidgetStyle {
+    /// 卡片内容（图标 / 主文字）的前景色。
+    #[must_use]
+    fn ink(dark: bool) -> Color32 {
+        if dark {
+            Color32::from_rgba_unmultiplied(235, 240, 240, 246)
+        } else {
+            Color32::from_rgba_unmultiplied(32, 30, 40, 240)
+        }
+    }
+
+    /// 次要文字（日期行）。比主文字稍淡，但仍保持足够对比度。
+    #[must_use]
+    fn ink_sub(dark: bool) -> Color32 {
+        if dark {
+            Color32::from_rgba_unmultiplied(190, 220, 220, 228)
+        } else {
+            Color32::from_rgba_unmultiplied(58, 56, 68, 220)
+        }
+    }
+
+    /// 时间组 / 日期组之间的细线。
+    #[must_use]
+    fn rule(dark: bool) -> Color32 {
+        if dark {
+            argbc(90, 255, 255, 255)
+        } else {
+            argbc(95, 60, 60, 70)
+        }
+    }
+
+    /// 卡片内边距（逻辑点，横向 / 纵向）。
+    const PAD_X: f32 = 6.0;
+    const PAD_Y: f32 = 4.0;
+    /// 图标占卡片短边的比例。三种图标各自的视觉重量不同。
+    const ICON_TRAY: f32 = 0.30;
+    const ICON_CTRL: f32 = 0.62;
+    const ICON_TOOL: f32 = 0.46;
+    /// 字号占卡片高度的比例与下限（逻辑点）。
+    const FONT_RATIO: f32 = 0.27;
+    const FONT_MIN: f32 = 9.0;
+    /// 文本可用宽度的最小阈值；再窄就不画，避免负字号传给 epaint。
+    const MIN_TEXT_WIDTH: f32 = 8.0;
+}
+
 /// Dock 本体。
 #[derive(Debug)]
 pub struct Dock {
@@ -292,6 +346,15 @@ pub struct Dock {
     pub force_hide: bool,
     /// 最近一次"鼠标靠近 / 正在操作"的时刻（毫秒，单调时钟）。
     last_near_ms: u64,
+    /// 光标移开后多久收起（ms）。默认 [`Self::HIDE_GRACE_MS`]。
+    pub hide_delay_ms: u64,
+    /// 隐藏时光标**持续**停在热区多久才展开（ms）。默认 0 = 旧行为。
+    ///
+    /// 这是防抖的另一半：展开要求持续停留，收起要求持续离开，
+    /// 光标在热区边缘来回扫不会让 Dock 反复显隐。
+    pub show_delay_ms: u64,
+    /// 隐藏状态下"光标已进入热区"的起始时刻。
+    show_pending_ms: Option<u64>,
     /// 当前拖拽状态。`None` = 没有按住任何条目。
     drag: Option<DragState>,
     /// 本帧发生过重排，`update` 据此补位移动画。
@@ -385,6 +448,9 @@ impl Dock {
             hide_target: false,
             force_hide: false,
             last_near_ms: 0,
+            hide_delay_ms: Self::HIDE_GRACE_MS,
+            show_delay_ms: 0,
+            show_pending_ms: None,
             drag: None,
             sep: None,
             sep_dirty: false,
@@ -1295,20 +1361,33 @@ impl Dock {
         self.hide_cur > 0.999
     }
 
+    /// 设置当前场景的两档延迟（毫秒）。主循环按「前台窗口是否最大化」
+    /// 每次 tick 同步，配置改了下一轮就生效，不必重启。
+    pub fn set_hide_delays(&mut self, hide_ms: u64, show_ms: u64) {
+        self.hide_delay_ms = hide_ms;
+        self.show_delay_ms = show_ms;
+    }
+
     /// 推进自动隐藏。返回 true 表示这一帧需要出帧（动画或状态刚变化）。
     ///
     /// `covered` 只在 `SmartHide` 下有意义：Dock 区域是否被普通窗口盖住。
     /// 没人盖住时强制显示 —— 这是"智能隐藏"与"自动隐藏"的唯一区别，
     /// 所以它必须走同一条宽限期逻辑，而不是另开一套。
+    ///
+    /// **非对称迟滞**：`hide_delay_ms` 管"持续离开才收起"，
+    /// `show_delay_ms` 管"持续停留才展开"。两者都由调用方按场景配置。
+    /// 默认值（450 / 0）等价于旧行为，既有测试不需要改。
     pub fn tick_auto_hide(&mut self, near: bool, busy: bool, covered: bool, now_ms: u64) -> bool {
         // 快捷键强制收起**优先于一切**：不受模式、鼠标位置、遮挡影响。
         // 常显模式下也要能用 —— 否则"快速让开"的快捷键就失效了。
         if self.force_hide {
+            self.show_pending_ms = None;
             return self.tick_hide(true);
         }
         if self.mode == DockMode::Always {
             // 不能直接 return false：强制收起解除后还要把 `hide_cur` 滑回 0，
             // 那段时间必须继续出帧。
+            self.show_pending_ms = None;
             return self.tick_hide(false);
         }
         // 智能隐藏：没被遮挡就当作"鼠标靠近"，强制展开并刷新计时。
@@ -1316,17 +1395,38 @@ impl Dock {
         if near || busy || forced {
             self.last_near_ms = now_ms;
             if self.hide_target {
-                self.hide_target = false;
+                // 已经收起：光标必须**连续**停留满 `show_delay_ms`
+                // 才展开。中途任何一次离开都会清空计时。
+                // 0 = 旧行为（碰到立刻展开），不能先记一帧再判断。
+                if self.show_delay_ms == 0 {
+                    self.show_pending_ms = None;
+                    self.hide_target = false;
+                    self.mark_dirty();
+                } else {
+                    match self.show_pending_ms {
+                        None => self.show_pending_ms = Some(now_ms),
+                        Some(since) if now_ms.saturating_sub(since) >= self.show_delay_ms => {
+                            self.show_pending_ms = None;
+                            self.hide_target = false;
+                            self.mark_dirty();
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                self.show_pending_ms = None;
+            }
+        } else {
+            // 光标离开热区：取消未完成的展开等待。注意**不刷新**
+            // `last_near_ms` —— 收起仍从"最后一次靠近"起算。
+            self.show_pending_ms = None;
+            if !self.hide_target && now_ms.saturating_sub(self.last_near_ms) > self.hide_delay_ms {
+                // 收起时顺手清掉悬停：否则图标会停在放大状态一起滑下去。
+                self.hide_target = true;
+                self.hover = false;
+                self.mouse = (-1.0, -1.0);
                 self.mark_dirty();
             }
-        } else if !self.hide_target
-            && now_ms.saturating_sub(self.last_near_ms) > Self::HIDE_GRACE_MS
-        {
-            // 收起时顺手清掉悬停：否则图标会停在放大状态一起滑下去。
-            self.hide_target = true;
-            self.hover = false;
-            self.mouse = (-1.0, -1.0);
-            self.mark_dirty();
         }
         self.tick_hide(self.hide_target)
     }
@@ -1381,7 +1481,7 @@ impl Dock {
             }
         }
         self.paint_ctrl_center_card(painter, p, dark);
-        self.paint_resource_card(painter, p, dark, ui.ctx());
+        self.paint_resource_card(painter, p, dark);
         self.paint_tool_card(painter, p, dark);
         self.paint_tray_card(painter, p, dark);
         self.paint_separators(painter, p, dark);
@@ -1572,7 +1672,7 @@ impl Dock {
             m.bar_h,
             p,
         );
-        self.paint_bar(painter, bar, self.bar_radius(p), dark);
+        self.paint_bar(painter, bar, self.bar_radius(p), dark, None);
         bar
     }
 
@@ -1616,7 +1716,7 @@ impl Dock {
             return;
         }
         let c = self.map(lo, self.geom.bar_top, hi - lo, m.bar_h, p);
-        self.paint_bar(painter, c, self.bar_radius(p), dark);
+        self.paint_bar(painter, c, self.card_radius(p), dark, self.widget_opacity());
     }
 
     /// 卡片自己的底盘。合并模式下整条带共用一块胶囊，这里什么都不画。
@@ -1624,7 +1724,22 @@ impl Dock {
         if self.widgets_merged() {
             return;
         }
-        self.paint_bar(painter, c, self.bar_radius(p), dark);
+        self.paint_bar(painter, c, self.card_radius(p), dark, self.widget_opacity());
+    }
+
+    /// 卡片底盘的不透明度覆盖。`0` = 跟随栏体（`None`）。
+    fn widget_opacity(&self) -> Option<f32> {
+        let v = self.cfg.get_i32(Key::WIDGET_OPACITY);
+        (v > 0).then(|| v as f32 / 100.0)
+    }
+
+    /// 卡片圆角。`0` = 跟随栏体。同样夹到半个栏高，否则圆角矩形退化成椭圆。
+    fn card_radius(&self, p: Proj) -> f32 {
+        let v = self.cfg.get_i32(Key::WIDGET_RADIUS);
+        if v <= 0 {
+            return self.bar_radius(p);
+        }
+        (v as f32).min(self.metrics.bar_h / 2.0) * p.k
     }
 
     /// 系统托盘卡片：一个向下的箭头，点了打开 Windows 通知区域。
@@ -1653,13 +1768,9 @@ impl Dock {
         let c = self.map(left, self.geom.bar_top, width as f32, m.bar_h, p);
         self.paint_card_bg(painter, c, dark, p);
 
-        let s = (c.width().min(c.height()) * 0.30).max(3.0);
+        let s = (c.width().min(c.height()) * WidgetStyle::ICON_TRAY).max(3.0);
         let center = c.center();
-        let color = if dark {
-            Color32::from_rgba_unmultiplied(235, 240, 240, 246)
-        } else {
-            Color32::from_rgba_unmultiplied(232, 30, 32, 40)
-        };
+        let color = WidgetStyle::ink(dark);
         let stroke = Stroke::new((s * 0.15).max(1.2), color);
         painter.line_segment(
             [
@@ -1709,13 +1820,9 @@ impl Dock {
         }
         let c = self.map(left, self.geom.bar_top, width as f32, m.bar_h, p);
         self.paint_card_bg(painter, c, dark, p);
-        let color = if dark {
-            Color32::from_rgba_unmultiplied(235, 240, 240, 246)
-        } else {
-            Color32::from_rgba_unmultiplied(232, 30, 32, 40)
-        };
+        let color = WidgetStyle::ink(dark);
         // 图标略小于计时器卡片里的表盘：滑轨本身有留白，画等大反而显小。
-        let s = c.width().min(c.height()) * 0.62;
+        let s = c.width().min(c.height()) * WidgetStyle::ICON_CTRL;
         let icon = EguiRect::from_center_size(c.center(), egui::vec2(s, s));
         crate::glyph::sliders(painter, icon, crate::glyph::IconStyle::plain(color));
     }
@@ -1743,13 +1850,9 @@ impl Dock {
         self.paint_card_bg(painter, c, dark, p);
 
         // 钟表：表盘 + 时针 + 分针，全部按卡片短边比例算。
-        let size = (c.width().min(c.height()) * 0.46).max(4.0);
+        let size = (c.width().min(c.height()) * WidgetStyle::ICON_TOOL).max(4.0);
         let center = c.center();
-        let color = if dark {
-            Color32::from_rgba_unmultiplied(235, 240, 240, 246)
-        } else {
-            Color32::from_rgba_unmultiplied(232, 30, 32, 40)
-        };
+        let color = WidgetStyle::ink(dark);
         let stroke = Stroke::new((size * 0.09).max(1.0), color);
         painter.circle_stroke(center, size / 2.0, stroke);
         painter.line_segment(
@@ -1765,13 +1868,7 @@ impl Dock {
         );
     }
 
-    fn paint_resource_card(
-        &self,
-        painter: &egui::Painter,
-        p: Proj,
-        dark: bool,
-        ctx: &egui::Context,
-    ) {
+    fn paint_resource_card(&self, painter: &egui::Painter, p: Proj, dark: bool) {
         let m = &self.metrics;
         let Some(idx) = m
             .widgets
@@ -1805,33 +1902,25 @@ impl Dock {
         } else {
             format!("CPU {}%", self.sysinfo.cpu_percent)
         };
-        let color = if dark {
-            Color32::from_rgba_unmultiplied(232, 240, 240, 245)
-        } else {
-            Color32::from_rgba_unmultiplied(232, 30, 32, 40)
-        };
-        // egui 不会自动缩字，所以先量再缩 ——
-        // 这里量一次宽度，装不下就缩字号。卡片留 4 逻辑点内边距。
-        let mut size = self.card_font_size(c.height());
-        let avail = c.width() - 8.0;
-        // 用 galley 量真实文字宽度（`row_height` 只给行高，量不出字宽）。
-        let galley = ctx.fonts_mut(|f| {
-            f.layout_no_wrap(
-                text.clone(),
-                FontId::proportional(size),
-                egui::Color32::WHITE,
-            )
-        });
-        if galley.size().x > avail && galley.size().x > 0.0 {
-            size *= avail / galley.size().x;
+        let color = WidgetStyle::ink(dark);
+        // 装不下就缩字号。与 clock 卡片共用一套边界规则：卡片退化到
+        // `clock_w = 0` 时 `avail` 会变负，`size *= avail / w` 会给出
+        // 负字号，epaint 的 glyph atlas 直接 panic —— resource 卡片
+        // 以前漏了这层保护。
+        let avail = c.width() - WidgetStyle::PAD_X * 2.0;
+        if avail <= WidgetStyle::MIN_TEXT_WIDTH {
+            return;
         }
-        painter.text(
-            c.center(),
-            Align2::CENTER_CENTER,
-            text,
-            FontId::proportional(size),
-            color,
-        );
+        let size0 = self.card_font_size(c.height());
+        let mut galley = painter.layout_no_wrap(text.clone(), FontId::proportional(size0), color);
+        if galley.size().x > avail && galley.size().x > 0.0 {
+            let size = (size0 * avail / galley.size().x).max(1.0);
+            galley = painter.layout_no_wrap(text, FontId::proportional(size), color);
+        }
+        let pos = Align2::CENTER_CENTER
+            .align_size_within_rect(galley.size(), c)
+            .min;
+        painter.galley(pos, galley, color);
     }
 
     /// 小组件卡片上文字的字号（**逻辑点**）。
@@ -1847,7 +1936,7 @@ impl Dock {
     /// 用它算出来的字号在 100% / 150% / 200% 下是同一物理尺寸，
     /// 栏高被压缩时又同比缩小。宽度装不下时调用方还会再缩一次。
     fn card_font_size(&self, card_h: f32) -> f32 {
-        (card_h * 0.27).max(9.0)
+        (card_h * WidgetStyle::FONT_RATIO).max(WidgetStyle::FONT_MIN)
     }
 
     /// 刷新系统采样。
@@ -1884,17 +1973,7 @@ impl Dock {
         let c = self.map(left, self.geom.bar_top, m.clock_w as f32, m.bar_h, p);
         self.paint_card_bg(painter, c, dark, p);
 
-        let (tc, dc) = if dark {
-            (
-                Color32::from_rgba_unmultiplied(245, 240, 240, 245),
-                Color32::from_rgba_unmultiplied(190, 220, 220, 228),
-            )
-        } else {
-            (
-                Color32::from_rgba_unmultiplied(245, 30, 30, 36),
-                Color32::from_rgba_unmultiplied(190, 60, 60, 70),
-            )
-        };
+        let (tc, dc) = (WidgetStyle::ink(dark), WidgetStyle::ink_sub(dark));
         // 卡片高度按**行数均分**。
         // 写死两行会出错：只显示时间或只显示日期时只有一行。
         //
@@ -1905,10 +1984,9 @@ impl Dock {
         // 物理尺寸一致。
         let n = lines.len().max(1);
         // 横向留白比纵向大：日期那行几乎顶满卡片，贴着圆角很难看。
-        const PAD_X: f32 = 6.0;
-        const PAD_Y: f32 = 4.0;
-        let line_h = (c.height() - PAD_Y * 2.0) / n as f32;
-        let avail = c.width() - PAD_X * 2.0;
+        let (pad_x, pad_y) = (WidgetStyle::PAD_X, WidgetStyle::PAD_Y);
+        let line_h = (c.height() - pad_y * 2.0) / n as f32;
+        let avail = c.width() - pad_x * 2.0;
         // 卡片退化（宽高不够塞一行字）就干脆不画。
         //
         // 这里踩过一个 panic：`metrics` 里没有 Clock 卡片时 `clock_w = 0`，
@@ -1916,45 +1994,37 @@ impl Dock {
         // 乘成 -0.006 —— epaint 的 `glyph_atlas` 断言 `px_scale_factor > 0`
         // 直接崩。渲染比布局慢一帧（配置刚把时钟打开、`update` 还没跑）
         // 就会命中，属于"改个设置就崩"的那类。
-        if !(line_h > 4.0 && avail > 8.0) {
+        if !(line_h > 4.0 && avail > WidgetStyle::MIN_TEXT_WIDTH) {
             return;
         }
         let mut prev: Option<&ClockLine> = None;
         for (k, line) in lines.iter().enumerate() {
             // 时间比日期大一号：汉字在同样字号下比数字"重"，比例再拉大会
             // 让日期反而喧宾夺主。
-            let mut size = clock_line_size(line_h, line.is_date);
+            let size0 = clock_line_size(line_h, line.is_date);
             let color = if line.is_date { dc } else { tc };
-            // 装不下就按真实字宽缩：中文日期 + 周几最容易顶到卡片边。
-            let w = painter
-                .layout_no_wrap(line.text.clone(), FontId::proportional(size), color)
-                .size()
-                .x;
-            if w > avail && w > 0.0 {
-                size *= avail / w;
+            // 量一次并复用这份 galley：装得下时直接画，省掉 `painter.text`
+            // 内部的第二次 shaping（中文日期最容易顶到卡片边）。
+            let mut galley =
+                painter.layout_no_wrap(line.text.clone(), FontId::proportional(size0), color);
+            if galley.size().x > avail && galley.size().x > 0.0 {
+                let size = (size0 * avail / galley.size().x).max(1.0);
+                galley =
+                    painter.layout_no_wrap(line.text.clone(), FontId::proportional(size), color);
             }
-            // 兜底：再怎么算也不给 epaint 一个非正的字号。
-            let size = size.max(1.0);
-            painter.text(
-                EguiRect::from_min_max(
-                    Pos2::new(c.left(), c.top() + PAD_Y + line_h * k as f32),
-                    Pos2::new(c.right(), c.top() + PAD_Y + line_h * (k + 1) as f32),
-                )
-                .center(),
-                Align2::CENTER_CENTER,
-                &line.text,
-                FontId::proportional(size),
-                color,
+            let row = EguiRect::from_min_max(
+                Pos2::new(c.left(), c.top() + pad_y + line_h * k as f32),
+                Pos2::new(c.right(), c.top() + pad_y + line_h * (k + 1) as f32),
             );
+            let pos = Align2::CENTER_CENTER
+                .align_size_within_rect(galley.size(), row)
+                .min;
+            painter.galley(pos, galley, color);
             // 时间组与日期组之间一条细线。
             if let Some(pv) = prev {
                 if pv.is_date != line.is_date {
-                    let y = c.top() + PAD_Y + line_h * k as f32;
-                    let ink = if dark {
-                        argbc(90, 255, 255, 255)
-                    } else {
-                        argbc(95, 60, 60, 70)
-                    };
+                    let y = c.top() + pad_y + line_h * k as f32;
+                    let ink = WidgetStyle::rule(dark);
                     painter.line_segment(
                         [
                             Pos2::new(c.left() + c.width() * 0.14, y),
@@ -2253,8 +2323,16 @@ impl Dock {
     }
 
     /// 栏体：纯色或渐变 + 可选描边。
-    fn paint_bar(&self, painter: &egui::Painter, rect: EguiRect, rad: f32, dark: bool) {
-        let op = self.cfg.opacity as f32 / 100.0;
+    fn paint_bar(
+        &self,
+        painter: &egui::Painter,
+        rect: EguiRect,
+        rad: f32,
+        dark: bool,
+        op_override: Option<f32>,
+    ) {
+        // 小组件卡片可以有独立透明度；`None` = 跟随栏体。
+        let op = op_override.unwrap_or(self.cfg.opacity as f32 / 100.0);
         if op <= 0.0 {
             return;
         }
@@ -2395,10 +2473,9 @@ impl Dock {
         );
         let font = FontId::proportional(12.0);
         let color = argbc(255, 245, 245, 247);
-        let text_w = painter
-            .layout_no_wrap(text.to_owned(), font.clone(), color)
-            .size()
-            .x;
+        // 同一份 galley 既量宽又画，`painter.text` 会在内部再排一次版。
+        let galley = painter.layout_no_wrap(text.to_owned(), font, color);
+        let text_w = galley.size().x;
         let w = text_w + 24.0 * k;
         let h = 28.0 * k;
         let (mut x, mut y) = match self.cfg.edge {
@@ -2435,7 +2512,10 @@ impl Dock {
             Stroke::new(1.0 * k, argbc(50, 255, 255, 255)),
             StrokeKind::Middle,
         );
-        painter.text(rect.center(), Align2::CENTER_CENTER, text, font, color);
+        let pos = Align2::CENTER_CENTER
+            .align_size_within_rect(galley.size(), rect)
+            .min;
+        painter.galley(pos, galley, color);
     }
 
     /// 逻辑坐标 → 物理坐标 → 画布坐标（含隐藏位移）。
@@ -2541,11 +2621,14 @@ fn rounded_gradient(rect: EguiRect, radius: f32, grad: BarGradient) -> egui::epa
     use std::f32::consts::PI;
 
     let (w, h) = (rect.width(), rect.height());
-    let r = radius.clamp(0.0, w.min(h) * 0.5);
-    // 半径太小就别折腾了：方角渐变本来就看不出区别。
-    if w <= 0.0 || h <= 0.0 {
+    // 尺寸检查**必须**在 clamp 之前：`radius.clamp(0.0, w.min(h) * 0.5)`
+    // 在上界为负时会直接 panic（"min > max"）。布局算出的负宽矩形
+    // 不该让整个 Dock 起不来 —— 不画就行。
+    if w <= 0.0 || h <= 0.0 || !w.is_finite() || !h.is_finite() {
         return egui::epaint::Shape::Noop;
     }
+    let r = radius.clamp(0.0, w.min(h) * 0.5);
+    // 半径太小就别折腾了：方角渐变本来就看不出区别。
     if r < 0.5 {
         // 方角退化：用 `gradient_rect` 更省顶点，颜色按最近的方向取两端色
         // （中间色在这种尺寸下看不出来，不值得为它铺网格）。
@@ -2709,6 +2792,66 @@ mod tests {
 
         let [r, g, b, a] = argbc(255, 245, 245, 247).to_srgba_unmultiplied();
         assert_eq!((r, g, b, a), (245, 245, 247, 255));
+    }
+
+    /// 负宽 / 负高矩形必须安静退化，不能在 `clamp` 处 panic。
+    ///
+    /// 实机报告：`min = 0.0, max = -25.33334`，来自空条目列表 +
+    /// 多个小组件把 `bar_w` 算成负数。根因在 `layout::place_slots`
+    /// 已夹紧；这里是通用防线，任何调用方传坏尺寸都不该让 Dock 起不来。
+    #[test]
+    fn rounded_gradient_tolerates_degenerate_rects() {
+        let grad = BarGradient {
+            from: Color32::WHITE,
+            mid: None,
+            to: Color32::BLACK,
+            angle_deg: 0.0,
+        };
+        for (w, h) in [
+            (-50.66668, 76.0),
+            (120.0, -8.0),
+            (0.0, 76.0),
+            (f32::NAN, 76.0),
+        ] {
+            let rect = EguiRect::from_min_size(Pos2::ZERO, egui::vec2(w, h));
+            assert!(matches!(
+                rounded_gradient(rect, 12.0, BarGradient { ..grad }),
+                egui::epaint::Shape::Noop
+            ));
+        }
+        // 正常尺寸仍要真的出网格，不能被早退误伤。
+        let ok = EguiRect::from_min_size(Pos2::ZERO, egui::vec2(120.0, 76.0));
+        assert!(!matches!(
+            rounded_gradient(ok, 12.0, grad),
+            egui::epaint::Shape::Noop
+        ));
+    }
+
+    /// 浅色卡片前景必须**深色且不透明**。
+    ///
+    /// 这个 bug 的真实形态是：把 `argbc(240, 32, 30, 40)`（alpha 在前）
+    /// 当成 RGBA 传，得到 `from_rgba_unmultiplied(232, 30, 32, 40)` ——
+    /// 红色 + alpha 40，浅色栏体上几乎看不见。深浅两套都在这里钉死。
+    #[test]
+    fn widget_ink_is_readable_in_both_themes() {
+        let [r, g, b, a] = WidgetStyle::ink(false).to_srgba_unmultiplied();
+        assert!(a >= 200, "浅色文字不该是半透明：alpha={a}");
+        assert!(
+            r < 100 && g < 100 && b < 100,
+            "浅色文字应当是深色：{r},{g},{b}"
+        );
+
+        let [r, g, b, a] = WidgetStyle::ink(true).to_srgba_unmultiplied();
+        assert!(a >= 200, "深色文字不该是半透明：alpha={a}");
+        assert!(
+            r > 200 && g > 200 && b > 200,
+            "深色主题文字应当是亮色：{r},{g},{b}"
+        );
+
+        let [r, _, _, a] = WidgetStyle::ink_sub(false).to_srgba_unmultiplied();
+        assert!(a >= 200 && r < 120, "次要文字也要有足够对比度");
+        let [_, _, _, a] = WidgetStyle::rule(false).to_srgba_unmultiplied();
+        assert!(a > 0 && a < 150, "细线是装饰，不该压过文字");
     }
 
     /// 小组件字号随 DPI 同比放大：换算回**逻辑点**后必须恒定。
@@ -3437,9 +3580,66 @@ mod tests {
         dock.tick_auto_hide(false, false, false, grace + 1);
         assert!(dock.hide_target, "超过宽限期应当收起");
 
-        // 靠近 → 立刻展开（不等任何延迟）。
+        // 靠近 → 立刻展开（默认 show_delay_ms = 0，旧行为）。
         dock.tick_auto_hide(true, false, false, grace + 500);
         assert!(!dock.hide_target, "一靠近就该展开");
+    }
+
+    /// 显示延迟：隐藏状态下光标必须**连续**停留满 show_ms 才展开。
+    #[test]
+    fn show_delay_requires_a_continuous_hover() {
+        let mut dock = settled_dock(2);
+        dock.mode = DockMode::AutoHide;
+        dock.set_hide_delays(Dock::HIDE_GRACE_MS, 300);
+        // 先收起：让动画走完，hide_cur 到 1.0。
+        dock.tick_auto_hide(false, false, false, 10_000);
+        assert!(dock.hide_target);
+        for _ in 0..20 {
+            dock.tick_auto_hide(false, false, false, 10_000);
+        }
+
+        // 光标来了，但只停 100 ms —— 不该展开。
+        dock.tick_auto_hide(true, false, false, 20_000);
+        dock.tick_auto_hide(true, false, false, 20_100);
+        assert!(dock.hide_target, "停留不足 show_ms 不该展开");
+
+        // 连续停满 300 ms 才展开。
+        dock.tick_auto_hide(true, false, false, 20_300);
+        assert!(!dock.hide_target, "停满 show_ms 应当展开");
+    }
+
+    /// 抖动抑制：光标在热区边缘来回扫，每次都不足 show_ms，
+    /// 计时必须被清空重来 —— 这正是"Dock 频繁显隐"的根因。
+    #[test]
+    fn brief_hover_jitter_never_triggers_a_show() {
+        let mut dock = settled_dock(2);
+        dock.mode = DockMode::AutoHide;
+        dock.set_hide_delays(Dock::HIDE_GRACE_MS, 400);
+        dock.tick_auto_hide(false, false, false, 10_000);
+        for _ in 0..20 {
+            dock.tick_auto_hide(false, false, false, 10_000);
+        }
+
+        for k in 0..5 {
+            let t = 20_000 + k * 1_000;
+            dock.tick_auto_hide(true, false, false, t);
+            dock.tick_auto_hide(true, false, false, t + 100);
+            dock.tick_auto_hide(false, false, false, t + 200);
+            assert!(dock.hide_target, "第 {k} 次短暂扫过不该展开");
+        }
+    }
+
+    /// 隐藏延迟也可配：调大之后旧的 450 ms 不再收起。
+    #[test]
+    fn hide_delay_is_configurable() {
+        let mut dock = settled_dock(2);
+        dock.mode = DockMode::AutoHide;
+        dock.set_hide_delays(1_500, 0);
+        dock.tick_auto_hide(true, false, false, 0);
+        dock.tick_auto_hide(false, false, false, Dock::HIDE_GRACE_MS + 1);
+        assert!(!dock.hide_target, "旧的 450 ms 不该再触发收起");
+        dock.tick_auto_hide(false, false, false, 1_501);
+        assert!(dock.hide_target, "超过新延迟应当收起");
     }
 
     /// 正在拖拽时无论光标走多远都不能收起 —— 拖到一半 Dock 缩回去最糟糕。

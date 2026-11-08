@@ -259,6 +259,28 @@ async 运行时带来的调度开销与栈占用都不划算。
 11. **图标请求去重的键是 `(下标, 路径)`，不能只用路径**。分组条目的
     `path` 恒为空串，只用路径会让多个分组互相抑制。`change_icon` /
     `reset_icon` 必须调 `IconLoader::forget` 解绑，否则换图标不生效。
+12. **自动隐藏是「非对称迟滞」而不是两个独立定时器**：
+    `hide_delay_ms` 从「最后一次靠近」起算「持续离开」，
+    `show_delay_ms` 从「进入热区」起算「持续停留」，中途任一方向反悔
+    都要清空对应计时。两档按前台窗口是否最大化切换（`IsZoomed`，
+    与 `is_fullscreen_foreground` 的无边框全屏判定互不等价）。
+    默认值 450 / 0 必须保留旧行为，否则所有既有隐藏测试都要重写。
+13. **小组件卡片的视觉参数只有一个来源**：`dock.rs::WidgetStyle`
+    （深浅配色、内边距、图标/字号比例、最小文本宽度）。
+    `argbc(a,r,g,b)` 是 **alpha 在前**，与 egui 的
+    `from_rgba_unmultiplied(r,g,b,a)` 顺序相反 —— 混用会画出
+    "红色 + 近乎全透明"的浅色图标。所有卡片前景必须走
+    `WidgetStyle::ink/ink_sub/rule`。
+14. **卡片文本先量后排，且必须复用 galley**。`painter.text()` 内部会
+    再排一次版，所以量宽后应 `painter.galley()` 画。缩字号前必须检查
+    `avail > MIN_TEXT_WIDTH` 并把字号夹到 `>= 1.0`：卡片宽度退化到 0 时
+    负字号会让 epaint 的 glyph atlas 直接 panic。
+15. **几何量必须先夹非负，再喂给 `f32::clamp`**。`clamp(0.0, x)` 在
+    `x < 0` 时直接 panic（"min > max"）。`place_slots` 的 `bar_w` 来自
+    `total.min(lw - 4 - widget_extra)`，空条目 + 多个小组件会让它变负。
+    所有几何计算里"检查尺寸 <= 0 就早退"必须写在 clamp **之前**，
+    并同时挡 `NaN` / 无穷。可变上界的 clamp（如 `w as f32 - 1.001`）
+    也要先保证上界非负。
    拿不到光标就退回追加末尾，不能退化成插到第 0 位。
 
 ## 八、与 C 版的模块映射

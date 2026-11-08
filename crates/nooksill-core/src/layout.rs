@@ -235,6 +235,11 @@ pub struct WidgetStrip {
     pub extra: f32,
     /// 条带在栏体的哪一侧：右（false）/ 左（true）。
     pub on_left: bool,
+    /// 成员之间的**附加**间距（在 `gap` 之上）。
+    ///
+    /// `build()` 从 `WidgetGap` 读，`left_of()` 用同一个值 —— 以前两处
+    /// 各硬编码 `6.0`，改一个就会让条带占位与实际位置错开。
+    pub gap_extra: f32,
 }
 
 impl WidgetStrip {
@@ -271,6 +276,7 @@ impl WidgetStrip {
             ]
         };
 
+        let gap_extra = cfg.get_i32(Key::WIDGET_GAP).clamp(0, 24) as f32;
         let mut items = [None; 7];
         let mut len = 0usize;
         let mut extra = 0.0f32;
@@ -285,14 +291,15 @@ impl WidgetStrip {
             };
             items[len] = Some((kind, w));
             len += 1;
-            // 占位累加：成员宽度 + 间距 + 6。
-            extra += w as f32 + gap + 6.0;
+            // 占位累加：成员宽度 + 间距 + 附加间距。
+            extra += w as f32 + gap + gap_extra;
         }
         Self {
             items,
             len,
             extra,
             on_left: cfg.get_i32(Key::W_SIDE) != 0,
+            gap_extra,
         }
     }
 
@@ -318,7 +325,7 @@ impl WidgetStrip {
     #[must_use]
     pub fn left_of(&self, i: usize, bar_l: f32, bar_w: f32, gap: f32) -> Option<f32> {
         self.items.get(i)?.as_ref()?;
-        let gap_w = gap + 6.0;
+        let gap_w = gap + self.gap_extra;
         if self.on_left {
             // Lay out right-to-left from the bar's left edge.
             let mut u = bar_l - gap_w;
@@ -930,7 +937,12 @@ pub fn place_slots(m: &Metrics, cur: &[f32], widget_extra: f32) -> Slots {
     } else {
         2.0 * m.pad_x + cur.iter().sum::<f32>() + m.gap * (n - 1) as f32
     };
-    let bar_w = total.min(m.lw as f32 - 4.0 - widget_extra);
+    // 可用宽度必须夹到 >= 0。小组件条带占位超过窗口宽度时（空条目 +
+    // 多个小组件是很常见的组合），`lw - 4 - widget_extra` 会是负数，
+    // `min` 会把负宽度直接传给 `bar_w`，栏体渐变在
+    // `radius.clamp(0.0, negative)` 处 panic —— 表现为"打开就报错"。
+    let avail = (m.lw as f32 - 4.0 - widget_extra).max(0.0);
+    let bar_w = total.min(avail);
     let bar_l = (m.lw as f32 - bar_w - widget_extra) / 2.0;
 
     let mut x = bar_l + m.pad_x;
@@ -1023,6 +1035,7 @@ mod tests {
             len: 3,
             extra: 0.0,
             on_left: false,
+            gap_extra: 6.0,
         };
 
         // i=0 returns before reading the hole.
@@ -1037,6 +1050,43 @@ mod tests {
         };
         assert_eq!(left.left_of(2, 500.0, 200.0, 8.0), Some(396.0));
         assert_eq!(left.left_of(0, 500.0, 200.0, 8.0), None);
+    }
+
+    /// `WidgetGap` 改变时 `build()` 的占位与 `left_of()` 的位置必须用同一个
+    /// `gap_extra`。以前两处各写死 6.0，改一处就会让条带宽度与实际位置错开。
+    /// 小组件条带占位超过窗口宽度时，`bar_w` 绝不能是负数。
+    ///
+    /// 实机复现：`[Items]` 为空 + 启用 5 个小组件 + 时钟，
+    /// `widget_extra` 大于 `lw`，旧写法 `total.min(lw - 4 - extra)`
+    /// 直接得到约 -50.67，栏体渐变在 `radius.clamp(0.0, -25.33)`
+    /// 处 panic —— 表现为"双击打开就报错"。
+    #[test]
+    fn widget_strip_larger_than_window_never_yields_negative_bar_width() {
+        let m = calc_metrics(&cfg96(), 96, 0, 0, work());
+        let slots = place_slots(&m, &[], m.lw as f32 + 200.0);
+        assert!(slots.bar_w >= 0.0, "bar_w 不能为负：{}", slots.bar_w);
+        assert!(slots.bar_w.is_finite());
+
+        // 有条目时同样不能为负。
+        let slots = place_slots(&m, &[48.0, 48.0], m.lw as f32 + 200.0);
+        assert!(slots.bar_w >= 0.0, "bar_w 不能为负：{}", slots.bar_w);
+    }
+
+    #[test]
+    fn widget_gap_shifts_strip_consistently() {
+        let mut cfg = cfg96();
+        let mut build = |gap: i32| {
+            cfg.apply_i32(Key::WIDGET_GAP, gap);
+            WidgetStrip::build(&cfg, 76.0, 8.0, 166)
+        };
+        let a = build(6);
+        let b = build(18);
+        assert!(b.gap_extra > a.gap_extra);
+        assert!(b.extra > a.extra, "占位要随间距变大");
+        // 右侧布局：第一个成员的左边界应同比右移。
+        let la = a.left_of(0, 500.0, 200.0, 8.0).expect("条带非空");
+        let lb = b.left_of(0, 500.0, 200.0, 8.0).expect("条带非空");
+        assert!((lb - la - (b.gap_extra - a.gap_extra)).abs() < 0.01);
     }
 
     #[test]

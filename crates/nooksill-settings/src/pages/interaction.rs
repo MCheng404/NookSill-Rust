@@ -4,7 +4,7 @@ use egui::Ui;
 use nooksill_core::config::Key;
 
 use super::options::MIN_STYLE_OPTS;
-use super::widgets::{card, combo, toggle, Ctx};
+use super::widgets::{card, combo, slider, toggle, Ctx};
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(ctx, ui, "交互", "", |ctx, ui| {
@@ -37,4 +37,27 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         );
         toggle(ctx, ui, Key::Preview, "悬停运行中应用显示窗口预览", "");
     });
+
+    // 两张卡片全部复用共享的 `card` + `slider`，不另造一套延迟控件。
+    // 说明放在 card 的 note 里，与全站其它卡片同一套版式。
+    card(
+        ctx,
+        ui,
+        "显示 / 隐藏灵敏度 · 普通场景",
+        "光标移开后延迟收起；隐藏时光标要连续停留才展开。数值越大越不容易因边缘抖动反复显隐，单位 ms",
+        |ctx, ui| {
+            slider(ctx, ui, Key::HIDE_DELAY, "移开光标后收起延迟", "ms");
+            slider(ctx, ui, Key::SHOW_DELAY, "隐藏时唤醒显示延迟", "ms");
+        },
+    );
+    card(
+        ctx,
+        ui,
+        "显示 / 隐藏灵敏度 · 应用最大化时",
+        "最大化窗口贴着屏幕边缘，光标更容易误触；这一档建议设得比普通场景更长，单位 ms",
+        |ctx, ui| {
+            slider(ctx, ui, Key::HIDE_DELAY_MAX, "移开光标后收起延迟", "ms");
+            slider(ctx, ui, Key::SHOW_DELAY_MAX, "隐藏时唤醒显示延迟", "ms");
+        },
+    );
 }

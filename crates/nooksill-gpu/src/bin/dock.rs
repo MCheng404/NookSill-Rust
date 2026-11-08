@@ -358,6 +358,8 @@ struct App {
 
     last_fs_check: Instant,
     fs_hidden: bool,
+    /// 前台窗口是否最大化。用来在「普通 / 最大化」两套隐藏延迟档之间切换。
+    fg_maximized: bool,
     /// `NOOKSILL_FAKE_MOUSE="u,v"`：把光标钉在指定位置（无人值守截图用）。
     fake_mouse: Option<(f32, f32)>,
     /// `NOOKSILL_FAKE_COVERED=0/1`：覆盖遮挡判定结果。
@@ -664,6 +666,7 @@ impl App {
             scan_sent: None,
             last_fs_check: Instant::now(),
             fs_hidden: false,
+            fg_maximized: false,
             fake_mouse: fake_mouse_from_env(),
             fake_covered: fake_covered_from_env(),
             last_near: None,
@@ -2781,6 +2784,10 @@ impl App {
             return false;
         }
         self.last_fs_check = Instant::now();
+        // 共用同一个节流窗口查前台窗口状态：不额外增加系统枚举频率。
+        // 最大化窗口贴着屏幕边缘，光标最容易在热区边界来回扫，
+        // 所以用更长的一档延迟。
+        self.fg_maximized = occlusion::maximized_foreground();
         let fs = occlusion::is_fullscreen_foreground();
         if trace::fs() {
             eprintln!("[fs] {} -> {}", occlusion::fullscreen_trace(), fs);
@@ -2820,6 +2827,18 @@ impl App {
         // 100 ms 一次不能压在 UI 线程上）。注入的假结果优先。
         let covered =
             self.dock.mode == DockMode::SmartHide && self.fake_covered.unwrap_or(self.covered);
+        // 两档延迟按场景取。配置改了下一轮 tick 就生效，不必重启。
+        // `get_i32` 已经按 NUMERIC_KEYS 的值域夹紧，这里再挡一次负数
+        // 是为了 `as u64` 不把坏值变成一个天文数字。
+        let (hide_key, show_key) = if self.fg_maximized {
+            (Key::HIDE_DELAY_MAX, Key::SHOW_DELAY_MAX)
+        } else {
+            (Key::HIDE_DELAY, Key::SHOW_DELAY)
+        };
+        self.dock.set_hide_delays(
+            self.dock.cfg.get_i32(hide_key).max(0) as u64,
+            self.dock.cfg.get_i32(show_key).max(0) as u64,
+        );
         let before = self.dock.hide_target;
         self.dock.tick_auto_hide(near.hit, busy, covered, now_ms);
         if trace::geom() && self.last_near != Some(near.hit) {
@@ -3779,10 +3798,17 @@ fn frost_spec(cfg: &Config, key: Key, corner_pt: f32) -> Option<FrostSpec> {
     if cfg.get_i32(key) == 0 {
         return None;
     }
-    Some(FrostSpec {
-        radius: cfg.get_i32(Key::Blur).max(1) as u32,
-        corner_pt,
-    })
+    // 小组件弹出层可以覆盖全局磨砂半径；0 = 沿用 `Blur`。
+    // 不改调用点，所有走 `frost_spec` 的弹层（菜单 / 起动台 / 设置 /
+    // 小组件面板）自动生效。
+    let blur = cfg.get_i32(Key::WIDGET_BLUR);
+    let radius = if blur > 0 {
+        blur
+    } else {
+        cfg.get_i32(Key::Blur)
+    }
+    .max(1) as u32;
+    Some(FrostSpec { radius, corner_pt })
 }
 
 /// Show a menu and block until the user picks or dismisses it.

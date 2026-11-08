@@ -300,6 +300,20 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     // 更新器（Rust 版自有，藏在「关于」页的隐藏入口后面）。
     ("NetSecureDns", 0, 1, 1, true, false),
     ("NetMirrorAll", 0, 1, 0, true, false),
+    // 自动隐藏的灵敏度延迟，单位毫秒。两套场景各一对：
+    // 光标移开→收起（Hide*），隐藏时光标进入热区→展开（Show*）。
+    // 值越大越不容易因光标在边缘抖动而反复显隐。
+    // HideDelay 默认 450 与旧版硬编码的 HIDE_GRACE_MS 一致；
+    // ShowDelay 默认 180 是新增的防抖，旧版是"碰到就立刻展开"。
+    ("HideDelay", 0, 5000, 450, false, false),
+    ("ShowDelay", 0, 5000, 180, false, false),
+    ("HideDelayMax", 0, 5000, 900, false, false),
+    ("ShowDelayMax", 0, 5000, 400, false, false),
+    // 小组件外观。0 = 跟随（栏体 / 全局磨砂），非 0 才覆盖。
+    ("WidgetOpacity", 0, 100, 0, false, false),
+    ("WidgetRadius", 0, 40, 0, false, false),
+    ("WidgetGap", 0, 24, 6, false, false),
+    ("WidgetBlur", 0, 14, 0, false, false),
 ];
 
 impl Key {
@@ -519,6 +533,22 @@ impl Key {
     pub const NET_SECURE_DNS: Key = Key::Numeric(103);
     /// `NetMirrorAll`：镜像测速是否全部测完再选（默认"够快就先上"）。
     pub const NET_MIRROR_ALL: Key = Key::Numeric(104);
+    /// `HideDelay`：普通场景，光标移开后多久收起（ms）。
+    pub const HIDE_DELAY: Key = Key::Numeric(105);
+    /// `ShowDelay`：普通场景，隐藏状态下光标持续停留多久才展开（ms）。
+    pub const SHOW_DELAY: Key = Key::Numeric(106);
+    /// `HideDelayMax`：前台窗口最大化时的收起延迟（ms）。
+    pub const HIDE_DELAY_MAX: Key = Key::Numeric(107);
+    /// `ShowDelayMax`：前台窗口最大化时的展开延迟（ms）。
+    pub const SHOW_DELAY_MAX: Key = Key::Numeric(108);
+    /// `WidgetOpacity`：小组件卡片底盘不透明度；0 = 跟随栏体。
+    pub const WIDGET_OPACITY: Key = Key::Numeric(109);
+    /// `WidgetRadius`：小组件卡片圆角；0 = 跟随栏体。
+    pub const WIDGET_RADIUS: Key = Key::Numeric(110);
+    /// `WidgetGap`：小组件条带成员之间的附加间距（逻辑像素）。
+    pub const WIDGET_GAP: Key = Key::Numeric(111);
+    /// `WidgetBlur`：弹出层磨砂半径；0 = 跟随全局 `Blur`。
+    pub const WIDGET_BLUR: Key = Key::Numeric(112);
 
     /// `UiAccentDockIcons`：Dock 图标（内置条目 / 首字占位）是否应用主题色。
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);
@@ -932,6 +962,13 @@ impl Key {
             Key::Margin => (0, 150),
             Key::PlateRadius => (0, 50),
             Key::FRAME_CAP => (0, 240),
+            Key::HIDE_DELAY | Key::SHOW_DELAY | Key::HIDE_DELAY_MAX | Key::SHOW_DELAY_MAX => {
+                (0, 3000)
+            }
+            Key::WIDGET_OPACITY => (0, 100),
+            Key::WIDGET_RADIUS => (0, 40),
+            Key::WIDGET_BLUR => (0, 14),
+            Key::WIDGET_GAP => (0, 24),
             _ => return None,
         })
     }
@@ -1693,6 +1730,14 @@ mod tests {
             (Key::UI_ACCENT_CC_ICONS, "UiAccentCcIcons"),
             (Key::NET_SECURE_DNS, "NetSecureDns"),
             (Key::NET_MIRROR_ALL, "NetMirrorAll"),
+            (Key::HIDE_DELAY, "HideDelay"),
+            (Key::SHOW_DELAY, "ShowDelay"),
+            (Key::HIDE_DELAY_MAX, "HideDelayMax"),
+            (Key::SHOW_DELAY_MAX, "ShowDelayMax"),
+            (Key::WIDGET_OPACITY, "WidgetOpacity"),
+            (Key::WIDGET_RADIUS, "WidgetRadius"),
+            (Key::WIDGET_GAP, "WidgetGap"),
+            (Key::WIDGET_BLUR, "WidgetBlur"),
         ];
         for &(key, name) in pairs {
             assert_eq!(key.name(), name, "常量与表行错位");

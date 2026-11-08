@@ -21,9 +21,28 @@ use nooksill_core::layout::Rect;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
-    IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
+    GetWindowTextLengthW, IsIconic, IsWindowVisible, IsZoomed, GWL_EXSTYLE, GW_OWNER,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
 };
+
+/// 前台窗口是否处于**最大化**状态。
+///
+/// 与 [`is_fullscreen_foreground`] 不是一回事：无边框全屏是"沉浸态"，
+/// 会让整个 Dock 隐藏；普通最大化（浏览器、资源管理器）只是窗口贴着
+/// 屏幕边缘，光标扫过时最容易误触发显隐。后者只用来选自动隐藏的
+/// 灵敏度档位，不改变 Dock 的可见性策略。
+///
+/// 拿不到前台窗口或调用失败一律返回 `false`（= 普通场景）。
+#[must_use]
+pub fn maximized_foreground() -> bool {
+    // SAFETY: 两个都是只读查询；`IsZoomed` 对无效 HWND 返回 FALSE，
+    // 这里仍先判一次，避免把无效句柄传下去。
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        !hwnd.is_invalid() && IsZoomed(hwnd).as_bool()
+    }
+}
 
 /// 直接用 `DwmGetWindowAttribute(h, 14, ...)`；这里用具名常量。
 ///

@@ -293,6 +293,52 @@ fn 速记入口产出命令() {
     );
 }
 
+/// 外观页的 4 条小组件参数滑条都要能渲染，且沿用共享的 card + slider。
+#[test]
+fn 外观页小组件参数四条滑条() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Appearance;
+    h.run();
+    for label in ["卡片不透明度", "卡片圆角", "条带成员间距", "弹出层模糊半径"]
+    {
+        assert_eq!(h.query_all_by_label(label).count(), 1, "缺滑条：{label}");
+    }
+    assert_eq!(
+        h.state().cfg.get_i32(Key::WIDGET_OPACITY),
+        0,
+        "默认跟随栏体"
+    );
+    assert_eq!(h.state().cfg.get_i32(Key::WIDGET_RADIUS), 0, "默认跟随栏体");
+    assert_eq!(
+        h.state().cfg.get_i32(Key::WIDGET_GAP),
+        6,
+        "默认与旧硬编码一致"
+    );
+    assert_eq!(
+        h.state().cfg.get_i32(Key::WIDGET_BLUR),
+        0,
+        "默认跟随全局 Blur"
+    );
+}
+
+/// 交互页的四条延迟滑条都要能渲染，且沿用共享的 `card + slider`。
+/// 两套场景各一对，标签同名但归属不同卡片。
+#[test]
+fn 交互页显示隐藏灵敏度四条滑条() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Interaction;
+    h.run();
+
+    // 同名标签在两张卡片里各出现一次。
+    assert_eq!(h.query_all_by_label("移开光标后收起延迟").count(), 2);
+    assert_eq!(h.query_all_by_label("隐藏时唤醒显示延迟").count(), 2);
+    // 默认值：普通 450/180，最大化 900/400。
+    assert_eq!(h.state().cfg.get_i32(Key::HIDE_DELAY), 450);
+    assert_eq!(h.state().cfg.get_i32(Key::SHOW_DELAY), 180);
+    assert_eq!(h.state().cfg.get_i32(Key::HIDE_DELAY_MAX), 900);
+    assert_eq!(h.state().cfg.get_i32(Key::SHOW_DELAY_MAX), 400);
+}
+
 /// 分组内子项排序：按钮带组下标与子项下标。
 #[test]
 fn 条目页分组子项排序只发命令() {

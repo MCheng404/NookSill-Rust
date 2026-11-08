@@ -75,4 +75,18 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         slider(ctx, ui, Key::BORDER_WIDTH, "边框粗细", " px");
         combo(ctx, ui, Key::MENU_THEME, "右键菜单主题", MENU_THEME_OPTS);
     });
+
+    // 小组件外观：全部复用共享的 card + slider，与上面的配色卡片同一套版式。
+    card(
+        ctx,
+        ui,
+        "小组件外观",
+        "0 = 跟随栏体 / 全局磨砂。卡片底盘、圆角、条带间距与弹出层模糊可分别调整",
+        |ctx, ui| {
+            slider(ctx, ui, Key::WIDGET_OPACITY, "卡片不透明度", " %");
+            slider(ctx, ui, Key::WIDGET_RADIUS, "卡片圆角", " px");
+            slider(ctx, ui, Key::WIDGET_GAP, "条带成员间距", " px");
+            slider(ctx, ui, Key::WIDGET_BLUR, "弹出层模糊半径", " px");
+        },
+    );
 }

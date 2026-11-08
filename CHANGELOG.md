@@ -6,6 +6,138 @@
 
 ---
 
+## 修复 — 启动即 panic：空条目 + 多个小组件算出负栏宽（实机报告，2026-11-08）
+
+### 现象
+
+用户提供的 `NookSill-2.0.0-89-b93e705-win64-debug.exe` 双击即弹：
+`panicked at core/src/num/f32.rs:1605:9: min > max, or either was NaN.
+min = 0.0, max = -25.333334`。
+
+### 根因（已用对照实验钉死）
+
+用户 ini 里 `[Items]` **为空**、却启用了 5 个小组件 + 时钟
+（`CtrlCenter/ResMon/ToolW/ModeW/TrayW=1`、`WMerge=1`）。
+`layout::place_slots` 算 `bar_w = total.min(lw - 4 - widget_extra)`，
+条带占位超过窗口宽度时右式为负，`min` 把负宽度直接写进 `bar_w`。
+栏体渐变随后在 `rounded_gradient` 里执行
+`radius.clamp(0.0, w.min(h) * 0.5)` —— 上界为负，`f32::clamp` 立即
+panic；而 `if w <= 0` 的早退写在 clamp **下一行**，永远来不及执行。
+
+用旧 exe 从终端重定向 stderr 复现出完全相同的 `-25.333334`；
+用修复后重新构建的 debug exe、同一份 ini 启动 6 秒无任何 panic
+（`exit=124` 为限时结束，进程正常常驻）。
+
+### 改了什么
+
+| 层 | 修法 |
+|---|---|
+| 根因 | `place_slots` 先把可用宽度 `(lw - 4 - widget_extra).max(0.0)`，再取 `min`，保证 `bar_w >= 0` |
+| 通用防线 | `rounded_gradient` 把尺寸检查移到 `clamp` 之前，并加 `is_finite`；任何坏尺寸矩形都安静返回 `Shape::Noop` |
+| 同类加固 | `icon::sample_bilinear`（`sw/sh=0` 时 `sw-1` 会 u32 下溢）、`smoke::bilinear` / `advect`（`w<2` 时上界为负且 `x0+1` 越界）补早退 |
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿。新增单测 2 条：
+`layout::widget_strip_larger_than_window_never_yields_negative_bar_width`
+（直接构造 `widget_extra > lw`）、
+`dock::rounded_gradient_tolerates_degenerate_rects`
+（负宽/负高/零宽/NaN 都返回 Noop，正常尺寸仍出网格）。
+`layout` 60 条、`gpu` 147 条全过。
+
+**实机对照**：旧 exe 复现 panic，新构建的 debug exe 用同一份用户配置
+无 panic 并正常常驻 6 秒。
+
+---
+
+## 未发布 — 小组件统一打磨：样式 / 边界 / 性能 / 视觉参数（2026-11-08）
+
+以**当前 `dock.rs` 与各面板实现**为准做的一轮收口，不依赖历史描述。
+
+### 改了什么
+
+| 类别 | 项 |
+|---|---|
+| 样式（真 bug） | 5 处浅色卡片前景误写成 `from_rgba_unmultiplied(232, 30, 32, 40)` —— 红色、alpha 40，浅色栏体上几乎看不见；时钟卡的 `(245,30,30,36)` / `(190,60,60,70)` 同源。根因是把 `argbc(a,r,g,b)`（**alpha 在前**）当 RGBA 传。统一抽到 `WidgetStyle::ink / ink_sub / rule`，深浅两套只在一处定义 |
+| 样式（一致性） | 内边距 `6/4`、图标比例 `0.30/0.62/0.46`、字号比例 `0.27`、最小文本宽 `8.0` 全部收进 `WidgetStyle`；卡片圆角与底盘透明度也走共享方法，不再各自发挥 |
+| 边界（真 bug） | `paint_resource_card` 缺 `avail > 0` 保护与 `size.max(1.0)`：卡片宽度退化到 0 时 `size *= avail / w` 会给 epaint 负字号并 panic（时钟卡早有保护，资源卡漏了）。补齐，并把"最小文本宽"收进共享常量 |
+| 性能 | `resource` / `clock` / `bubble` 三处「量宽 + `painter.text`」对同一文本排版两次，改为量出的 `Arc<Galley>` 直接 `painter.galley()` 画；只有需要缩字号时才重排一次。不缩字号的常见路径每帧少一次 CJK shaping，画质不变 |
+| 布局 | `WidgetStrip` 新增 `gap_extra` 字段：`build()` 的占位与 `left_of()` 的位置此前各硬编码 `6.0`，统一后调间距不会错位 |
+| 视觉参数 | 新增 4 个表驱动键 `Key::Numeric(109..112)`：`WidgetOpacity`（卡片底盘不透明度）、`WidgetRadius`（卡片圆角）、`WidgetGap`（条带间距，默认 6 与旧版一致）、`WidgetBlur`（弹出层磨砂半径，`frost_spec` 覆盖 `Blur`）。全部 `0` = 跟随，零默认行为变化；设置页外观页用共享 `card + slider` 呈现 |
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
+单测：`gpu` 146 条（新增 `widget_ink_is_readable_in_both_themes`）、
+`core::layout` 59 条（新增 `widget_gap_shifts_strip_consistently`）、
+`settings` kittest 26 条（新增外观页 4 滑条）。
+`core::config` 表驱动键数/名称测试自动覆盖 4 个新键。
+
+离屏像素回归：`widgets_light.bmp` / `widgets_dark.bmp` 两套各 1217×247。
+浅色下图标与 `CPU 0%` 由"红色近乎透明"变为深色清晰，深色下白色清晰，
+无裁切或重叠；`settings_appearance.bmp` 外观页版式一致（新卡片在滚动区）。
+
+### 已知限制
+
+- 栏体 `BgMode::Frost` 仍退化为渐变（Backlog #6）；`WidgetBlur` 只作用于
+  `frost_spec()` 创建的**弹出层**，不假装给栏体加了独立模糊。
+- 弹出面板自身的背景 alpha（`246` / `248`）仍是硬编码，本轮未做
+  `PanelOpacity`；卡片底盘透明度已可配。
+- 未在真实桌面会话验证高 DPI（150% / 200%）与竖排 Dock 下的卡片布局。
+
+---
+
+## 未发布 — 显示 / 隐藏灵敏度延迟（2026-11-08）
+
+### 依据
+
+用户实测反馈：Dock 显示隐藏频率太高，光标在热区边缘来回扫就反复显隐。
+旧实现里收起宽限期是硬编码的 450 ms，而**隐藏时碰到热区立刻展开** ——
+只有一半迟滞，抖动自然压不住。上游 C 版同样没有这个功能。
+
+### 改了什么
+
+新增 4 个表驱动键（`Key::Numeric(105..108)`，单位 ms），两套场景自动切换：
+
+| 键 | 场景 | 方向 | 默认 |
+|---|---|---|---|
+| `HideDelay` | 普通 | 移开光标 → 收起 | 450 |
+| `ShowDelay` | 普通 | 隐藏时唤醒 → 展开 | 180 |
+| `HideDelayMax` | 前台窗口最大化 | 移开光标 → 收起 | 900 |
+| `ShowDelayMax` | 前台窗口最大化 | 隐藏时唤醒 → 展开 | 400 |
+
+- **非对称迟滞**：`Dock::tick_auto_hide` 收起从「最后一次靠近」起算持续
+  离开，展开从「进入热区」起算持续停留；任一方向中途反悔都清空对应
+  计时（`show_pending_ms`）。默认值 450/0 等价于旧行为，20 处既有调用
+  与测试零改动 —— 延迟做成 `Dock` 字段而不是改函数签名，是有意的。
+- **场景判定**：`platform::occlusion::maximized_foreground()` 用
+  `IsZoomed(GetForegroundWindow())`，与 `step_fullscreen` 共用同一个
+  节流窗口，不额外增加系统枚举。无边框全屏（整体隐藏 Dock）与普通
+  最大化（只换延迟档）保持两条独立逻辑。
+- **设置页只用共享元素**：交互页加两张 `card`，每张两个 `slider`，
+  说明放在 `card` 的 note 里 —— 没有新造延迟控件或版式。
+- 配置改了下一轮 tick 就生效，不必重启。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿；`dock_shot` / `settings_shot` 基线正常。
+新增单测：`Dock` 迟滞 3 条（连续停留才展开 / 边缘抖动 5 轮不展开 /
+隐藏延迟可配）、kittest 交互页 4 条滑条与默认值 1 条。
+`core::config` 的表驱动键数/名称测试自动覆盖 4 个新键。
+
+### 已知限制
+
+- 自动隐藏模式下主循环每 100 ms 轮询光标，延迟的**实际分辨率约 100 ms**；
+  设 50 与 90 在当前实现里差别不可见。要做更细得改主循环调度，收益有限。
+- 未实机验证：真实光标抖动场景、最大化窗口切换档位的时机。
+- 本轮同时向上游 `wang01116/MiniDock` 提交等价功能 PR：
+  [wang01116/MiniDock#14](https://github.com/wang01116/MiniDock/pull/14)
+  （分支 `MCheng404/MiniDock@feat/auto-hide-hysteresis`，+76/−3，
+  含 ini 键、迟滞逻辑、交互动效页 4 条滑条与 README；已用 MinGW-w64
+  完整编译验证）。
+
+---
+
 ## 未发布 — 审查驱动的一轮：空闲出帧、泄漏、忙循环、主题缓存、图标去重、有线网卡（2026-11-08）
 
 提交并推送 `a48ab52` 之后做了一轮系统性只读审查（稳定性 / 性能两条线），

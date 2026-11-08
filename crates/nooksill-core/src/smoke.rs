@@ -953,6 +953,11 @@ fn build_edge(w: usize, h: usize, bar: (f32, f32, f32, f32), thickness: f32) -> 
 
 /// 双线性采样。`cx` / `cy` 会被夹到 `[0, w-1.001]`，调用方不用自己防越界。
 fn bilinear(f: &[f32], w: usize, h: usize, cx: f32, cy: f32) -> f32 {
+    // 双线性要读 x0+1 / y0+1，网格小于 2 就不成立；此时上界也会变负，
+    // `clamp(0.0, negative)` 直接 panic。
+    if w < 2 || h < 2 {
+        return 0.0;
+    }
     let cx = cx.clamp(0.0, w as f32 - 1.001);
     let cy = cy.clamp(0.0, h as f32 - 1.001);
     let x0 = cx as usize;
@@ -969,6 +974,10 @@ fn bilinear(f: &[f32], w: usize, h: usize, cx: f32, cy: f32) -> f32 {
 /// `src` 与 `dst` 不能是同一块内存；`vel` 是**回溯用的**速度场（与 `src`
 /// 相同或更早一帧都可以，见 [`Fluid::step`] 第 ③ 步的注释）。
 fn advect(vel_u: &[f32], vel_v: &[f32], src: &[f32], dst: &mut [f32], w: usize, h: usize, dt: f32) {
+    // 同 `bilinear`：min 侧网格退化时避免负上界 clamp 与越界读。
+    if w < 2 || h < 2 {
+        return;
+    }
     for y in 0..h {
         for x in 0..w {
             let i = x + y * w;

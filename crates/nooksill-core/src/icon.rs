@@ -370,6 +370,11 @@ pub fn composite_quad(sources: &[QuadSource<'_>], out: u32, corner: f32) -> Vec<
 
 /// 双线性采样一个源像素。越界按边缘夹紧。
 fn sample_bilinear(src: &[u8], sw: u32, sh: u32, x: f32, y: f32) -> [u8; 4] {
+    // 空源图直接退场：`sw/sh = 0` 时上界是 -1，`clamp` 会 panic，
+    // 而且后面的 `sw - 1` 会 u32 下溢成一个天文数字。
+    if sw == 0 || sh == 0 {
+        return [0; 4];
+    }
     let x = x.clamp(0.0, sw as f32 - 1.0);
     let y = y.clamp(0.0, sh as f32 - 1.0);
     let x0 = x.floor() as u32;
