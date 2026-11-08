@@ -88,6 +88,11 @@
 - [x] 设置窗口接入 Dock 进程（进程内第二窗口，改设置即时生效并自动落盘，ADR-036）
 - [x] IME 兜底方案验证（`gpu::ime`：WM_IME_* + ImmGetCompositionStringW，
       已接起动台搜索 / 重命名与计时器待办；候选框仍用系统的，不自绘）
+- [x] **编辑弹窗 / 设置窗口的 IME 组合串回显**（2026-11-08）：两者此前
+      只收上屏串，打拼音时输入框毫无反应。改走 egui 的
+      `ImeEvent::Preedit` / `Commit`（由 TextEdit 自己画带下划线的预编辑
+      文本），`ImmSetCompositionWindow` 让候选窗跟着焦点字段。
+      四个窗口现已全部接 `Ime::enable` 与 `WM_IME_SETCONTEXT`。
 - [x] 运行状态扫描 + 点击激活已运行实例（ADR-028）
 - [ ] `FlyStart` 最小化/恢复的飞入动画（纯观感）
 - [ ] Store 应用（`AppExecutionAlias`）的 exe 解析
@@ -234,7 +239,7 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 | 图标 | `LoadItemIcon` `HiconToGp` `FitBitmap` `AlphaBBox` `LetterTile` | `platform::icon` + `core::icon` + `gpu::worker` | ✅ 含圆角/缩放，工作线程取 |
 | 网址 favicon | `IsUrlStr` `HostOf` `Fnv` `IconFileFor` `FaviconBitmap` | —— | ❌ 未做（网址条目走首字占位） |
 | 快捷方式 | `ReadLnk` `ResolveTarget` `BuildItem` | `platform::shortcut` | ✅ |
-| 拖放 | `DT_*` `AcceptData` `DropPoint` `GetGlobalText` | `gpu::dock` + `bin/dock.rs` | ⚠️ `WM_DROPFILES` 已接（文件/文件夹）；OLE `IDropTarget`（网址/文本）未做 |
+| 拖放 | `DT_*` `AcceptData` `DropPoint` `GetGlobalText` | `gpu::dock` + `bin/dock.rs` | ⚠️ `WM_DROPFILES` 已接：按落点插入 / 落在组上归组 / `.url` 网址 / `.lnk` 快捷方式 / 去重；OLE `IDropTarget`（拖拽过程反馈、网址与纯文本）未做 |
 | 分组 | `KidAdd` `MergeInto` `ExtractKid` `DissolveGroup` `BuildGroupIcon` | `core::group` + `gpu::group_win` + `gpu::edit_win` | ✅ 建组/改名/点开/归组/移出/解散 + 四宫格图标；`launch` 的 `Unsupported` 分支不再可达 |
 | 菜单 | `ShowMenu` `MenuProc` `MenuDraw` `HandleCmd` | `gpu::menu` | ✅ 独立窗口 + 模态捕获（ADR-032） |
 | 预览 | `ShowPreview` `PvProc` `PvEnum` `ClosePreview` | —— | ❌ 未做（只有配置键） |

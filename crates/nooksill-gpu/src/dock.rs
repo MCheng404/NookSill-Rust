@@ -213,6 +213,19 @@ pub struct DockGeom {
     pub base_c: Vec<f32>,
 }
 
+/// 一批从资源管理器拖进来的东西。
+///
+/// 路径、插入位置、归组目标必须在**同一次**取走，分三次取容易出现
+/// "路径是这一批、落点是上一批"的错配。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DroppedBatch {
+    pub paths: Vec<String>,
+    /// 插到 `raw` 的哪个下标之前；`None` = 追加到末尾。
+    pub index: Option<usize>,
+    /// 落点停在分组图标上时的 `dock.items` 下标。
+    pub group: Option<usize>,
+}
+
 /// Dock 本体。
 #[derive(Debug)]
 pub struct Dock {
@@ -325,6 +338,10 @@ pub struct Dock {
     /// 拖到这里"—— 此前这句是**空头支票**，拖了没反应。
     /// 拖进来的路径暂存区。窗口过程只有 `Dock` 的指针，主循环每轮取走。
     dropped_paths: Vec<String>,
+    /// 本批拖入要插到 `raw` 的哪个下标之前。`None` = 追加到末尾。
+    dropped_at: Option<usize>,
+    /// 落点是不是停在一个分组图标上（`dock.items` 下标）。
+    dropped_group: Option<usize>,
     /// 托盘图标被左键点了（切换显隐）。
     tray_toggle: bool,
     /// 托盘图标被右键点了（弹菜单）。
@@ -381,6 +398,8 @@ impl Dock {
             look_epoch: 0,
             menu_at: None,
             dropped_paths: Vec::new(),
+            dropped_at: None,
+            dropped_group: None,
             tray_toggle: false,
             tray_menu: false,
             merge_target: None,
@@ -391,14 +410,53 @@ impl Dock {
         }
     }
 
-    /// 记下一批拖进来的路径（窗口过程用）。
-    pub fn push_dropped_paths(&mut self, paths: Vec<String>) {
+    /// 记下一批拖进来的路径与落点（窗口过程用）。
+    ///
+    /// `x/y` 是**窗口客户区物理坐标**，与 `WM_MOUSEMOVE` 同一套单位。
+    /// 一批里可能挤进多条 `WM_DROPFILES`（用户一次拖了多个文件又被
+    /// 拆成几条消息），落点以第一条为准。
+    pub fn push_dropped_paths(&mut self, paths: Vec<String>, x: f32, y: f32) {
+        if self.dropped_paths.is_empty() {
+            self.dropped_at = Some(self.drop_index_at(x, y));
+            self.dropped_group = self.drop_group_at(x, y);
+        }
         self.dropped_paths.extend(paths);
     }
 
-    /// 取走拖进来的路径。
-    pub fn take_dropped_paths(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.dropped_paths)
+    /// 取走一批拖入。路径、插入位置、归组目标必须**一起**取走，
+    /// 分三次取容易出现"路径是这一批、落点是上一批"的错配。
+    pub fn take_dropped_paths(&mut self) -> DroppedBatch {
+        DroppedBatch {
+            paths: std::mem::take(&mut self.dropped_paths),
+            index: self.dropped_at.take(),
+            group: self.dropped_group.take(),
+        }
+    }
+
+    /// 一次外部拖入该插到栏体的哪个位置。
+    ///
+    /// 数有多少个图标中心在落点左边 —— 与 [`Self::place_for`] 同语义，
+    /// 传 `usize::MAX` 表示"没有需要排除的被拖项"。
+    ///
+    /// 四边停靠的纵向轴不同：横排用 `x`，左/右停靠用 `y`。这与
+    /// `layout::map_rect` 里 `u` 的含义一致（竖排时 `u` 映射到窗口 y）。
+    #[must_use]
+    pub fn drop_index_at(&self, x: f32, y: f32) -> usize {
+        let u = if self.cfg.edge.is_horizontal() { x } else { y };
+        self.place_for(u, usize::MAX)
+    }
+
+    /// 落点是不是停在一个分组图标上（拖进去直接归组）。
+    ///
+    /// 返回的是 `dock.items` 的下标；调用方要自己确认它落在 `raw`
+    /// 范围内（临时条目区不能改配置）。
+    #[must_use]
+    pub fn drop_group_at(&self, x: f32, y: f32) -> Option<usize> {
+        let i = self.hit_at(x, y)?;
+        self.items
+            .get(i)
+            .filter(|it| it.kind == ItemKind::Group)
+            .map(|_| i)
     }
 
     /// 记一次托盘点击。`toggle = true` 是左键（切显隐），`false` 是右键（弹菜单）。
@@ -1341,7 +1399,7 @@ impl Dock {
         if !self.drag_outside() {
             return;
         }
-        let text = "松手从 Dock 移除";
+        let text = "松手移除 · 拖回栏体可取消";
         let font = FontId::proportional(13.0);
         let galley = painter.layout_no_wrap(text.to_owned(), font, Color32::WHITE);
         let size = galley.size() + egui::vec2(22.0, 12.0);
@@ -3174,16 +3232,65 @@ mod tests {
         assert_eq!(dock.take_click(), None);
     }
 
-    /// 拖进来的路径要能被主循环取走。
+    /// 拖出去之后**拖回栏体**必须能反悔：误拖不该直接丢条目。
+    #[test]
+    fn dragging_back_into_the_bar_cancels_removal() {
+        let mut dock = drag_dock();
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x0 = dock.geom.slot_l[0] + s / 2.0;
+
+        assert!(dock.press_at(x0, y, false));
+        dock.drag_to(x0 + 20.0, y);
+        dock.drag_to(x0 + 20.0, -100.0);
+        assert!(dock.drag_outside());
+
+        // 回撤到栏体内：`drag_to` 每帧重算 `drop_outside`，不是一次性锁存。
+        dock.drag_to(x0 + 30.0, y);
+        assert!(!dock.drag_outside(), "回来之后删除手势要作废");
+        assert_eq!(dock.release_at(x0 + 30.0, y), None);
+        assert_eq!(dock.take_pending_remove(), None, "不该删条目");
+    }
+
+    /// 拖进来的路径与落点要能被主循环取走。
     #[test]
     fn dropped_paths_round_trip() {
         let mut dock = drag_dock();
-        assert!(dock.take_dropped_paths().is_empty());
-        dock.push_dropped_paths(vec!["C:/a.exe".to_owned(), "C:/d".to_owned()]);
-        let paths = dock.take_dropped_paths();
-        assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0], "C:/a.exe");
-        assert!(dock.take_dropped_paths().is_empty(), "取走之后不该还有残留");
+        let batch = dock.take_dropped_paths();
+        assert!(batch.paths.is_empty());
+        assert_eq!(batch.index, None);
+        assert_eq!(batch.group, None);
+        dock.push_dropped_paths(vec!["C:/a.exe".to_owned(), "C:/d".to_owned()], 10.0, 40.0);
+        let batch = dock.take_dropped_paths();
+        assert_eq!(batch.paths.len(), 2);
+        assert_eq!(batch.paths[0], "C:/a.exe");
+        assert!(batch.index.is_some(), "应当记下插入下标");
+        let batch = dock.take_dropped_paths();
+        assert!(batch.paths.is_empty(), "取走之后不该还有残留");
+        assert_eq!(batch.index, None, "落点也要一并清掉");
+        assert_eq!(batch.group, None);
+    }
+
+    /// 落点决定插入位置：光标越往右，插得越靠后。
+    #[test]
+    fn drop_index_follows_the_cursor() {
+        let dock = drag_dock();
+        let y = dock.geom.bar_top + 10.0;
+        let first = dock.drop_index_at(dock.geom.slot_l[0] + 2.0, y);
+        let last = dock.drop_index_at(dock.geom.slot_l[2] + dock.metrics.s, y);
+        assert!(last >= first, "光标往右不该让插入位置变靠前");
+        assert!(last <= dock.items.len());
+    }
+
+    /// 一批里多条 WM_DROPFILES 沿用第一条的落点，不被后面的覆盖。
+    #[test]
+    fn a_drop_batch_keeps_its_first_anchor() {
+        let mut dock = drag_dock();
+        dock.push_dropped_paths(vec!["C:/a.exe".into()], 5.0, 40.0);
+        let first = dock.dropped_at;
+        dock.push_dropped_paths(vec!["C:/b.exe".into()], 900.0, 40.0);
+        assert_eq!(dock.dropped_at, first, "落点不该被第二条消息覆盖");
+        assert_eq!(dock.dropped_paths.len(), 2);
     }
 
     /// 往右拖过最后一个图标 → 被拖项落到末尾，并产生一条待同步的重排。

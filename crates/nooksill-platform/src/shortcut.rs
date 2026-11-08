@@ -59,6 +59,52 @@ fn resolve_lnk(path: &str) -> Option<Shortcut> {
     }
 }
 
+/// 读一个 `.url` Internet Shortcut，取出目标网址。
+///
+/// 拖入 `.url` 时不能当成普通 `File`：那样 `ShellExecute` 虽然也能打开，
+/// 但 `ItemKind::File` 会走运行状态扫描、图标按 exe 取，语义全错。
+/// 解析成 `ItemKind::Url` 才能走 `Browser` 配置那套浏览器选择。
+#[must_use]
+pub fn read_url_shortcut(path: &str) -> Option<String> {
+    // `.url` 常见是 ANSI/UTF-8，偶尔带 BOM。`from_utf8_lossy` 会把坏字节
+    // 换成占位符，但 `URL=` 那一行是纯 ASCII，不受影响。
+    let bytes = std::fs::read(path).ok()?;
+    parse_url_shortcut(&String::from_utf8_lossy(&bytes))
+}
+
+/// 从 `.url` 的文本里找 `URL=`。抽成纯函数，单测不必造临时文件。
+#[must_use]
+pub fn parse_url_shortcut(content: &str) -> Option<String> {
+    let mut in_section = false;
+    for raw in content.lines() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.starts_with('[') && line.ends_with(']') {
+            in_section = line.eq_ignore_ascii_case("[InternetShortcut]");
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("URL") {
+            continue;
+        }
+        let url = value.trim();
+        // 只认真网址：本地路径、空值、奇怪的 scheme 一律不给。
+        if url.len() > 8
+            && (url.starts_with("http://")
+                || url.starts_with("https://")
+                || url.starts_with("ftp://"))
+        {
+            return Some(url.to_owned());
+        }
+        return None;
+    }
+    None
+}
+
 /// Return `None` when the item has no exe to match against a running process.
 #[must_use]
 pub fn resolve(path: &str) -> Option<Shortcut> {
@@ -82,6 +128,36 @@ pub fn resolve(path: &str) -> Option<Shortcut> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_a_standard_url_shortcut() {
+        let s = "[InternetShortcut]\nURL=https://example.com/a?b=1\nIconIndex=0\n";
+        assert_eq!(
+            parse_url_shortcut(s),
+            Some("https://example.com/a?b=1".to_owned())
+        );
+    }
+
+    #[test]
+    fn url_shortcut_ignores_other_sections_and_casing() {
+        let s = "\u{feff}[InternetShortcut]\r\n url = HTTP://Example.COM \r\n[Other]\r\nURL=file:///etc/passwd\r\n";
+        // 只认小写 http/https/ftp 前缀，大小写不一致的 scheme 不给 ——
+        // `open_url` 后续按字符串直接拼，宁可保守。
+        assert_eq!(parse_url_shortcut(s), None);
+        let ok = "[internetshortcut]\nURL=http://a.cn\n[Other]\nURL=file:///x\n";
+        assert_eq!(parse_url_shortcut(ok), Some("http://a.cn".to_owned()));
+    }
+
+    #[test]
+    fn url_shortcut_rejects_local_paths_and_junk() {
+        assert_eq!(
+            parse_url_shortcut("[InternetShortcut]\nURL=file:///x"),
+            None
+        );
+        assert_eq!(parse_url_shortcut("[InternetShortcut]\nURL="), None);
+        assert_eq!(parse_url_shortcut("URL=https://x"), None, "不在段里");
+        assert_eq!(parse_url_shortcut("不是 url 文件"), None);
+    }
 
     #[test]
     fn non_lnk_non_exe_has_no_target() {

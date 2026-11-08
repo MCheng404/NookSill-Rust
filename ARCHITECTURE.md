@@ -243,6 +243,16 @@ async 运行时带来的调度开销与栈占用都不划算。
    wndproc 拿不到 `App`。托盘点击、拖放路径这类事件先记在 `Dock` 的
    一次性标志/队列里，由主循环取走执行 —— 不要在 WndProc 里开窗口
    或跑模态循环。
+8. **IME 文本链路只有一条**：`WM_CHAR` 的可打印字符 → `Event::Text`；
+   组合串 → `ImeEvent::Preedit`；上屏串 → `ImeEvent::Commit`。上屏
+   **不能**退回 `Event::Text`，否则预编辑的拼音会残留在正文里。同一帧
+   里 Commit 必须先于 Preedit（一条 `WM_IME_COMPOSITION` 可能同时带上屏
+   与下一轮组合）。另外 egui 的 `Event::Text("\n")` 会被忽略，换行只能
+   靠 `Event::Key{Enter}` —— 多行框别再往 `WM_CHAR` 里塞换行。
+9. **拖放落点走 `GetCursorPos + ScreenToClient`**，不用 `DragQueryPoint`
+   （坐标系文档不明确）。落点换算插入下标时，四边停靠的纵向轴不同：
+   横排取 `x`，左/右停靠取 `y`。一批 `WM_DROPFILES` 只认第一条落点。
+   拿不到光标就退回追加末尾，不能退化成插到第 0 位。
 
 ## 八、与 C 版的模块映射
 

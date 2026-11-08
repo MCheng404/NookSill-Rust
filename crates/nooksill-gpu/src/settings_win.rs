@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
+    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION,
 };
 
 use crate::frame::FrameRenderer;
@@ -524,19 +524,33 @@ impl SettingsWindow {
                 }
                 Some(LRESULT(0))
             }
-            // 中文输入法：组合中的拼音由系统画候选窗，我们只取上屏的文字。
-            WM_IME_COMPOSITION | WM_IME_STARTCOMPOSITION | WM_IME_ENDCOMPOSITION => {
+            // 中文输入法：上屏走 `ImeEvent::Commit`，组合中的拼音走
+            // `ImeEvent::Preedit`，由 egui 在输入框里画带下划线的预编辑
+            // 文本。此前只取上屏串，打拼音时输入框毫无反应。
+            WM_IME_COMPOSITION
+            | WM_IME_STARTCOMPOSITION
+            | WM_IME_ENDCOMPOSITION
+            | WM_IME_SETCONTEXT => {
                 let mut committed = String::new();
+                let before = self.ime.composing().to_owned();
                 let handled = self
                     .ime
                     .handle(self.hwnd, msg, wparam, lparam, &mut committed);
+                // 先 Commit 再 Preedit：同一条消息可能既上屏又开始下一轮
+                // 组合，反序会把新组合串当旧 preedit 删掉。
                 if !committed.is_empty() {
-                    self.input.text(&committed);
+                    self.input.ime_commit(&committed);
+                }
+                let after = self.ime.composing().to_owned();
+                if after != before {
+                    self.input.ime_preedit(&after);
+                }
+                if !committed.is_empty() || after != before {
                     // 不需要"跳过下一条 WM_CHAR"：`ime.handle` 对
                     // `WM_IME_COMPOSITION` 返回 true，我们直接吃掉这条
                     // 消息（`Some(LRESULT(0))`），DefWindowProc 不会再
-                    // 补发 WM_CHAR。设一个跨消息的跳过标志反而会吞掉
-                    // 下一次普通按键的第一个字符。
+                    // 补发 WM_CHAR。设跨消息的跳过标志反而会吞掉下一次
+                    // 普通按键的第一个字符。
                     self.next_repaint = Some(Instant::now());
                 }
                 if handled {

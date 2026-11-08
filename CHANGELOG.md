@@ -6,6 +6,103 @@
 
 ---
 
+## 未发布 — 拖放改进：按落点插入 / 快捷方式 / 去重 / 落组（2026-11-08）
+
+### 依据
+
+旧实现只收 `WM_DROPFILES` 的路径，然后一律 `raw.push` 追加到末尾。
+拖到栏体任意位置没有区别、`.url` 被当成 exe、重复路径会加出两个图标。
+拖出栏体只有「松手移除」，提示也没说能反悔。
+
+### 改了什么
+
+| 项 | 做法 |
+|---|---|
+| 落点有意义 | `WM_DROPFILES` 用 `GetCursorPos + ScreenToClient` 取客户区落点，`Dock::drop_index_at` 换算成插入下标（四边停靠时纵向轴用 `y`），`step_drop` 用 `insert` 而不是 `push`。一批多条消息沿用第一条落点 |
+| 拖入落组 | 落点停在分组图标上时直接 `group::add_kid`；组不满足条件（满 / 嵌套）就退回插到栏体，不丢文件。加完清组图标缓存 |
+| 快捷方式 | `.url` 解析成 `ItemKind::Url`（`shortcut::parse_url_shortcut` 纯函数 + `read_url_shortcut`），保留 `.url` 本身作 `icon_src` 让 shell 取图标；`.lnk` 仍走 `File`，`ShellExecute` 与运行状态扫描各自解析目标 |
+| 去重 | 路径（`.url` 用网址）大小写不敏感比对，已存在的跳过并在回执里计数 |
+| 回执 | 说明「在第 N 位插入 X 个 / 归入分组 Y 个 / 跳过重复 Z 个」，不再只有一句「已添加」 |
+| 拖出保护 | 提示改成「松手移除 · 拖回栏体可取消」；`drop_outside` 本来就每帧重算、回撤即作废，补了单测钉死 |
+
+### 一个坐标系决定
+
+没用 `DragQueryPoint`：MSDN 只说坐标「相对于接收 `WM_DROPFILES` 的窗口」，
+没写死是屏幕还是客户区，不同来源说法不一。改走
+`GetCursorPos + ScreenToClient`，坐标系无歧义；取不到光标就退回追加末尾，
+绝不用 `(0,0)` 把新条目顶到最前面。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿；`dock_shot` 离屏出帧正常。
+新增单测：`Dock` 拖放批次 3 条（含"一批多条消息沿用首个落点"、
+"拖出后拖回取消删除"）、`bin/dock.rs` 条目构造 3 条（普通文件 / 真实目录 /
+`.url` 临时文件）、`platform::shortcut` `.url` 解析 3 条。
+
+### 已知限制
+
+- `DragAcceptFiles` 只在**松手**时给一条 `WM_DROPFILES`，拖拽过程中没有
+  `DragOver`，所以画不出「插入位置竖线」这类实时反馈。要做必须上 OLE
+  `IDropTarget`（PORTING.md 第 268 行的待办）。
+- 落在组上的判定复用 `hit_at(x, y)`；左/右停靠时既有命中实现没做坐标
+  转置，落组可能不准（但不会崩）。插入下标本身已按纵向轴处理。
+- **未实机验证**：真实资源管理器的多文件拖入、`.url` 拖入、竖排 Dock
+  落点。这几条需要桌面会话。
+- 仍未做：从 Dock 拖出到桌面创建快捷方式（见回复里的方向确认）、
+  OLE 网址/纯文本拖入、PNG/JPEG 图标解码。
+
+---
+
+## 未发布 — 中文输入链路补齐：组合串回显 / 候选窗定位 / 多行键盘（2026-11-08）
+
+### 依据
+
+审查第三轮新增的编辑弹窗与设置窗口时发现：`Ime::handle` 收下了
+`GCS_COMPSTR`（组合中的拼音），但这两个窗口**从不读 `composing()`**，
+也不调 `set_caret`。结果是打中文时只有系统候选框在动、输入框里看不到
+正在打的字，候选窗还落在窗口左上角。起动台与计时器面板早已自己画组合串，
+新建的两个窗口漏了这一层。
+
+### 改了什么
+
+| 项 | 做法 |
+|---|---|
+| 组合串回显 | `Input::ime_preedit` / `ime_commit` 把 Win32 组合串映射成 egui 0.37 的 `ImeEvent::Preedit` / `Commit`。**上屏必须走 Commit**：它先删掉上一帧 preedit 再插入结果，用 `Event::Text` 会留下 "nihao你好" |
+| 事件顺序 | 一条 `WM_IME_COMPOSITION` 可能同时带 RESULTSTR 与下一轮 COMPSTR。固定「先 Commit、后 Preedit」，反序会把刚开始的新组合当旧 preedit 删掉 |
+| `WM_IME_SETCONTEXT` | 两个窗口补接；失焦时 `Ime::handle` 清掉组合态，同时发一条空 Preedit 清掉 egui 里的预编辑文本，不留半截拼音 |
+| 候选窗定位 | `paint` 把当前焦点字段的文字起点记进 `EditState::caret`，渲染后调 `ImmSetCompositionWindow`。多行框取第一行中心，不是 170px 框的中心 |
+| 多行键盘 | 多行时 `Ctrl+Enter` 提交（组合中不触发）；单行维持回车提交。IME 组合中的回车是「选词」，不再喂 `Event::Key{Enter}` —— 否则会在拼音中间插一个换行 |
+
+### 两个被源码推翻的假设
+
+1. 初判「多行回车会插两个换行」。查 egui 源码后确认：`Event::Text("\n")`
+   被 `TextEdit` **明确忽略**（`builder.rs` 注释 *Newlines are handled by
+   `Key::Enter`*），换行只来自 `WM_KEYDOWN` 喂的 `Event::Key{Enter}`。
+   原先 `WM_CHAR` 里 `\r → Event::Text("\n")` 是死代码，已删。
+2. 初判「Preedit 与 Commit 同帧会互相覆盖」。查事件循环确认 `if let` 在
+   `for event` **内部**，每个事件后立即更新 `cursor_range`，同帧可行。
+   已用真跑一帧 egui 的集成测试钉死，而不是停在推测。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿。新增单测：`Input` 4 条，其中
+`preedit_then_commit_leaves_only_the_final_text` 用 `Context::run_ui`
+真跑两帧 egui，断言 `Preedit("pinyin") → Commit("hi")` 后文本是 `"abhi"`
+（同时证明 `filtered_events(&event_filter)` 没有把 IME 事件过滤掉、
+`owns_ime_events` 的焦点条件成立）。
+
+`panels_shot` 增加第 4 张图 `panel_edit.bmp`（475×460）：速记的标题 +
+多行正文，可见两行中文、保存/取消按钮都在窗口内、无裁切。
+`settings_shot` 与 `dock_shot` 基线复核正常。
+
+### 已知限制
+
+仍是窗口级 IME 兜底，候选框由系统绘制（不自绘候选列表）。真机中文输入
+链路（尤其多行 IME 组合串的显示位置）仍待实机确认 —— 离屏渲染不含
+`ImmGetCompositionStringW` 的真实上下文。
+
+---
+
 ## 修复 — 操作回执在淡出边界下溢，拖应用进分组时崩溃（2026-11-07，实机报告）
 
 **现象**（用户实测提供截图）：把应用程序拖进分组，整个 Dock 弹出

@@ -31,9 +31,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjectsEx, PeekMessageW, RegisterClassW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA, HWND_TOPMOST,
     MSG, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_CHAR,
-    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW,
-    WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
+    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETCURSOR, WNDCLASSW,
+    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::frame::FrameRenderer;
@@ -179,6 +179,8 @@ struct EditState {
     multiline: bool,
     /// 已经把焦点给过第一个输入框了。
     focused: bool,
+    /// 当前焦点输入框里文字起点的逻辑坐标（给 `ImmSetCompositionWindow`）。
+    caret: (f32, f32),
 }
 
 fn state_ptr(hwnd: HWND) -> *mut EditState {
@@ -222,22 +224,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CHAR => {
+            // 换行**不在这里**：egui 0.37 的 `Event::Text` 明确忽略
+            // "\n" / "\r"（builder.rs 注释：Newlines are handled by
+            // `Key::Enter`）。真正的换行来自 `WM_KEYDOWN` 喂的
+            // `Event::Key { Enter }`。这里只管可打印字符，控制字符
+            // （含 `\r`、退格）一律由 `Event::Key` 那条路径处理。
             if let Some(c) = char::from_u32(wparam.0 as u32) {
-                if c == '\r' && win.multiline {
-                    // 多行正文里回车是换行。`WM_KEYDOWN` 那边已经不再
-                    // 把回车当提交了，别让这两个分支互相打架。
-                    win.input.text("\n");
-                } else if !c.is_control() {
+                if !c.is_control() {
                     win.input.text(&c.to_string());
                 }
             }
             LRESULT(0)
         }
-        WM_IME_COMPOSITION | WM_IME_STARTCOMPOSITION | WM_IME_ENDCOMPOSITION => {
+        WM_IME_COMPOSITION
+        | WM_IME_STARTCOMPOSITION
+        | WM_IME_ENDCOMPOSITION
+        | WM_IME_SETCONTEXT => {
             let mut committed = String::new();
+            let before = win.ime.composing().to_owned();
             let handled = win.ime.handle(hwnd, msg, wparam, lparam, &mut committed);
+            // **先上屏、后组合串**。Commit 会清掉上一帧的 preedit 再插入
+            // 结果；同一条 `WM_IME_COMPOSITION` 可能既带 RESULTSTR 又带
+            // COMPSTR（上屏的同时开始下一轮组合），顺序反了会把新组合
+            // 串当成旧 preedit 一起删掉。
             if !committed.is_empty() {
-                win.input.text(&committed);
+                win.input.ime_commit(&committed);
+            }
+            let after = win.ime.composing().to_owned();
+            if after != before {
+                // 让 egui 自己画带下划线的预编辑文本。此前只有系统候选
+                // 框在动，输入框里看不到正在打的拼音。
+                win.input.ime_preedit(&after);
             }
             if handled {
                 LRESULT(0)
@@ -250,12 +267,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // egui 的 `TextEdit` 只从 `Event::Key` 读退格、方向键、Ctrl+A
             // 这些控制键 —— `WM_CHAR` 只给可打印字符，而且我们本来就
             // 把控制字符过滤掉了。少了这一段，输入框能打字却删不掉。
-            win.input.set_modifiers(current_modifiers());
+            let mods = current_modifiers();
+            win.input.set_modifiers(mods);
+            let is_return = wparam.0 == VK_RETURN;
             if down {
                 match wparam.0 {
-                    // 组合中的回车是"选词"，不是提交；多行正文里的回车是
-                    // 换行（由 WM_CHAR 插入），所以只有单行弹窗用回车提交。
-                    VK_RETURN if !win.multiline && !win.ime.is_composing() => {
+                    // 组合中的回车是"选词"，不能提交也不能喂给输入框。
+                    // 多行正文里回车是换行，所以只有单行、或多行时按
+                    // Ctrl+Enter，才把弹窗提交掉。
+                    VK_RETURN if !win.ime.is_composing() && (!win.multiline || mods.ctrl) => {
                         win.accepted = true;
                         win.done = true;
                     }
@@ -268,8 +288,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             // Enter / Esc 已经把弹窗关了，不必再喂给 egui。
             if !win.done {
-                if let Some(key) = crate::input::map_vk(wparam.0 as u32) {
-                    win.input.key(key, down);
+                // 组合中的回车是输入法选词；喂 `Event::Key{Enter}` 会在
+                // 拼音中间插一个换行，把整段组合毁掉。
+                let composing_return = is_return && win.ime.is_composing();
+                if !composing_return {
+                    if let Some(key) = crate::input::map_vk(wparam.0 as u32) {
+                        win.input.key(key, down);
+                    }
                 }
             }
             LRESULT(0)
@@ -380,6 +405,7 @@ pub fn show_edit(
         input: Input::default(),
         ime: Ime::new(),
         focused: false,
+        caret: (PAD + 10.0, PAD + TITLE_H + LABEL_H + FIELD_H / 2.0),
     });
     unsafe {
         SetWindowLongPtrW(*hwnd, GWLP_USERDATA, (&raw mut *state) as isize);
@@ -421,6 +447,12 @@ pub fn show_edit(
             renderer.render(gpu, raw, *hwnd, (px, py), |ui| {
                 paint(ui, st);
             })?;
+            // 把系统候选窗摆到**当前焦点输入框**的文字起点。
+            // `paint` 刚把焦点字段的位置写进 `caret`；少了这一步，
+            // 候选窗会落在窗口左上角，用户不知道自己在哪打字。
+            state
+                .ime
+                .set_caret(*hwnd, state.caret.0, state.caret.1, ppp);
         }
         if !got {
             unsafe {
@@ -439,6 +471,28 @@ pub fn show_edit(
         let _ = ShowWindow(*hwnd, SW_HIDE);
     }
     Ok(EditOutcome { accepted, values })
+}
+
+/// 离屏验收入口（`examples/panels_shot.rs`）。
+///
+/// 与 `settings_win::shell` 同一个理由：截图必须走**真实窗口那一帧**的
+/// 绘制代码。这里不建 Win32 窗口、不进模态循环，`focused` 直接置 true
+/// 以免离屏渲染往 egui 的焦点表里塞东西。
+pub fn paint_preview(ui: &mut egui::Ui, req: &EditRequest, values: &[String], dark: bool) {
+    let mut st = EditState {
+        multiline: req.fields.iter().any(|f| f.multiline),
+        req: req.clone(),
+        values: values.to_vec(),
+        done: false,
+        accepted: false,
+        ppp: 1.0,
+        dark,
+        input: Input::default(),
+        ime: Ime::new(),
+        focused: true,
+        caret: (0.0, 0.0),
+    };
+    paint(ui, &mut st);
 }
 
 /// 画弹窗：标题 + 若干输入框 + 确定/取消。
@@ -508,6 +562,11 @@ fn paint(ui: &mut egui::Ui, st: &mut EditState) {
         if !st.focused {
             ui.memory_mut(|m| m.request_focus(id));
             st.focused = true;
+        }
+        if ui.memory(|m| m.has_focus(id)) {
+            // 候选窗要跟着**当前焦点**的输入框走，不能固定成窗口左上角。
+            // 多行框取第一行的垂直中心，不是整个 170px 框的中心。
+            st.caret = (fr.left() + 10.0, fr.top() + FIELD_H / 2.0);
         }
         let mut value = st.values[i].clone();
         if field.multiline {

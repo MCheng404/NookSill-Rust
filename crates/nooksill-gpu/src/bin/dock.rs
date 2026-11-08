@@ -66,7 +66,9 @@ use nooksill_settings::{Command, ItemEdit, SettingsState};
 use std::pin::Pin;
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, UpdateWindow, PAINTSTRUCT};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, ScreenToClient, UpdateWindow, PAINTSTRUCT,
+};
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -1956,29 +1958,94 @@ impl App {
     ///
     /// 目录落成 `Folder` 条目，其余落成 `File` 条目（`.lnk` 由启动
     /// 时的快捷方式解析器解开）。名字取文件名（去扩展名）。
+    /// 处理从资源管理器拖进来的路径。
+    ///
+    /// 与旧版的区别是**落点有意义**：插到光标所在的槽位，而不是一律
+    /// 追加到末尾；落在分组图标上就直接归组；`.url` 解析成网址条目；
+    /// 已在 Dock 里的路径不重复添加。
     fn step_drop(&mut self) -> bool {
-        let paths = self.dock.take_dropped_paths();
-        if paths.is_empty() {
+        let batch = self.dock.take_dropped_paths();
+        if batch.paths.is_empty() {
             return false;
         }
+        // 拖进来的是**固定条目**，不能插进后面的临时条目区。落点给的下标
+        // 可能数到了临时条目，夹到固定条目末尾。
+        let mut at = batch.index.unwrap_or(self.raw.len()).min(self.raw.len());
+        let target_group = batch
+            .group
+            .filter(|&g| g < self.raw.len() && self.raw[g].kind == ItemKind::Group);
+
         let mut added = 0usize;
-        for path in paths {
-            let p = std::path::Path::new(&path);
-            let kind = if p.is_dir() {
-                ItemKind::Folder
-            } else {
-                ItemKind::File
+        let mut grouped = 0usize;
+        let mut dup = 0usize;
+        let mut failed = 0usize;
+        for path in &batch.paths {
+            let Some(item) = item_from_drop(path) else {
+                failed += 1;
+                continue;
             };
-            let name = p
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| path.clone());
-            self.raw.push(Item::new(kind, &name, &path));
+            // 去重按路径（`.url` 已换成网址字符串），大小写不敏感：
+            // Windows 路径不区分大小写。
+            if self
+                .raw
+                .iter()
+                .any(|it| it.path.eq_ignore_ascii_case(&item.path))
+            {
+                dup += 1;
+                continue;
+            }
+
+            // 每次重新验一遍：本批里若有条目被插到 `g` 前面，`raw` 的下标会往后
+            // 漂，缓存下来的 `g` 就可能指向别的条目。
+            let group_now = target_group
+                .filter(|&g| self.raw.get(g).is_some_and(|it| it.kind == ItemKind::Group));
+            if let Some(g) = group_now {
+                // `add_kid` 失败会把 item 移走，所以先问 `can_add_kid`。
+                let can = self
+                    .raw
+                    .get(g)
+                    .is_some_and(|grp| group::can_add_kid(grp, &item).is_ok());
+                if can {
+                    if let Some(grp) = self.raw.get_mut(g) {
+                        if group::add_kid(grp, item.clone()).is_ok() {
+                            // 组图标是子项拼的，加了一个要重取。
+                            self.dock.clear_icon(g);
+                            grouped += 1;
+                            continue;
+                        }
+                    }
+                }
+                // 组满了 / 类型不允许 → 退回插到栏体，别把文件丢掉。
+            }
+
+            self.raw.insert(at, item);
+            at += 1;
             added += 1;
         }
+
+        if added == 0 && grouped == 0 {
+            if dup > 0 {
+                self.status(format!("{dup} 个条目已在 Dock 中"));
+            } else if failed > 0 {
+                self.status(format!("{failed} 个路径无法识别"));
+            }
+            return dup > 0 || failed > 0;
+        }
         self.apply_item_change();
-        self.status(format!("已添加 {added} 个条目"));
+        let mut parts = Vec::new();
+        if added > 0 {
+            parts.push(format!(
+                "在第 {} 位插入 {added} 个",
+                at.saturating_sub(added) + 1
+            ));
+        }
+        if grouped > 0 {
+            parts.push(format!("归入分组 {grouped} 个"));
+        }
+        if dup > 0 {
+            parts.push(format!("跳过重复 {dup} 个"));
+        }
+        self.status(parts.join("，"));
         true
     }
 
@@ -3091,6 +3158,44 @@ fn dock_ptr(hwnd: HWND) -> *mut Dock {
     unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Dock }
 }
 
+/// 拖进来的一个路径 → 条目。
+///
+/// 三种情况：文件夹、`.url` 网址快捷方式、普通文件（含 `.lnk`）。
+/// `.lnk` 不需要额外解析 —— `ShellExecute` 会自动解析目标，运行状态
+/// 扫描那边也有 `shortcut::resolve`；`.url` 必须转成 `ItemKind::Url`，
+/// 否则会走"按 exe 匹配运行中进程"那套逻辑，语义全错。
+/// `.url` 解析失败就退回当文件，至少还能打开。
+fn item_from_drop(path: &str) -> Option<Item> {
+    if path.is_empty() {
+        return None;
+    }
+    let p = std::path::Path::new(path);
+    let name = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| path.to_owned());
+
+    if p.is_dir() {
+        return Some(Item::new(ItemKind::Folder, &name, path));
+    }
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if ext == "url" {
+        if let Some(url) = nooksill_platform::shortcut::read_url_shortcut(path) {
+            let mut item = Item::new(ItemKind::Url, &name, &url);
+            // 网址条目的 favicon 还没做。把 `.url` 文件本身交给 shell
+            // 取图标，视觉不至于退化成首字占位。
+            item.icon_src = path.to_owned();
+            return Some(item);
+        }
+    }
+    Some(Item::new(ItemKind::File, &name, path))
+}
+
 /// 客户区坐标（`WM_*MOUSE*` 给的就是物理像素）。
 ///
 /// **不除以 ppp**：Dock 的几何（槽位、栏体、`lh`）全是物理像素，
@@ -3207,10 +3312,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             unsafe {
                 DragFinish(hdrop);
             }
+            // 落点。`GetCursorPos + ScreenToClient` 的坐标系是确定的；
+            // `DragQueryPoint` 的文档只说"相对于接收 WM_DROPFILES 的窗口"，
+            // 没写死是屏幕还是客户区，不同来源说法不一 —— 不拿它算插入
+            // 位置。拿不到光标就退回"追加到末尾"，不要用 (0,0) 把新条目
+            // 顶到最前面。
+            let mut pt = POINT::default();
+            let has_pt = unsafe { GetCursorPos(&raw mut pt) }.is_ok()
+                && unsafe { ScreenToClient(hwnd, &raw mut pt) }.as_bool();
+            let (x, y) = if has_pt {
+                (pt.x as f32, pt.y as f32)
+            } else {
+                (f32::MAX, 0.0)
+            };
             let ptr = dock_ptr(hwnd);
             if !ptr.is_null() {
                 unsafe {
-                    (*ptr).push_dropped_paths(files);
+                    (*ptr).push_dropped_paths(files, x, y);
                 }
             }
             LRESULT(0)
@@ -4457,5 +4575,50 @@ impl App {
         self.pending_update = Some(staged);
         // SAFETY: `PostQuitMessage` 只是往本线程队列塞一条 WM_QUIT。
         unsafe { PostQuitMessage(0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 名字取文件名、去掉扩展名；文件夹不能被误判成文件。
+    #[test]
+    fn drop_builds_a_named_item_from_a_path() {
+        let item = item_from_drop(r"C:\Apps\MyTool.exe").expect("应当能建条目");
+        assert_eq!(item.name, "MyTool");
+        assert_eq!(item.kind, ItemKind::File);
+        assert_eq!(item.path, r"C:\Apps\MyTool.exe");
+        assert!(item_from_drop("").is_none());
+    }
+
+    /// 真实目录走 `Folder`，不能因为"路径不存在"就掉回 `File`。
+    #[test]
+    fn drop_recognises_a_real_directory() {
+        let dir = std::env::temp_dir().join("nooksill_drop_dir_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let s = dir.to_string_lossy().into_owned();
+        let item = item_from_drop(&s).expect("应当能建条目");
+        assert_eq!(item.kind, ItemKind::Folder);
+        assert_eq!(item.path, s);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// `.url` 解析成网址条目，且保留 shell 图标来源。
+    #[test]
+    fn drop_converts_a_url_shortcut() {
+        let dir = std::env::temp_dir().join("nooksill_drop_url_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("Example.url");
+        let content = "[InternetShortcut]\nURL=https://example.com/a\nIconIndex=0\n";
+        std::fs::write(&file, content).expect("写临时 .url");
+        let s = file.to_string_lossy().into_owned();
+        let item = item_from_drop(&s).expect("应当能建条目");
+        assert_eq!(item.kind, ItemKind::Url);
+        assert_eq!(item.name, "Example");
+        assert_eq!(item.path, "https://example.com/a");
+        assert_eq!(item.icon_src, s);
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

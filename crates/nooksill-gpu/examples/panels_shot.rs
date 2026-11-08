@@ -17,6 +17,7 @@ mod bmp;
 
 use nooksill_core::item::ItemKind;
 use nooksill_core::note::NoteBook;
+use nooksill_gpu::edit_win::{self, EditField, EditRequest};
 use nooksill_gpu::frame::FrameRenderer;
 use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::group_win::{self, GroupKid};
@@ -88,6 +89,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ppp,
         dark,
         |ui| note_win::paint_preview(ui, dark, &NoteBook::default(), 0, None),
+    )?;
+
+    // ④ 编辑弹窗（速记的标题 + 多行正文）。多行框是后加的，
+    //    离屏图能直接看出高度、文字是否被裁、按钮是否被挤出窗口。
+    let req = EditRequest {
+        title: "速记".to_owned(),
+        fields: vec![
+            EditField {
+                label: "标题".into(),
+                value: "周会要点".into(),
+                hint: "留空则取正文第一行".into(),
+                multiline: false,
+            },
+            EditField {
+                label: "正文".into(),
+                value: "先把门禁跑绿，再谈渲染。\n第二行：中文输入法组合串要能看见。".into(),
+                hint: "想写什么就写什么，回车换行".into(),
+                multiline: true,
+            },
+        ],
+        ok_label: "保存".into(),
+    };
+    let values: Vec<String> = req.fields.iter().map(|f| f.value.clone()).collect();
+    let (ew, eh) = edit_win::logical_size(&req.fields);
+    shot(
+        &gpu,
+        &format!("{dir}/panel_edit.bmp"),
+        ew,
+        eh,
+        ppp,
+        dark,
+        |ui| edit_win::paint_preview(ui, &req, &values, dark),
     )?;
     Ok(())
 }
