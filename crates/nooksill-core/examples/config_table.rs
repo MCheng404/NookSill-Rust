@@ -99,7 +99,7 @@ fn describe(key: Key) -> &'static str {
 }
 
 fn main() {
-    let cfg = Config::defaults(96);
+    let cfg = Config::defaults();
     println!("| 键 | 默认值(96dpi) | 硬夹紧 | 含义 |");
     println!("|---|---|---|---|");
     for key in Key::ALL.iter().copied() {

@@ -28,9 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dark = args.next().as_deref() != Some("light");
     // `grad`：开三色斜向渐变（`BgColor3` + `GradAngle`），用来肉眼验这两个键。
     let demo_grad = args.next().as_deref() == Some("grad");
+    // `insert`：模拟外部文件拖到第 2、3 个图标之间，验收动态让位与插入标记。
+    let show_insert = args.next().as_deref() == Some("insert");
     let ppp = 1.25_f32;
 
-    let mut cfg = Config::defaults(120);
+    let mut cfg = Config::defaults();
     cfg.reflect = true;
     cfg.apply_i32(Key::REFL_SIZE, 55);
     cfg.apply_i32(Key::REFL_GAP, 6);
@@ -67,10 +69,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let work = LRect::new(0, 0, 1280, 900);
     let mut dock = Dock::new(cfg.clone(), items, work);
-    dock.update(120, nooksill_core::layout::REF_FRAME_MS);
+    // 入场动画要收敛：`DockItem::from_item` 给的 `cur` 是 0，只跑一帧的话
+    // 图标还停在"刚从零长出来"的样子，截图看不出真实比例。
+    for _ in 0..120 {
+        dock.update(120, nooksill_core::layout::REF_FRAME_MS);
+    }
 
     let (w, h) = dock.physical_size_i32();
     let (w, h) = (w as u32, h as u32);
+    if show_insert && dock.geom.act_c.len() >= 3 {
+        let u = (dock.geom.act_c[1] + dock.geom.act_c[2]) * 0.5;
+        let v = dock.geom.bar_top + 10.0;
+        dock.set_external_drop(u, v);
+        // 再跑一帧，让 place_slots_insert 的空槽与 slide 补偿生效。
+        dock.update(120, nooksill_core::layout::REF_FRAME_MS);
+        println!(
+            "动态插入位：第 {} 项之前，标记 x={:.1}",
+            dock.external_drop().unwrap_or(0),
+            u
+        );
+    }
     let gpu = Gpu::new("")?;
     let mut frame = FrameRenderer::new(&gpu, w, h, ppp)?;
     // 打开时钟：`paint_clock_card` 是崩溃报告里点名的那条路径。

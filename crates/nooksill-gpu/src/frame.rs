@@ -18,7 +18,8 @@
 //! 用 `Rgba8Unorm` 时 egui 会自己做一次 gamma 编码，回读出来的面板
 //! 从 24 灰变成 81 灰。
 
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use egui_wgpu::wgpu::TextureView;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
@@ -29,10 +30,10 @@ use crate::offscreen::Offscreen;
 use crate::present::LayeredPresenter;
 pub use crate::present::Reflection;
 
-/// 色场平均差超过这个值才算「桌面结构大变」，值得重跑真高斯。
-const REFRESH_DELTA: f32 = 18.0;
-/// 两次结构刷新之间的最小间隔，避免播视频时每帧都回到重卷积。
-const REFRESH_GAP: Duration = Duration::from_millis(300);
+/// 组合模式每帧真高斯最多覆盖 `1/STRIPES` 幅宽。变化列在预算内就
+/// 全部真算（结构完全实时）；整屏都在变时按条带轮转削峰，其余列
+/// 交给色场重投影，避免峰值退回整幅卷积。
+const TRUE_BLUR_STRIPES: u32 = 4;
 
 /// 一帧渲染完成后，调用方真正需要知道的两件事。
 ///
@@ -74,14 +75,12 @@ pub struct FrameRenderer {
     shaders: crate::shaders::ShaderRuntime,
     /// Lazily created: only windows that enable frost pay for the pipeline.
     blur: Option<crate::shaders::frost::GpuBlur>,
-    /// 实验性时域色彩重投影；只在开关打开且毛玻璃启用时创建。
+    /// 实验性「实时模糊 + 视觉欺骗」组合；只在开关打开且毛玻璃启用时创建。
     illusion: Option<crate::shaders::illusion::Illusion>,
-    /// 生成当前高斯基底时的低频色场（判断要不要刷新结构）。
-    base_field: Option<crate::frost::ColorField>,
-    /// 上一次全量高斯的时间，用于结构刷新节流。
-    last_full_blur: Option<Instant>,
     /// 当前基底纹理的尺寸；尺寸变了必须重建基底。
     frost_size: Option<(u32, u32)>,
+    /// 大面积变化时轮到哪条条带跑真高斯（0..[`TRUE_BLUR_STRIPES`]）。
+    stripe: u32,
     /// 最近一帧捕获。开关切换而桌面静止（没有新帧）时用它立即重建。
     last_frame: Option<crate::frost::FrostFrame>,
     /// 上一帧用的模糊路径，用于检测开关变化。
@@ -163,9 +162,8 @@ impl FrameRenderer {
             shaders: crate::shaders::ShaderRuntime::new(&gpu.device, &gpu.queue),
             blur: None,
             illusion: None,
-            base_field: None,
-            last_full_blur: None,
             frost_size: None,
+            stripe: 0,
             last_frame: None,
             last_mode: false,
             smoke: None,
@@ -221,30 +219,25 @@ impl FrameRenderer {
         true
     }
 
-    /// 实验性路径的首帧：跑**一次完整高斯**拿到结构基底，之后由
-    /// [`Self::poll_frost`] 只用低频色场重投影。
+    /// 组合路径的首帧：整幅跑一次真高斯，后续帧由
+    /// [`Self::poll_illusion`] 做「局部真高斯 + 色场补偿」。
     pub fn set_frost_illusion(
         &mut self,
         bits: &[u8],
         w: u32,
         h: u32,
         spec: crate::frost::Spec,
-        ppp: f32,
+        _ppp: f32,
     ) -> bool {
-        let Some(view) = self.blur_frost(bits, w, h, spec, ppp, 0..w) else {
-            return false;
+        let frame = crate::frost::FrostFrame {
+            bits: Arc::new(bits.to_vec()),
+            w,
+            h,
+            x0: 0,
+            x1: w,
+            field: Arc::new(crate::frost::color_field(bits, w as usize, h as usize)),
         };
-        let field = crate::frost::color_field(bits, w as usize, h as usize);
-        let ill = self.ensure_illusion();
-        ill.set_base(&field);
-        let Some(out) = ill.render(&view, w, h) else {
-            return false;
-        };
-        self.register_frost_view(&out);
-        self.base_field = Some(field);
-        self.last_full_blur = Some(Instant::now());
-        self.frost_size = Some((w, h));
-        true
+        self.rebuild_illusion_base(&frame, spec)
     }
 
     /// 跑 GPU 卷积，返回输出纹理视图（不注册给 egui）。
@@ -334,9 +327,8 @@ impl FrameRenderer {
         self.live = None;
         self.frost_spec = None;
         self.illusion = None;
-        self.base_field = None;
-        self.last_full_blur = None;
         self.frost_size = None;
+        self.stripe = 0;
         self.last_frame = None;
     }
 
@@ -366,8 +358,7 @@ impl FrameRenderer {
         // 必须整幅重算一次，不能沿用脏列优化。
         let force_full = self.illusion.is_some() || self.frost_size != Some((frame.w, frame.h));
         self.illusion = None;
-        self.base_field = None;
-        self.last_full_blur = None;
+        self.stripe = 0;
         let pad = spec.radius.clamp(1, 12) + 2;
         let cols = if force_full {
             0..frame.w
@@ -389,36 +380,59 @@ impl FrameRenderer {
         true
     }
 
-    /// 实验路径：只在「桌面大变」且节流到期时重跑真高斯，其余帧
-    /// 只把新色场交给重投影 shader。
+    /// 「实时模糊 + 视觉欺骗」组合：**每帧都跑真高斯**，只是范围有预算。
+    ///
+    /// - 首帧 / 尺寸变化 / 全量帧：整幅重建基底；
+    /// - 局部变化且在预算内：变化列全部真算，结构完全实时；
+    /// - 整屏都在变：只对本轮条带跑真高斯（1/4 幅宽），其余列由
+    ///   `Illusion` 用低频色场补偿颜色，避免峰值退回整幅卷积。
+    ///
+    /// 无论哪种，基底都在持续更新 —— 不再有「结构冻结」的观感。
     fn poll_illusion(
         &mut self,
         frame: &crate::frost::FrostFrame,
         spec: crate::frost::Spec,
     ) -> bool {
         let size_changed = self.frost_size != Some((frame.w, frame.h));
-        let big = self
-            .base_field
-            .as_ref()
-            .is_some_and(|b| crate::frost::field_delta(b, &frame.field) > REFRESH_DELTA);
-        let cooled = self
-            .last_full_blur
-            .is_some_and(|t| t.elapsed() >= REFRESH_GAP);
-        if self.illusion.is_none() || self.base_field.is_none() || size_changed || (big && cooled) {
+        let full_frame = frame.x0 == 0 && frame.x1 == frame.w;
+        if self.illusion.is_none() || size_changed || full_frame {
             return self.rebuild_illusion_base(frame, spec);
         }
-        let Some(base) = self.blur.as_ref().and_then(|b| b.view()).cloned() else {
+
+        let budget = (frame.w / TRUE_BLUR_STRIPES).max(1);
+        let pad = spec.radius.clamp(1, 12) + 2;
+        let dirty = frame.x0.saturating_sub(pad)..frame.x1.saturating_add(pad).min(frame.w);
+        let start = self.stripe.min(TRUE_BLUR_STRIPES - 1) * budget;
+        self.stripe = (self.stripe + 1) % TRUE_BLUR_STRIPES;
+        let cols = if dirty.start < dirty.end && dirty.end - dirty.start <= budget {
+            dirty
+        } else {
+            start..(start + budget).min(frame.w)
+        };
+
+        // 真高斯：被覆盖的列输出就是最新结构。
+        let Some(base) = self.blur_frost(
+            &frame.bits,
+            frame.w,
+            frame.h,
+            spec,
+            self.pixels_per_point,
+            cols.clone(),
+        ) else {
             return false;
         };
+        // 视觉欺骗：其余列叠加低频色场差值（90 ms 插值过渡）。
         let ill = self.ensure_illusion();
-        ill.push(&frame.field);
+        ill.push(frame.field.as_ref(), cols, frame.w);
         let Some(out) = ill.render(&base, frame.w, frame.h) else {
             return false;
         };
         self.register_frost_view(&out);
+        self.frost_size = Some((frame.w, frame.h));
         true
     }
 
+    /// 整幅真高斯重建（首帧、尺寸变化、模式切换、全量捕获帧）。
     fn rebuild_illusion_base(
         &mut self,
         frame: &crate::frost::FrostFrame,
@@ -436,14 +450,14 @@ impl FrameRenderer {
         };
         let field = (*frame.field).clone();
         let ill = self.ensure_illusion();
-        ill.set_base(&field);
+        ill.set_base(&field, frame.w);
         let Some(out) = ill.render(&view, frame.w, frame.h) else {
             return false;
         };
         self.register_frost_view(&out);
-        self.base_field = Some(field);
-        self.last_full_blur = Some(Instant::now());
         self.frost_size = Some((frame.w, frame.h));
+        self.stripe = 0;
+        self.last_frame = Some(frame.clone());
         true
     }
 
@@ -474,8 +488,7 @@ impl FrameRenderer {
             self.register_frost_view(&view);
         }
         self.illusion = None;
-        self.base_field = None;
-        self.last_full_blur = None;
+        self.stripe = 0;
         self.frost_size = Some((frame.w, frame.h));
     }
 

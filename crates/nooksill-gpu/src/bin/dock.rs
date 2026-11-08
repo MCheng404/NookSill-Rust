@@ -71,6 +71,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -140,7 +141,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // `None` = 已有实例在跑。这是正常退出，不是错误。
         return Ok(());
     };
-    let outcome = app.run();
+    let outcome = {
+        // OLE 拖放目标：`DragOver` 驱动动态插入让位，`Drop` 解析 CF_HDROP。
+        // `RegisterDragDrop` 成功时 OLE 优先，`WM_DROPFILES` 不再触发；
+        // 失败则 boot() 里注册的 `DragAcceptFiles` 继续兜底（无动态让位）。
+        // SAFETY: 本线程是 UI 线程（STA），OLE 回调与消息循环同线程。
+        unsafe {
+            let _ = OleInitialize(None);
+        }
+        let target: IDropTarget = nooksill_gpu::drop_target::DockDropTarget::new(app.hwnd).into();
+        let registered = unsafe { RegisterDragDrop(app.hwnd, &target) }.is_ok();
+        if !registered {
+            eprintln!("OLE 拖放注册失败，回退到 WM_DROPFILES（无动态让位）");
+        }
+        let r = app.run();
+        if registered {
+            // 窗口还活着时撤销，避免后续 COM 回调打到已销毁的窗口。
+            unsafe {
+                let _ = RevokeDragDrop(app.hwnd);
+            }
+        }
+        // `target` 在块末析构，晚于 RevokeDragDrop。
+        r
+    };
     // 先把 `App` 落地（析构 = AppBar 注销 + 配置写盘 + 单实例释放），
     // 再交替换脚本 —— 脚本要等的正是"本进程退出"，顺序反了会自己卡住自己。
     let pending = app.pending_update.take();
@@ -343,13 +366,21 @@ struct App {
     covered: bool,
     /// 「未固定的运行中应用」的临时条目。
     ///
-    /// 只活在内存里：不写 ini、不参与拖拽重排。它们永远是 `dock.items`
-    /// 的**最后一段**，这样 `dock.items[i]` 与 `raw[i]` 在 `i < raw.len()`
-    /// 时仍然一一对应，点击与菜单的既有下标逻辑不用改。
+    /// 只活在内存里：不写 ini，但**可以互相换位** —— 用户的栏体上可能
+    /// 全是运行中应用（`[Items] Count=0`），不允许换位等于没有拖拽排序。
+    /// 换过的顺序写回 `temp_keys`，扫描线程按它保序，所以能活到应用退出。
+    /// 它们永远是 `dock.items` 的**最后一段**，这样 `dock.items[i]` 与
+    /// `raw[i]` 在 `i < raw.len()` 时仍然一一对应，点击与菜单的既有下标
+    /// 逻辑不用改。
     temps: Vec<Item>,
     /// 上一轮临时条目的 exe（小写）。用来判断"要不要重建列表"，
     /// 顺便保住顺序：已有的不动，新出现的追加在后面。
     temp_keys: Vec<String>,
+    /// 该重建栏体列表，但当时正在拖动 —— 记下来，松手后再补。
+    ///
+    /// `replace_items` 会把 `drag`、`press`、`hover` 一起清掉。拖动过程中
+    /// 直接重建，用户看到的就是"图标刚换到新位置，拖动立刻断了"。
+    items_stale: bool,
     /// 已发给扫描线程的那份参数；`None` = 还没发过。
     ///
     /// 存整份 `ScanInput` 而不是单存遮挡矩形：其中任何一项变化都要重发，
@@ -432,7 +463,16 @@ impl App {
                 Err(e) => eprintln!("配置升级后保存失败（本次仍按新格式使用）：{e}"),
             }
         }
-        let cfg = Config::from_ini(&ini, dpi);
+        // 长度键从物理像素换成 96 DPI 逻辑像素（v3 → v4）。不换算的话，
+        // 150% 缩放下图标会在升级瞬间放大 1.5 倍 —— 换台机器/换个缩放
+        // 就变形，是最容易被当成 bug 报上来的那种。
+        if Config::migrate_units(&mut ini, dpi) {
+            match ini.save(&paths.ini) {
+                Ok(()) => eprintln!("配置长度已换算成 96 DPI 逻辑像素（v4）。"),
+                Err(e) => eprintln!("配置换算后保存失败（本次仍按新单位使用）：{e}"),
+            }
+        }
+        let cfg = Config::from_ini(&ini);
         // 可变：拖拽重排要跟着 Dock 一起调整，顺序才与屏幕一致。
         let mut raw: Vec<Item> = store::load_items(&ini);
         // `Notes` 开关：打开时保证栏体上有一个速记入口。
@@ -663,6 +703,7 @@ impl App {
             covered: false,
             temps: Vec::new(),
             temp_keys: Vec::new(),
+            items_stale: false,
             scan_sent: None,
             last_fs_check: Instant::now(),
             fs_hidden: false,
@@ -730,6 +771,9 @@ impl App {
             need_frame |= self.step_layout();
             // ③ 窗口尺寸/位置跟着条目数走。
             need_frame |= self.step_relayout()?;
+            // ③.5 拖动期间被挂起的栏体重建：松手之后才补。放在重排之前，
+            //     这样重建出来的列表这一帧就能参与下面的命中与绘制。
+            self.flush_items_stale();
             // ④ 拖拽重排同步到配置副本（写盘走防抖，不在这里做）。
             self.step_reorder();
             // ④.5 分割线拖动改了 IconSize / ZoomSize：标脏，交给同一个防抖窗口。
@@ -852,6 +896,10 @@ impl App {
                 "[relayout] 窗口 -> ({},{}) {nw}x{nh}",
                 self.pos.0, self.pos.1
             );
+            // 槽位也跟着条目数变了。自动化脚本要点/拖图标就得知道坐标 ——
+            // 让程序自己报，比脚本按 ini 推算靠谱（推过一次，忘了加窗口
+            // 偏移，点在了空气里）。
+            dump_geometry(&self.dock, self.dpi);
         }
         Ok(true)
     }
@@ -865,20 +913,17 @@ impl App {
     /// 也不需要额外出帧：`move_item` 会把 `moved` 置真，下一轮 `update`
     /// 据此补位移动画，而 `update` 自身就会要求出帧。
     fn step_reorder(&mut self) {
-        let mut moved = false;
-        let mut dropped = false;
-        while let Some((from, to)) = self.dock.take_pending_move() {
-            if from < self.raw.len() && to < self.raw.len() {
-                let item = self.raw.remove(from);
-                self.raw.insert(to, item);
-                moved = true;
-            } else {
-                // 拖进了临时条目那一段（或从那儿拖出来）：配置里没有这一项，
-                // 只能丢弃。丢弃之后栏体上已经是"拖过"的顺序，必须按配置
-                // 重建一次，否则下一次点击会点到别的条目上。
-                dropped = true;
+        let mut cfg_moved = false;
+        for (from, to) in self.dock.take_pending_moves() {
+            // 固定条目换位、以及"运行中应用被拖进固定区"都会改配置；
+            // 运行中应用之间换位只活在内存里（`temp_keys`），不必写盘。
+            match self.apply_bar_move(from, to) {
+                BarMove::Pinned | BarMove::PinnedNow => cfg_moved = true,
+                BarMove::Running | BarMove::None => {}
             }
         }
+        // 标记每轮都要取走，否则会一直积着；但写盘只看配置是不是真变了。
+        let _bar_changed = self.dock.take_order_changed();
         // 拖到组上松手 = 归组，拖出栏体 = 移除。这一步要**在**重排之后：
         // 拖动的过程里条目位置可能已经变过，`from` 是**当前**的下标。
         if let Some(i) = self.dock.take_pending_remove() {
@@ -891,6 +936,12 @@ impl App {
                 self.status(format!("已从 Dock 移除「{name}」"));
                 return;
             }
+            // 拖出去的是运行中应用的临时条目：它不在配置里，删不掉，
+            // 松手后应当原样回到栏体上。重建一次（`replace_items` 会重建
+            // 列表）比让栏体少一格强 —— 少一格之后每次点击都会点错项。
+            if i >= self.raw.len() {
+                self.sync_items();
+            }
         }
         if let Some((from, to)) = self.dock.take_pending_merge() {
             match group::merge_item(&mut self.raw, from, to) {
@@ -900,18 +951,72 @@ impl App {
                     return;
                 }
                 Err(e) => {
-                    self.status(format!("归组失败：{e}"));
-                    // 归组失败：栏体上的顺序已经被拖动改过了，要重建。
-                    dropped = true;
+                    // 把运行中应用拖到组上也会落到这里：它没有配置项，
+                    // 归不进去。栏体顺序已被拖动改过，重建回配置的顺序。
+                    if from >= self.raw.len() {
+                        self.status("运行中的应用不能加入分组");
+                    } else {
+                        self.status(format!("归组失败：{e}"));
+                    }
+                    self.sync_items();
                 }
             }
         }
-        if dropped {
-            self.sync_items();
-        }
-        if moved || self.dock.take_order_changed() {
+        if cfg_moved {
             self.touch_items();
         }
+    }
+
+    /// 把一次栏体换位落到配置副本上。
+    ///
+    /// 返回落到哪里（同段换位 / 就地固定 / 没动）。[`reorder_bar`] 的薄包装。
+    fn apply_bar_move(&mut self, from: usize, to: usize) -> BarMove {
+        let moved = reorder_bar(
+            &mut self.raw,
+            &mut self.temps,
+            &mut self.temp_keys,
+            from,
+            to,
+        );
+        if moved == BarMove::PinnedNow {
+            // 固定区变长了，后续拖拽的边界要立刻跟上 —— 不能等下一轮
+            // `sync_items`（拖动中它是挂起的）。
+            self.dock.set_pinned(self.raw.len());
+            self.status("已固定到 Dock");
+        }
+        if trace::geom() {
+            eprintln!(
+                "[reorder] {from}->{to} {moved:?} raw={} temps={}",
+                self.raw.len(),
+                self.temps.len()
+            );
+        }
+        moved
+    }
+
+    /// 把栏体上第 `i` 项（运行中应用）固定进配置。
+    ///
+    /// 拖进固定区也能固定（见 [`reorder_bar`]），但那是手势；菜单是
+    /// 明确的入口 —— 用户不该为了"留下这个图标"去猜拖到哪算数。
+    fn pin_item(&mut self, i: usize) {
+        let n = self.raw.len();
+        if i < n || i >= n + self.temps.len() {
+            return;
+        }
+        let k = i - n;
+        let mut item = self.temps.remove(k);
+        if k < self.temp_keys.len() {
+            let _ = self.temp_keys.remove(k);
+        }
+        item.temp = false;
+        item.running = true;
+        let name = item.name.clone();
+        // 追加到固定区末尾：顺序必须满足"固定在前、运行中在后"这个不变量，
+        // 否则栏体顺序写不回配置。代价是图标会跳到固定区尾部（从菜单固定
+        // 时才有这个跳变；拖拽固定落在哪就是哪）。
+        self.raw.push(item);
+        self.apply_item_change();
+        self.status(format!("已固定「{name}」"));
     }
 
     /// 打开起动台。菜单项与 Dock 上的 `nooksill:launchpad` 条目共用一条路径。
@@ -984,6 +1089,9 @@ impl App {
                 // 理论上走不到：`step_click` 上面已经按 `ItemKind::Note`
                 // 特判返回了。留一支兜底，防止将来改了内置路径却忘了这里。
                 nooksill_gpu::glyph::Builtin::Notes => self.open_notes(Some(i)),
+                // `from_path` 只认上面 3 个内置路径；`Builtin` 其余变体
+                // 是「按 ItemKind 画兜底图标」用的，不会在这里出现。
+                _ => {}
             }
             self.dock.start_bounce(i);
             return;
@@ -1275,6 +1383,11 @@ impl App {
                 self.raw
                     .insert(i + 1, Item::new(ItemKind::Separator, "", ""));
                 self.apply_item_change();
+            }
+            MenuCmd::PinItem => {
+                if let Some(i) = hit {
+                    self.pin_item(i);
+                }
             }
             MenuCmd::RemoveItem | MenuCmd::RemoveSep => {
                 let Some(i) = hit else { return };
@@ -2091,15 +2204,46 @@ impl App {
     ///
     /// `replace_items` 会清掉 hover / 拖拽状态并置 `anim`，所以只在列表
     /// 真的变了时调用 —— 每 1.2 秒重建一次的话，悬停会一直被打断。
+    ///
+    /// **按住期间一律挂起**：拖动换位的那一刻恰好可能有一次重建（扫描到
+    /// 运行中应用变化、图标到货、设置里改了条目），重建会把 `drag` 清掉 ——
+    /// 用户看到的就是"图标刚换位，拖动立刻断了"。挂起到松手后再补。
     fn sync_items(&mut self) {
+        if self.dock.press_active() {
+            self.items_stale = true;
+            return;
+        }
+        self.sync_items_now();
+    }
+
+    /// 立即重建栏体列表（不看拖动状态，只给 [`Self::flush_items_stale`] 用）。
+    fn sync_items_now(&mut self) {
         let all: Vec<DockItem> = self
             .raw
             .iter()
             .chain(self.temps.iter())
             .map(DockItem::from_item)
             .collect();
+        if trace::geom() {
+            eprintln!(
+                "[items] 重建 raw={} temps={} stale={}",
+                self.raw.len(),
+                self.temps.len(),
+                self.items_stale
+            );
+        }
         self.dock.replace_items(all);
+        // 换位只能在同一段内进行，`Dock` 需要知道分界在哪。
+        self.dock.set_pinned(self.raw.len());
+        self.items_stale = false;
         self.request_temp_icons();
+    }
+
+    /// 拖动结束后补上被挂起的重建。
+    fn flush_items_stale(&mut self) {
+        if self.items_stale && !self.dock.press_active() {
+            self.sync_items_now();
+        }
     }
 
     /// 为临时条目取图标。它们的下标从 `raw.len()` 开始。
@@ -3045,8 +3189,13 @@ impl App {
         let smoke_on = Tuning::from_config(&self.dock.cfg, self.accent).enabled
             && !self.fs_hidden
             && !self.dock.fully_hidden();
-        // 有连续动画才需要 1 ms 定时器精度。
-        self.set_timer_resolution(self.dock.anim || smoke_on);
+        // 有连续动画才需要 1 ms 定时器精度。设置窗口自己的重绘也要算：
+        // 它不在 dock.anim 里，之前一直被 15.6 ms 粒度压在 ~64 Hz。
+        let settings_active = self
+            .settings_slot
+            .as_ref()
+            .is_some_and(|sw| sw.has_pending_repaint());
+        self.set_timer_resolution(self.dock.anim || smoke_on || settings_active);
         // Active = continuous repaint. Idle keeps the "zero frames" promise.
         let mut timeout = if self.dock.anim || smoke_on {
             self.frame_interval_ms()
@@ -3251,6 +3400,77 @@ fn arm_mouse_leave(hwnd: HWND) {
     unsafe {
         let _ = TrackMouseEvent(&raw mut tme);
     }
+}
+
+/// 一次栏体换位落到了哪里。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BarMove {
+    /// 没动：同位置、越界，或者固定条目被拖向"运行中"那一段（不允许）。
+    None,
+    /// 固定条目之间换位。要写回配置。
+    Pinned,
+    /// 运行中应用之间换位。顺序只活在内存里（`temp_keys`），不写盘。
+    Running,
+    /// 运行中应用被拖进了固定区：就地固定。要写回配置。
+    PinnedNow,
+}
+
+/// 把一次栏体换位落到"固定条目 + 运行中应用"两份列表上。
+///
+/// 栏体的下标空间是 `raw` 在前、`temps` 在后。规则只有三条：
+///
+/// 1. 两边都在 `raw` 里：换位，写盘。
+/// 2. 两边都在 `temps` 里：换位，顺序写回 `temp_keys`（扫描线程按它保住
+///    "已有的不动、新出现的追加"；只改 `temps` 的话下一次扫描——约 1.2 秒
+///    一次——就会把用户刚拖好的顺序冲掉）。
+/// 3. **从 `temps` 拖进 `raw` 的区间：就地固定**。这是"把正在运行的应用
+///    固定到 Dock"的手势，不需要用户先想清楚"固定区在哪"——拖到哪就固定
+///    在哪，顺序天然可写回配置。
+///
+/// 反方向（固定条目拖进运行中区）由 [`Dock::clamp_segment`] 挡住，这里
+/// 返回 [`BarMove::None`] 兜底。
+fn reorder_bar(
+    raw: &mut Vec<Item>,
+    temps: &mut Vec<Item>,
+    temp_keys: &mut Vec<String>,
+    from: usize,
+    to: usize,
+) -> BarMove {
+    if from == to {
+        return BarMove::None;
+    }
+    let n = raw.len();
+    if from < n && to < n {
+        let item = raw.remove(from);
+        raw.insert(to, item);
+        return BarMove::Pinned;
+    }
+    if from >= n && to >= n {
+        let (k, t) = (from - n, to - n);
+        // `temps` 与 `temp_keys` 是一一对应的两份列表，两边都要在界内。
+        if k < temps.len() && t < temps.len() && k < temp_keys.len() && t < temp_keys.len() {
+            let temp = temps.remove(k);
+            temps.insert(t, temp);
+            let key = temp_keys.remove(k);
+            temp_keys.insert(t, key);
+            return BarMove::Running;
+        }
+        return BarMove::None;
+    }
+    if from >= n && to < n {
+        // 运行中应用 → 固定区：搬进配置，位置就是松手的地方。
+        let k = from - n;
+        if k < temps.len() {
+            let mut item = temps.remove(k);
+            if k < temp_keys.len() {
+                let _ = temp_keys.remove(k);
+            }
+            item.temp = false;
+            raw.insert(to, item);
+            return BarMove::PinnedNow;
+        }
+    }
+    BarMove::None
 }
 
 /// 光标下面是"能点的东西"吗（条目图标 / 小组件卡片）。
@@ -4040,6 +4260,26 @@ fn tick_settings(
     let Some(sw) = slot.as_mut() else {
         return Ok((false, None));
     };
+    // 显卡提示：设备只在启动时创建（ADR-012），运行中改 ini 不会换卡。
+    // 这两个字段以前没人填，界面一直显示「尚未初始化」，选完显卡也
+    // 没有任何反馈 —— 现在每轮同步一次，变化了就催一帧把提示画出来。
+    let active = gpu.info.name.clone();
+    let note = if !gpu.selection.matches_config(&dock.cfg.adapter, &active) {
+        if dock.cfg.adapter.is_empty() {
+            "已改为自动选择，重启后生效".to_owned()
+        } else {
+            format!("已选择「{}」，重启后生效", dock.cfg.adapter)
+        }
+    } else if gpu.selection.fell_back() {
+        gpu.selection.describe()
+    } else {
+        String::new()
+    };
+    if sw.state.active_adapter != active || sw.state.adapter_note != note {
+        sw.state.active_adapter = active;
+        sw.state.adapter_note = note;
+        sw.wake();
+    }
     let mut changed = false;
     let mut cmd = None;
     if sw.visible() && sw.due() {
@@ -4186,7 +4426,7 @@ impl App {
                 false
             }
             Command::ResetDefaults => {
-                self.dock.cfg = Config::defaults(self.dpi);
+                self.dock.cfg = Config::defaults();
                 self.status("已恢复默认设置");
                 true
             }
@@ -4340,7 +4580,7 @@ impl App {
                 {
                     match nooksill_core::ini::Ini::load(&path) {
                         Ok(ini) => {
-                            self.dock.cfg = Config::from_ini(&ini, self.dpi);
+                            self.dock.cfg = Config::from_ini(&ini);
                             self.raw = store::load_items(&ini);
                             self.dock.clear_icons();
                             self.apply_item_change();
@@ -4661,5 +4901,90 @@ mod tests {
         assert_eq!(item.icon_src, s);
         let _ = std::fs::remove_file(&file);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    fn items(names: &[&str]) -> Vec<Item> {
+        names
+            .iter()
+            .map(|n| Item::new(ItemKind::File, *n, format!("C:/{n}.exe")))
+            .collect()
+    }
+
+    /// 固定条目之间的换位落在 `raw` 上。
+    #[test]
+    fn reorder_inside_the_pinned_segment_edits_raw() {
+        let (mut raw, mut temps) = (items(&["a", "b", "c"]), items(&["r1", "r2"]));
+        let mut keys: Vec<String> = vec!["r1".into(), "r2".into()];
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 0, 2),
+            BarMove::Pinned
+        );
+        let names: Vec<&str> = raw.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["b", "c", "a"]);
+        assert_eq!(temps.len(), 2, "临时条目不该被动到");
+        assert_eq!(keys, ["r1", "r2"]);
+    }
+
+    /// 运行中应用之间的换位要同步写回 `temp_keys`。
+    ///
+    /// 只改 `temps` 的话，下一次扫描（约 1.2 秒一次）按 `temp_keys`
+    /// 重建临时条目，用户刚拖好的顺序会被冲掉 —— 表现为"松手就弹回去"。
+    #[test]
+    fn reorder_between_running_items_keeps_temp_keys_in_step() {
+        let (mut raw, mut temps) = (items(&["a"]), items(&["r1", "r2", "r3"]));
+        let mut keys: Vec<String> = vec!["r1".into(), "r2".into(), "r3".into()];
+        // 栏体下标：0 = a，1..=3 = r1..r3。
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 1, 3),
+            BarMove::Running
+        );
+        let names: Vec<&str> = temps.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["r2", "r3", "r1"]);
+        assert_eq!(keys, ["r2", "r3", "r1"], "顺序必须与 temps 一致");
+        assert_eq!(raw.len(), 1);
+    }
+
+    /// 运行中应用拖进固定区 = 就地固定（这就是"固定到 Dock"的手势）。
+    ///
+    /// 固定之后 `raw` 变长，栏体顺序仍然满足"固定在前、运行中在后"，
+    /// 所以下标映射（点击 / 菜单 / 图标）全部继续成立。
+    #[test]
+    fn dropping_a_running_item_into_the_pinned_zone_pins_it() {
+        let (mut raw, mut temps) = (items(&["a", "b"]), items(&["r1", "r2"]));
+        let mut keys: Vec<String> = vec!["r1".into(), "r2".into()];
+        // 栏体：0 = a，1 = b，2 = r1，3 = r2。把 r1 拖到 a 与 b 之间。
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 2, 1),
+            BarMove::PinnedNow
+        );
+        let names: Vec<&str> = raw.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["a", "r1", "b"], "落点就是固定位置");
+        assert!(!raw[1].temp, "固定之后它就是配置的一部分");
+        let left: Vec<&str> = temps.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(left, ["r2"]);
+        assert_eq!(keys, ["r2"], "temp_keys 要跟着少一项");
+    }
+
+    /// 反向不允许：固定条目拖不进"运行中"那一段。
+    #[test]
+    fn a_pinned_item_cannot_slide_into_the_running_segment() {
+        let (mut raw, mut temps) = (items(&["a", "b"]), items(&["r1"]));
+        let mut keys: Vec<String> = vec!["r1".into()];
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 0, 2),
+            BarMove::None
+        );
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 0, 0),
+            BarMove::None
+        );
+        // 越界也不该 panic。
+        assert_eq!(
+            reorder_bar(&mut raw, &mut temps, &mut keys, 1, 9),
+            BarMove::None
+        );
+        let names: Vec<&str> = raw.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"], "被拒绝的换位不能改任何顺序");
+        assert_eq!(temps.len(), 1);
     }
 }

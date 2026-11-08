@@ -29,7 +29,7 @@ fn main() {
     let ini = Ini::load(std::path::Path::new(&path)).expect("读取失败");
 
     // 固定按 144 dpi 解析：这里只看"配置项读没读到"，与 DPI 缩放无关。
-    let cfg = Config::from_ini(&ini, 144);
+    let cfg = Config::from_ini(&ini);
 
     println!(
         "Edge={:?} Mode={:?} Reserve={}",

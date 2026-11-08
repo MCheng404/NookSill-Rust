@@ -47,32 +47,41 @@ pub fn app_icon() -> Option<windows::Win32::UI::WindowsAndMessaging::HICON> {
     (!icon.0.is_null()).then_some(icon)
 }
 
-pub mod calendar_win;
-pub mod cc_win;
 pub mod cursor;
 pub mod dock;
-pub mod edit_win;
+pub mod drop_target;
 pub mod frame;
 pub mod frost;
 pub mod glyph;
 pub mod gpu;
-pub mod group_win;
 pub mod ime;
 pub mod input;
 pub mod launchpad_win;
 pub mod mem;
 pub mod menu;
-pub mod note_win;
 pub mod offscreen;
-pub mod panel_style;
 pub mod perf;
 pub mod popup;
 pub mod present;
-pub mod resmon_win;
 pub mod settings_win;
 pub mod smoke;
-pub mod tool_win;
+pub mod widgets;
 pub mod worker;
+
+/// 小组件模块的旧路径兼容层。
+///
+/// 文件已物理移到 [`widgets`]，但 `bin/dock.rs` 与 `examples/*.rs` 仍按
+/// `nooksill_gpu::calendar_win::CalendarWindow` 这类名字引用。用模块重
+/// 导出保住旧路径，拆分目录就不需要同时改几十处 `use`；新代码直接用
+/// `widgets::calendar` 等新路径。
+pub use widgets::calendar as calendar_win;
+pub use widgets::control as cc_win;
+pub use widgets::editor as edit_win;
+pub use widgets::group as group_win;
+pub use widgets::notes as note_win;
+pub use widgets::resource as resmon_win;
+pub use widgets::style as panel_style;
+pub use widgets::timer as tool_win;
 
 pub use dock::{Dock, DockItem};
 pub use frame::{FrameOutcome, FrameRenderer};

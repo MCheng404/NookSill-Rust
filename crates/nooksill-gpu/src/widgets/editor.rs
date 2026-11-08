@@ -18,7 +18,7 @@
 //!
 //! 退格 / Esc / 回车走 `WM_KEYDOWN` → `Input::key`。
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect as EguiRect, Sense, Stroke};
 use nooksill_settings::text_field::{text_field, FieldOpts, FIELD_H};
 use windows::core::w;

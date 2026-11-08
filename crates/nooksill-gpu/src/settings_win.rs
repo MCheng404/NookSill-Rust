@@ -321,6 +321,19 @@ impl SettingsWindow {
         self.visible && self.next_repaint.is_some_and(|t| t <= Instant::now())
     }
 
+    /// 有没有挂着的 egui 重绘期限（动画、拖动滑块、悬停过渡……）。
+    ///
+    /// 有就说明窗口正在**连续出帧**：`MsgWaitForMultipleObjectsEx` 的
+    /// 1 ms 超时会被系统默认的 ~15.6 ms 定时器粒度吃掉，设置窗口会被
+    /// 钉在 ~64 Hz。主循环据此临时把精度提到 1 ms，空闲时立刻还回去。
+    ///
+    /// 不能简单地用「窗口可见」判断：可见但没动画时必须继续睡整秒，
+    /// 常驻 1 ms 精度会让整机待机功耗上升。
+    #[must_use]
+    pub fn has_pending_repaint(&self) -> bool {
+        self.visible && self.next_repaint.is_some()
+    }
+
     /// Time until the next repaint. `None` = hidden, `MAX` = idle.
     #[must_use]
     pub fn repaint_in(&self) -> Option<Duration> {
@@ -810,7 +823,7 @@ mod tests {
     /// 回落系统（clamp 兜着 ini，但规则上也要兜住）。
     #[test]
     fn 自定义缩放的取值规则() {
-        let mut cfg = Config::defaults(96);
+        let mut cfg = Config::defaults();
         let sys = nooksill_platform::display::system_dpi() as f32 / 96.0;
 
         // 默认 0：跟随系统

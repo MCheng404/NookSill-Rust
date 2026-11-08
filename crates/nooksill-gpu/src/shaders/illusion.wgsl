@@ -11,8 +11,10 @@ struct Params {
     gh: u32,
     gain: f32,
     t: f32,
-    _pad0: f32,
-    _pad1: f32,
+    // 本帧已用真高斯重算过的列 [dirty_x0, dirty_x1)：这些列直接取基底，
+    // 不再叠加色场差值（否则同一处颜色变化会被算两遍）。
+    dirty_x0: u32,
+    dirty_x1: u32,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -53,9 +55,12 @@ fn reproject(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = sample_field(0u, u, v);
     let prev = sample_field(n, u, v);
     let cur = sample_field(2u * n, u, v);
-    // 色场差值就是「桌面比生成基底时亮/暗了多少」。结构（边缘、
-    // 轮廓）留在 base 里，圆角 alpha 也原样保留。
-    let delta = (mix(prev, cur, p.t) - b) * p.gain / 255.0;
+    // 色场差值就是「这块区域比它上次真模糊时亮/暗了多少」。
+    // 本帧刚跑过真高斯的列已经包含最新颜色，跳过补偿；其余列用
+    // 低频色场把颜色补上 —— 于是结构持续更新，颜色始终实时。
+    let covered = f32(x) >= f32(p.dirty_x0) && f32(x) < f32(p.dirty_x1);
+    let gain = select(p.gain, 0.0, covered);
+    let delta = (mix(prev, cur, p.t) - b) * gain / 255.0;
     let rgb = clamp(base.rgb + delta * base.a, vec3<f32>(0.0), vec3<f32>(1.0));
     textureStore(out_tex, vec2<i32>(x, y), vec4<f32>(rgb, base.a));
 }

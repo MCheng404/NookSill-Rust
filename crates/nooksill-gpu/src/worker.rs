@@ -755,7 +755,7 @@ mod tests {
         ini.save(&path).expect("准备文件");
 
         // 只写设置：条目与未知段必须原样留着。
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         write(
             &path,
             &WriteJob {

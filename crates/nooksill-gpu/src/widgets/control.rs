@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use crate::glyph::{IconState, IconStyle};
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
 use nooksill_core::control::{self, Tile};
 use nooksill_platform::audio::{Audio, Battery};

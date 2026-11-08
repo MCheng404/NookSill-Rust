@@ -239,7 +239,7 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 | 图标 | `LoadItemIcon` `HiconToGp` `FitBitmap` `AlphaBBox` `LetterTile` | `platform::icon` + `core::icon` + `gpu::worker` | ✅ 含圆角/缩放，工作线程取 |
 | 网址 favicon | `IsUrlStr` `HostOf` `Fnv` `IconFileFor` `FaviconBitmap` | —— | ❌ 未做（网址条目走首字占位） |
 | 快捷方式 | `ReadLnk` `ResolveTarget` `BuildItem` | `platform::shortcut` | ✅ |
-| 拖放 | `DT_*` `AcceptData` `DropPoint` `GetGlobalText` | `gpu::dock` + `bin/dock.rs` | ⚠️ `WM_DROPFILES` 已接：按落点插入 / 落在组上归组 / `.url` 网址 / `.lnk` 快捷方式 / 去重；OLE `IDropTarget`（拖拽过程反馈、网址与纯文本）未做 |
+| 拖放 | `DT_*` `AcceptData` `DropPoint` `GetGlobalText` | `gpu::drop_target` + `gpu::dock` + `bin/dock.rs` | ✅ `IDropTarget` 已接：`DragOver` 动态插入让位 / `Drop` 解析 `CF_HDROP`；按落点插入 / 归组 / `.url` / `.lnk` / 去重仍复用 `WM_DROPFILES` 的落地路径（保留为 OLE 注册失败时的兜底）。纯网址/纯文本 OLE 数据对象未收 |
 | 分组 | `KidAdd` `MergeInto` `ExtractKid` `DissolveGroup` `BuildGroupIcon` | `core::group` + `gpu::group_win` + `gpu::edit_win` | ✅ 建组/改名/点开/归组/移出/解散 + 四宫格图标；`launch` 的 `Unsupported` 分支不再可达 |
 | 菜单 | `ShowMenu` `MenuProc` `MenuDraw` `HandleCmd` | `gpu::menu` | ✅ 独立窗口 + 模态捕获（ADR-032） |
 | 预览 | `ShowPreview` `PvProc` `PvEnum` `ClosePreview` | —— | ❌ 未做（只有配置键） |
@@ -265,7 +265,7 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 | 2 | 中文 IME | 设置页输入框不可用 | 先叠原生 `EDIT`（原版做法），再评估 `WM_IME_*` 桥接 |
 | 3 | DWM 缩略图是窗口级 API | 无法离线程 | 保留在 UI 线程，接受 |
 | 4 | AppBar 需要先有 HWND | 与 GPU 表面初始化顺序耦合 | 建窗 → 注册 AppBar → 再建 surface |
-| 5 | 拖放走 OLE `IDropTarget` | 需要 COM 套间与消息泵配合 | 复用 `OleInitialize` + `RegisterDragDrop`，M2 单独验证 |
+| 5 | 拖放走 OLE `IDropTarget` | 需要 COM 套间与消息泵配合 | ✅ 2026-11-08 已做：`OleInitialize` + `RegisterDragDrop`，`DragOver` 驱动动态让位，`Drop` 取 `CF_HDROP`；`RevokeDragDrop` 在窗口销毁前调用。`DragAcceptFiles` 保留兜底 |
 | 6 | egui 缺字形直接 panic | 无中文字体的机器直接崩 | 启动即装系统字体，失败则消息框提示而非静默 |
 | 7 | `opt-level="z"` 可能拖慢动画 | 掉帧 | 用 `Renderer` 实测；必要时对热点函数 `#[inline]` |
 | 8 | 组图标拼接的像素对齐 | 与原版有肉眼差 | 按原版四宫格公式重写，截图差分 |
@@ -280,6 +280,17 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 > 截图工具本身踩过 DPI 的坑：不声明感知时 `BitBlt` 的源坐标被虚拟化，
 > 截出来的区域整体偏移，看起来像"渲染错位"。诊断任何几何问题前，
 > 先确认截图链路是 DPI 一致的。
+
+### 与 C 版的一处刻意偏差：配置存逻辑像素
+
+C 版把 `IconSize` 等当成**物理像素**直接乘进布局，所以同一份 ini 在
+150% 缩放下图标只有应得尺寸的 2/3；Rust 版从 v4 起存 96 DPI 逻辑像素，
+渲染时乘 `dpi / 96`（见 CONFIG.md 的「单位」、ARCHITECTURE 不变式 23）。
+
+后果：**同一份 harness ini 在两个版本里的像素尺寸不同** —— 用 C 版对拍
+几何时必须先把 ini 的物理值除以 `dpi / 96` 再喂给 Rust 版，否则会得到
+"图标偏大"的假阳性。反过来，Rust 版之间的对拍（96 vs 150）现在应当
+得到**等大**的图标，这正是这次改动的目的。
 
 ## 六、明确不做
 

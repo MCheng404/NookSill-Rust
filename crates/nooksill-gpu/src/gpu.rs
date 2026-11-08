@@ -91,6 +91,25 @@ impl Selection {
     pub const fn fell_back(&self) -> bool {
         matches!(self, Self::Fallback { .. })
     }
+
+    /// 当前 ini 里的 `[Graphics] Adapter` 是否还是**启动时**用的那份。
+    ///
+    /// 设备只在进程启动时创建（ADR-012），运行中改配置不会换卡。设置界面
+    /// 靠这个判断要不要提示「重启后生效」，而不是让用户以为点完就切了。
+    /// `actual` 传 `Gpu::info.name`：按名字命中时 wgpu 可能追加厂商后缀，
+    /// 所以与 `pick_by_name` 一样用「互相包含」放宽比较。
+    #[must_use]
+    pub fn matches_config(&self, configured: &str, actual: &str) -> bool {
+        match self {
+            Self::Auto => configured.is_empty(),
+            Self::Fallback { wanted, .. } => wanted.eq_ignore_ascii_case(configured),
+            Self::Pinned => {
+                let a = configured.trim().to_lowercase();
+                let b = actual.trim().to_lowercase();
+                !a.is_empty() && (a == b || a.contains(&b) || b.contains(&a))
+            }
+        }
+    }
 }
 
 pub struct Gpu {
@@ -299,6 +318,27 @@ mod tests {
         let text = fb.describe();
         assert!(text.contains("某个不存在的卡"));
         assert!(text.contains("A / B"));
+    }
+
+    /// 运行中改了显卡配置必须能被认出来，否则界面不会提示重启。
+    #[test]
+    fn matches_config_detects_a_pending_adapter_change() {
+        let actual = "AMD Radeon(TM) 610M";
+        assert!(Selection::Auto.matches_config("", actual));
+        assert!(!Selection::Auto.matches_config("NVIDIA RTX 5070", actual));
+
+        let fb = Selection::Fallback {
+            wanted: "不存在的卡".to_owned(),
+            available: vec!["AMD".to_owned()],
+        };
+        assert!(fb.matches_config("不存在的卡", actual));
+        assert!(!fb.matches_config("AMD", actual));
+
+        // wgpu 名字带厂商后缀时也算同一块卡。
+        assert!(Selection::Pinned.matches_config("AMD Radeon", actual));
+        assert!(Selection::Pinned.matches_config("AMD Radeon(TM) 610M", actual));
+        assert!(!Selection::Pinned.matches_config("NVIDIA RTX 5070", actual));
+        assert!(!Selection::Pinned.matches_config("", actual));
     }
 
     #[test]

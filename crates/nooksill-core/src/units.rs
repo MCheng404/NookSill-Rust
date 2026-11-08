@@ -24,13 +24,23 @@ pub fn scale(v: i32, dpi: i32) -> i32 {
     r.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
-/// 物理像素 → 96 DPI 逻辑像素（用于日志/诊断时把数字还原成设计值）。
+/// 物理像素 → 96 DPI 逻辑像素，四舍五入。
+///
+/// 两处用途：把 ini 里的旧值（物理像素）换成逻辑像素（`CONFIG_VERSION`
+/// 3 → 4 的迁移），以及把"拖动分割线算出来的物理像素"写回配置。
 #[must_use]
 pub fn unscale(v: i32, dpi: i32) -> i32 {
-    if dpi == 96 {
+    if dpi == 96 || dpi <= 0 {
         return v;
     }
-    scale(v, 96) * 96 / dpi.max(1)
+    let num = i64::from(v) * 96;
+    let half = i64::from(dpi) / 2;
+    let r = if num >= 0 {
+        (num + half) / i64::from(dpi)
+    } else {
+        (num - half) / i64::from(dpi)
+    };
+    r.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[cfg(test)]
@@ -65,5 +75,19 @@ mod tests {
         // MulDiv 在 32 位中间值上会溢出；这里必须是饱和而不是回绕。
         assert_eq!(scale(i32::MAX, 480), i32::MAX);
         assert_eq!(scale(i32::MIN, 480), i32::MIN);
+    }
+
+    /// `unscale` 与 `scale` 在常见档位上互为逆运算。
+    #[test]
+    fn unscale_round_trips_the_common_tiers() {
+        for dpi in [96, 120, 144, 168, 192, 240] {
+            for v in [0, 1, 2, 4, 8, 12, 18, 24, 48, 72, 96, 128] {
+                let back = unscale(scale(v, dpi), dpi);
+                assert!((back - v).abs() <= 1, "dpi={dpi} v={v} 往返变成 {back}");
+            }
+        }
+        // 100 * 96 / 144 = 66.67，四舍五入到 67（截断会得到 66）。
+        assert_eq!(unscale(100, 144), 67);
+        assert_eq!(unscale(72, 144), 48);
     }
 }

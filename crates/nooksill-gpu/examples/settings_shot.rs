@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         egui::Theme::Light
     });
 
-    let mut cfg = Config::defaults(96);
+    let mut cfg = Config::defaults();
     let mut state = SettingsState {
         page,
         config_dir: r"C:\Users\you\AppData\Roaming\NookSill".to_owned(),

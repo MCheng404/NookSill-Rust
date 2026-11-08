@@ -30,7 +30,7 @@ fn new_harness() -> Harness<'static, St> {
 /// 外壳就永远发现不了。
 fn harness(shell: bool) -> Harness<'static, St> {
     let state = St {
-        cfg: Config::defaults(96),
+        cfg: Config::defaults(),
         ui: SettingsState {
             config_dir: r"C:\Users\test\AppData\Roaming\NookSill".to_owned(),
             ..SettingsState::default()
@@ -444,6 +444,30 @@ fn 适配器回退时给出提示() {
             .count()
             >= 1,
         "回退必须可见，否则用户会以为选择生效了"
+    );
+}
+
+/// 显卡是「下次启动才生效」的设置，选完必须给出可见提示，
+/// 否则用户会对着没变化的「当前实际使用」以为程序没反应。
+#[test]
+fn 显卡选择后提示重启生效() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Performance;
+    h.state_mut().ui.active_adapter = "AMD Radeon(TM) 610M".to_owned();
+    h.state_mut().ui.adapter_note = "已选择「NVIDIA RTX 5070」，重启后生效".to_owned();
+    h.run();
+
+    assert!(
+        h.query_all_by_label("当前实际使用：AMD Radeon(TM) 610M")
+            .count()
+            >= 1,
+        "实际在用的卡仍是启动时那块"
+    );
+    assert!(
+        h.query_all_by_label("已选择「NVIDIA RTX 5070」，重启后生效")
+            .count()
+            >= 1,
+        "待生效的选择必须可见"
     );
 }
 

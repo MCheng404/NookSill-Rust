@@ -86,7 +86,7 @@ mod tests {
     /// 自定义主题色按 COLORREF(0x00BBGGRR) 解析，自定义值原样尊重。
     #[test]
     fn 自定义主题色按_colorref_解析() {
-        let mut cfg = Config::defaults(96);
+        let mut cfg = Config::defaults();
         cfg.apply_i32(Key::UI_ACCENT, 0x0088_4422);
         assert_eq!(resolve(&cfg), Some([0x22, 0x44, 0x88]));
 

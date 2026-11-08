@@ -15,7 +15,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::calendar::{self, CalendarState};
 use nooksill_core::config::Edge;

@@ -63,7 +63,11 @@ pub enum Key {
 }
 
 /// 新配置格式的版本号。改动键名或分区就 +1。
-pub const CONFIG_VERSION: i32 = 3;
+///
+/// - 3：新一代键名（`[appearance]` / `[behavior]` …）。
+/// - 4：**长度键改存 96 DPI 逻辑像素**。此前存的是物理像素，
+///   换个缩放比 DPI 图标就不对了（见 [`Config::migrate_units`]）。
+pub const CONFIG_VERSION: i32 = 4;
 
 /// 新版存放元信息的段。
 pub const META_SECTION: &str = "meta";
@@ -142,7 +146,11 @@ fn section_of_numeric(name: &str) -> &'static str {
     }
 }
 
-/// 裸数值键的表：`(ini 键名, 最小值, 最大值, 默认值, 是否布尔, 默认值随 DPI 缩放)`。
+/// 裸数值键的表：`(ini 键名, 最小值, 最大值, 默认值, 是否布尔, 是否为长度)`。
+///
+/// **最后一列是长度语义**：这类键存 96 DPI 逻辑像素，渲染时统一乘
+/// `dpi / 96`（见 [`Key::is_length`]）。百分比 / 角度 / 枚举 / 颜色
+/// 一律 `false` —— 把它们也缩放会让"不透明度 60%"变成"60% × 1.5"。
 ///
 /// 来源：键表与默认值，值域按设置行的控件类型给：
 /// `RSl` = 滑杆（上下限）、`RCmb` = 下拉（选项数）、`RTog` = 布尔、`RCol` = 颜色。
@@ -169,7 +177,7 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("ClockColLight", -1, 16777215, -1, false, false),
     ("ClockColDark", -1, 16777215, -1, false, false),
     ("ReflSize", 10, 80, 38, false, false),
-    ("ReflGap", 0, 30, 3, false, false),
+    ("ReflGap", 0, 30, 3, false, true),
     ("ReflOpacity", 0, 100, 30, false, false),
     ("FanArc", 0, 100, 40, false, false),
     ("FanGap", 0, 40, 9, false, false),
@@ -179,7 +187,7 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("Guardian", 0, 1, 1, true, false),
     ("ClickToggle", 0, 1, 1, true, false),
     ("SepGap", 0, 64, 4, false, true),
-    ("SepWidth", 0, 16, 2, false, false),
+    ("SepWidth", 0, 16, 2, false, true),
     ("ClockSec", 0, 1, 0, true, false),
     ("ClockWeek", 0, 1, 1, true, false),
     ("DateFmt", 0, 2, 0, false, false),
@@ -311,8 +319,8 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("ShowDelayMax", 0, 5000, 400, false, false),
     // 小组件外观。0 = 跟随（栏体 / 全局磨砂），非 0 才覆盖。
     ("WidgetOpacity", 0, 100, 0, false, false),
-    ("WidgetRadius", 0, 40, 0, false, false),
-    ("WidgetGap", 0, 24, 6, false, false),
+    ("WidgetRadius", 0, 40, 0, false, true),
+    ("WidgetGap", 0, 24, 6, false, true),
     ("WidgetBlur", 0, 14, 0, false, false),
     // 弹出面板（小组件窗口卡片）。0 = 跟随毛玻璃自动选。
     ("PanelOpacity", 0, 100, 0, false, false),
@@ -725,6 +733,21 @@ impl Key {
         Key::UI_ACCENT_CC_ICONS,
         Key::NET_SECURE_DNS,
         Key::NET_MIRROR_ALL,
+        // 显隐灵敏度延迟与小组件/面板外观。
+        //
+        // 这几个键一直**没进过读写列表**：`get_i32` 能取到内存里的值，
+        // 于是滑块看着能调、当次会话也生效，但 `write_ini` 跳过了它们，
+        // 重启就回到默认值。加长度迁移时才发现。
+        Key::HIDE_DELAY,
+        Key::SHOW_DELAY,
+        Key::HIDE_DELAY_MAX,
+        Key::SHOW_DELAY_MAX,
+        Key::WIDGET_OPACITY,
+        Key::WIDGET_RADIUS,
+        Key::WIDGET_GAP,
+        Key::WIDGET_BLUR,
+        Key::PANEL_OPACITY,
+        Key::PANEL_OVERLAY,
         Key::FROST_ILLUSION,
     ];
 
@@ -1025,6 +1048,27 @@ impl Key {
                 | Key::Notes
         )
     }
+
+    /// 该键是否为**长度**（96 DPI 逻辑像素，渲染时乘 `dpi / 96`）。
+    ///
+    /// 图标的基准尺寸、间距、圆角、内边距都在这一类里。百分比（不透明度、
+    /// 倒影比例）、角度、枚举、颜色**不是** —— 缩放它们只会把语义弄错。
+    ///
+    /// 迁移（`CONFIG_VERSION` 3 → 4）与渲染共用这一处判定：加一个长度键
+    /// 只改 [`NUMERIC_KEYS`] 的最后一列，不必两处各记一遍。
+    #[must_use]
+    pub const fn is_length(self) -> bool {
+        match self {
+            Key::IconSize
+            | Key::ZoomSize
+            | Key::Spacing
+            | Key::Padding
+            | Key::Margin
+            | Key::Radius => true,
+            Key::Numeric(i) => NUMERIC_KEYS[i as usize].5,
+            _ => false,
+        }
+    }
 }
 
 /// Dock 本体主题。`0 = 深色`，`1 = 浅色`，`2 = 跟随系统`。
@@ -1199,19 +1243,21 @@ pub struct Config {
 }
 
 impl Config {
-    /// 默认配置。几何量按 DPI 缩放，其余为固定值。
+    /// 默认配置。
     ///
-    /// **必须**用当前 DPI 构造：ini 里存的是**物理像素**，首次运行时
-    /// 由这里的缩放决定默认值；之后 ini 有值就以 ini 为准，不再二次缩放。
+    /// **几何量是 96 DPI 逻辑像素**，与 DPI 无关：同一份 ini 在 100% 和
+    /// 150% 缩放下看到的是同样"大"的图标，差别只由渲染时的
+    /// [`nooksill_core::units::scale`] 补上。旧的 C 版与 3.x 存的是物理
+    /// 像素，所以一旦换 DPI 图标就变小 —— 见 [`Self::migrate_units`]。
     #[must_use]
-    pub fn defaults(dpi: i32) -> Self {
+    pub fn defaults() -> Self {
         Self {
-            icon_size: units::scale(48, dpi),
-            zoom_size: units::scale(84, dpi),
-            spacing: units::scale(6, dpi),
-            margin: units::scale(8, dpi),
-            pad: units::scale(8, dpi),
-            radius: units::scale(18, dpi),
+            icon_size: 48,
+            zoom_size: 84,
+            spacing: 6,
+            margin: 8,
+            pad: 8,
+            radius: 18,
             opacity: 60,
             blur: 6,
 
@@ -1245,16 +1291,7 @@ impl Config {
             bg_color1: -1,
             bg_color2: -1,
 
-            numeric: NUMERIC_KEYS
-                .iter()
-                .map(|row| {
-                    if row.5 {
-                        units::scale(row.3, dpi)
-                    } else {
-                        row.3
-                    }
-                })
-                .collect(),
+            numeric: NUMERIC_KEYS.iter().map(|row| row.3).collect(),
 
             adapter: String::new(),
             cc_order: String::new(),
@@ -1406,8 +1443,8 @@ impl Config {
     /// 兼容 1.x 的 `Frost` 键：`BgMode` 不存在但有 `Frost` 时，
     /// `Frost=1` → 磨砂，`Frost=0` → 纯色。
     #[must_use]
-    pub fn from_ini(ini: &Ini, dpi: i32) -> Self {
-        let mut cfg = Self::defaults(dpi);
+    pub fn from_ini(ini: &Ini) -> Self {
+        let mut cfg = Self::defaults();
         // 1.x 的 `Frost` 是 `BgMode` 的前身。判"该不该看 Frost"要同时看
         // 两种格式：只看旧段的话，新格式文件（有 `fill`、没有 `BgMode`）
         // 会被误判成 1.x 文件，`Frost` 值反而盖掉 `fill`。
@@ -1461,8 +1498,41 @@ impl Config {
         }
     }
 
-    /// 把旧格式就地升级为当前格式，返回是否发生了升级。
+    /// 长度键从"物理像素"迁到"96 DPI 逻辑像素"（`CONFIG_VERSION` 3 → 4）。
     ///
+    /// 旧版把 `IconSize=72` 直接当物理像素用：同一份配置在 150% 缩放下
+    /// 图标只有应得尺寸的 2/3，而且换 DPI 之后不会自动跟着变。新版存逻辑
+    /// 像素，渲染时乘 `dpi / 96`，所以第一次读到旧文件要就地换算一遍，
+    /// 否则用户的图标会在升级瞬间放大 1.5 倍（视觉上等于换了个皮肤）。
+    ///
+    /// 只动 [`Key::is_length`] 认定的键：百分比、角度、颜色原样保留。
+    /// 返回是否真的写过（调用方据此决定要不要落盘）。
+    ///
+    /// 1.x 文件（没有 `[meta] version`）不归这里管：它们由
+    /// [`Self::upgrade_legacy`] 整份重写成新格式，那一步里顺带换算。
+    pub fn migrate_units(ini: &mut Ini, dpi: i32) -> bool {
+        let ver = ini.get_i32(META_SECTION, "version").unwrap_or(0);
+        if ver >= CONFIG_VERSION {
+            return false;
+        }
+        if ver == 0 {
+            return false;
+        }
+        if dpi > 0 && dpi != 96 {
+            for key in Key::all_keys() {
+                if !key.is_length() {
+                    continue;
+                }
+                if let Some(v) = ini.get_i32(key.section(), key.name()) {
+                    ini.set_i32(key.section(), key.name(), units::unscale(v, dpi));
+                }
+            }
+        }
+        ini.set_i32(META_SECTION, "version", CONFIG_VERSION);
+        true
+    }
+
+    /// 把旧格式就地升级为当前格式，返回是否发生了升级。    ///
     /// 做法是"读 → 删旧段 → 按新格式重写"。不用单独的迁移工具：
     /// 用户不需要知道有这回事，打开一次就升级完了。
     ///
@@ -1476,7 +1546,16 @@ impl Config {
         if ini.len_of(LEGACY_SECTION) == 0 {
             return false;
         }
-        let cfg = Self::from_ini(ini, dpi);
+        let mut cfg = Self::from_ini(ini);
+        // 1.x 的长度键也是物理像素：按新格式重写之前先换成逻辑像素，
+        // 否则升级到 4 版之后图标会突然放大 `dpi/96` 倍。
+        if dpi > 0 && dpi != 96 {
+            for key in Key::all_keys() {
+                if key.is_length() {
+                    cfg.apply_i32(key, units::unscale(cfg.get_i32(key), dpi));
+                }
+            }
+        }
         // 先删旧段再写：留着的话文件里会有两套等价的键，
         // 读的时候新格式优先，但人看文件会以为配置重复了。
         ini.remove_section(LEGACY_SECTION);
@@ -1518,9 +1597,8 @@ impl Config {
 }
 
 impl Default for Config {
-    /// 96 DPI 的默认值。窗口层必须显式传 DPI 用 [`Config::defaults`]。
     fn default() -> Self {
-        Self::defaults(96)
+        Self::defaults()
     }
 }
 
@@ -1531,7 +1609,7 @@ mod tests {
     /// 两个图标主题色开关彼此独立：关掉 Dock 的不该顺带关掉控制中心。
     #[test]
     fn icon_accent_switches_are_independent() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         assert_eq!(c.get_i32(Key::UI_ACCENT_DOCK_ICONS), 1, "默认开");
         assert_eq!(c.get_i32(Key::UI_ACCENT_CC_ICONS), 1, "默认开");
         c.apply_i32(Key::UI_ACCENT_DOCK_ICONS, 0);
@@ -1542,7 +1620,7 @@ mod tests {
 
     #[test]
     fn defaults_match_c_version() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         assert_eq!(c.icon_size, 48);
         assert_eq!(c.zoom_size, 84);
         assert_eq!(c.spacing, 6);
@@ -1559,20 +1637,117 @@ mod tests {
         assert!(!c.reserve && !c.lock && !c.clock && !c.reflect && !c.notes);
     }
 
+    /// 默认值是 **96 DPI 逻辑像素**，与 DPI 无关。
+    ///
+    /// 换成物理像素只发生在渲染处（`calc_metrics` / `Dock::pxf`），
+    /// 所以同一份 ini 在 100% 与 150% 下看到的图标一样大。
     #[test]
-    fn defaults_scale_with_dpi() {
-        let c = Config::defaults(144);
-        assert_eq!(c.icon_size, 72);
-        assert_eq!(c.radius, 27);
-        // 非几何量不随 DPI 变。
+    fn defaults_are_logical_pixels() {
+        let c = Config::defaults();
+        assert_eq!(c.icon_size, 48);
+        assert_eq!(c.radius, 18);
+        assert_eq!(c.get_i32(Key::HPAD), 12);
+        assert_eq!(c.get_i32(Key::SEP_GAP), 4);
+        // 非几何量本来就不该变。
         assert_eq!(c.opacity, 60);
         assert_eq!(c.plate_radius, 22);
+
+        // 渲染时才是物理像素：48 逻辑 × 150% = 72 物理。
+        assert_eq!(crate::units::scale(c.icon_size, 144), 72);
+        assert_eq!(crate::units::scale(c.get_i32(Key::HPAD), 144), 18);
+    }
+
+    /// 每个表驱动键都必须出现在读写列表里。
+    ///
+    /// 漏掉的后果不是编译错误，而是"滑块能调、当次生效、重启回默认" ——
+    /// `Widget*` / `Panel*` / `Hide*` 这 10 个键就这么漏了三轮。
+    #[test]
+    fn every_numeric_key_is_persisted() {
+        let live: std::collections::HashSet<u16> = Key::all_keys()
+            .filter_map(|k| match k {
+                Key::Numeric(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        let missing: Vec<&str> = NUMERIC_KEYS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !live.contains(&(*i as u16)))
+            .map(|(_, row)| row.0)
+            .collect();
+        assert!(missing.is_empty(), "这些键不会被写盘：{missing:?}");
+    }
+
+    /// v3 的 ini 存物理像素，v4 起存逻辑像素：迁移只动长度键。
+    #[test]
+    fn migrate_units_converts_only_the_length_keys() {
+        let mut ini = Ini::parse("");
+        let put = |ini: &mut Ini, key: Key, v: i32| ini.set_i32(key.section(), key.name(), v);
+        put(&mut ini, Key::IconSize, 72);
+        put(&mut ini, Key::HPAD, 18);
+        put(&mut ini, Key::WIDGET_RADIUS, 18);
+        put(&mut ini, Key::Opacity, 60);
+        put(&mut ini, Key::REFL_SIZE, 38);
+        ini.set_i32(META_SECTION, "version", 3);
+
+        assert!(Config::migrate_units(&mut ini, 144), "v3 应当被迁移");
+        let get = |ini: &Ini, key: Key| ini.get_i32(key.section(), key.name());
+        assert_eq!(
+            get(&ini, Key::IconSize),
+            Some(48),
+            "72 物理 / 150% = 48 逻辑"
+        );
+        assert_eq!(get(&ini, Key::HPAD), Some(12));
+        assert_eq!(get(&ini, Key::WIDGET_RADIUS), Some(12));
+        assert_eq!(get(&ini, Key::Opacity), Some(60), "百分比不换算");
+        assert_eq!(get(&ini, Key::REFL_SIZE), Some(38), "比例不换算");
+        assert_eq!(
+            ini.get_i32(META_SECTION, "version"),
+            Some(CONFIG_VERSION),
+            "迁移后要写上新版本号"
+        );
+        // 幂等：第二遍必须什么都不做，否则每次启动都会缩小一圈。
+        assert!(!Config::migrate_units(&mut ini, 144));
+        assert_eq!(get(&ini, Key::IconSize), Some(48));
+    }
+
+    /// 长度键的判定要覆盖"存逻辑像素"的那一组，且不能把百分比算进去。
+    #[test]
+    fn length_keys_are_exactly_the_pixel_sized_ones() {
+        for key in [
+            Key::IconSize,
+            Key::ZoomSize,
+            Key::Spacing,
+            Key::Padding,
+            Key::Margin,
+            Key::Radius,
+            Key::HPAD,
+            Key::SEP_GAP,
+            Key::SEP_WIDTH,
+            Key::REFL_GAP,
+            Key::WIDGET_RADIUS,
+            Key::WIDGET_GAP,
+        ] {
+            assert!(key.is_length(), "{key:?} 应当算长度");
+        }
+        for key in [
+            Key::Opacity,
+            Key::REFL_SIZE,
+            Key::WIDGET_OPACITY,
+            Key::PlateRadius,
+            Key::BORDER_WIDTH,
+            Key::GRAD_ANGLE,
+            Key::FAN_ARC,
+            Key::HIDE_DELAY,
+        ] {
+            assert!(!key.is_length(), "{key:?} 不是长度，缩放它会把语义弄错");
+        }
     }
 
     #[test]
     fn hostile_values_are_clamped() {
         // 这些值会直接进几何/alpha 计算，越界必须挡住。
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         for (key, evil) in [
             (Key::Opacity, 1000),
             (Key::Opacity, -5),
@@ -1797,7 +1972,7 @@ mod tests {
     /// 数值键的默认值。
     #[test]
     fn numeric_defaults_match_upstream() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         assert_eq!(c.get_i32(Key::PLATE_MODE), 0);
         assert_eq!(c.get_i32(Key::PLATE_THEME), 2);
         assert_eq!(c.get_i32(Key::PLATE_OPACITY), 100);
@@ -1859,16 +2034,15 @@ mod tests {
         assert_eq!(c.get_i32(Key::SB_AUTO_HIDE), 0);
         assert_eq!(c.get_i32(Key::SEP_SCALE), 0);
         assert_eq!(c.get_i32(Key::MENU_FROST), 0);
-        // HPad 与 SepGap 一样随 DPI 缩放。
-        assert_eq!(Config::defaults(144).get_i32(Key::HPAD), 18);
-        // SepGap 的默认值随 DPI 缩放。
+        // HPad / SepGap 存逻辑像素，默认值与 DPI 无关。
+        assert_eq!(Config::defaults().get_i32(Key::HPAD), 12);
         assert_eq!(c.get_i32(Key::SEP_GAP), 4);
-        assert_eq!(Config::defaults(144).get_i32(Key::SEP_GAP), 6);
+        assert_eq!(Config::defaults().get_i32(Key::SEP_GAP), 4);
     }
 
     #[test]
     fn bool_keys_normalize_to_0_or_1() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.apply_i32(Key::Dots, 7);
         assert!(c.dots);
         assert_eq!(c.get_i32(Key::Dots), 1);
@@ -2034,7 +2208,7 @@ mod tests {
         ini.set_i32(LEGACY_SECTION, "IconSize", 64);
         ini.set_i32(LEGACY_SECTION, "Mode", 2);
         ini.set_i32(LEGACY_SECTION, "BgMode", 0);
-        let c = Config::from_ini(&ini, 96);
+        let c = Config::from_ini(&ini);
         assert_eq!(c.icon_size, 64);
         assert_eq!(c.mode, DockMode::SmartHide);
         assert_eq!(c.bg_mode, BgMode::Solid);
@@ -2043,7 +2217,7 @@ mod tests {
     /// 新格式写出来按语义分段，且带版本号。
     #[test]
     fn write_ini_uses_semantic_sections() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.icon_size = 64;
         c.mode = DockMode::AutoHide;
         let mut ini = Ini::new();
@@ -2065,9 +2239,8 @@ mod tests {
     /// 都会表现为某个设置在升级后悄悄变回默认值。这里逐键比对。
     #[test]
     fn legacy_and_new_formats_agree_on_every_key() {
-        let dpi = 144;
         // 先把每个键都改成非默认值，避免"恰好等于默认值"掩盖映射错误。
-        let mut want = Config::defaults(dpi);
+        let mut want = Config::defaults();
         for key in Key::ALL.iter().copied() {
             let (lo, hi) = key.range();
             let cur = want.get_i32(key);
@@ -2082,12 +2255,12 @@ mod tests {
         for key in Key::ALL.iter().copied() {
             legacy.set_i32(LEGACY_SECTION, key.legacy_name(), want.get_i32(key));
         }
-        let from_legacy = Config::from_ini(&legacy, dpi);
+        let from_legacy = Config::from_ini(&legacy);
 
         // 用新格式写一份再读回来。
         let mut fresh = Ini::new();
         want.write_ini(&mut fresh);
-        let from_new = Config::from_ini(&fresh, dpi);
+        let from_new = Config::from_ini(&fresh);
 
         for key in Key::ALL.iter().copied() {
             assert_eq!(
@@ -2104,7 +2277,7 @@ mod tests {
     fn saving_after_legacy_load_produces_new_format() {
         let mut legacy = Ini::new();
         legacy.set_i32(LEGACY_SECTION, "IconSize", 64);
-        let c = Config::from_ini(&legacy, 96);
+        let c = Config::from_ini(&legacy);
 
         let mut out = Ini::new();
         c.write_ini(&mut out);
@@ -2174,7 +2347,7 @@ mod tests {
     #[test]
     fn upgrade_legacy_keeps_every_value() {
         let dpi = 144;
-        let mut want = Config::defaults(dpi);
+        let mut want = Config::defaults();
         for key in Key::ALL.iter().copied() {
             let (lo, hi) = key.range();
             let v = if want.get_i32(key) == lo { hi } else { lo };
@@ -2199,7 +2372,7 @@ mod tests {
         // 条目段必须原样保留 —— 升级只管配置，不碰条目。
         assert_eq!(ini.get("Items", "Count"), Some("1"));
 
-        let after = Config::from_ini(&ini, dpi);
+        let after = Config::from_ini(&ini);
         for key in Key::ALL.iter().copied() {
             assert_eq!(
                 after.get_i32(key),
@@ -2251,7 +2424,7 @@ mod tests {
 
         assert!(Config::upgrade_legacy(&mut ini, 96), "应当报告发生了升级");
 
-        let after = Config::from_ini(&ini, 96);
+        let after = Config::from_ini(&ini);
         assert_eq!(after.get_i32(Key::LAUNCHPAD), 1);
         assert_eq!(after.get_i32(Key::W_SIDE), 1);
         assert_eq!(after.get_i32(Key::W_ORDER), 1);
@@ -2308,7 +2481,7 @@ mod tests {
 
         assert!(Config::upgrade_legacy(&mut ini, 96), "应当报告发生了升级");
 
-        let after = Config::from_ini(&ini, 96);
+        let after = Config::from_ini(&ini);
         assert_eq!(after.get_i32(Key::HPAD), 20);
         assert_eq!(after.get_i32(Key::UI_FROST), 0);
         assert_eq!(after.get_i32(Key::LP_FROST), 0);
@@ -2336,14 +2509,14 @@ mod tests {
     #[test]
     fn upgrade_legacy_ignores_new_format() {
         let mut ini = Ini::new();
-        Config::defaults(96).write_ini(&mut ini);
+        Config::defaults().write_ini(&mut ini);
         ini.set("Items", "Count", "1");
         assert!(!Config::upgrade_legacy(&mut ini, 96));
     }
 
     #[test]
     fn ini_roundtrip_preserves_every_key() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.apply_i32(Key::IconSize, 64);
         c.apply_i32(Key::Edge, 2);
         c.apply_i32(Key::BgColor1, 0x0011_2233);
@@ -2351,7 +2524,7 @@ mod tests {
 
         let mut ini = Ini::new();
         c.write_ini(&mut ini);
-        let back = Config::from_ini(&ini, 96);
+        let back = Config::from_ini(&ini);
         assert_eq!(back, c);
     }
 
@@ -2359,17 +2532,17 @@ mod tests {
     fn legacy_frost_key_migrates() {
         let mut ini = Ini::new();
         ini.set(LEGACY_SECTION, "Frost", "1");
-        assert_eq!(Config::from_ini(&ini, 96).bg_mode, BgMode::Frost);
+        assert_eq!(Config::from_ini(&ini).bg_mode, BgMode::Frost);
 
         let mut ini = Ini::new();
         ini.set(LEGACY_SECTION, "Frost", "0");
-        assert_eq!(Config::from_ini(&ini, 96).bg_mode, BgMode::Solid);
+        assert_eq!(Config::from_ini(&ini).bg_mode, BgMode::Solid);
 
         // 新键优先：同时存在时以 BgMode 为准。
         let mut ini = Ini::new();
         ini.set(LEGACY_SECTION, "Frost", "1");
         ini.set("Settings", "BgMode", "0");
-        assert_eq!(Config::from_ini(&ini, 96).bg_mode, BgMode::Solid);
+        assert_eq!(Config::from_ini(&ini).bg_mode, BgMode::Solid);
     }
 
     #[test]
@@ -2377,7 +2550,7 @@ mod tests {
         let mut ini = Ini::new();
         ini.set("Settings", "Opacity", "abc");
         ini.set("Settings", "IconSize", "");
-        let c = Config::from_ini(&ini, 96);
+        let c = Config::from_ini(&ini);
         assert_eq!(c.opacity, 0); // 与 GetPrivateProfileInt 一致：非数字 -> 0
         assert_eq!(c.icon_size, 16); // 0 被夹到下限
     }
@@ -2390,7 +2563,7 @@ mod tests {
         let c = Config {
             theme: DockTheme::Dark,
             ui_theme: UiTheme::Light,
-            ..Config::defaults(96)
+            ..Config::defaults()
         };
         assert!(c.dock_is_dark(false));
         assert!(!c.ui_is_dark(true));
@@ -2401,7 +2574,7 @@ mod tests {
     /// 键表改成表驱动之后，这条测试是唯一能证明"表里的每一行都通了"的护栏。
     #[test]
     fn every_key_roundtrips_through_ini() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         // 给每个键一个合法且互不相同的值：枚举用 1，布尔用 1，数值用范围内中点。
         for key in Key::ALL.iter().copied() {
             let (lo, hi) = key.range();
@@ -2417,7 +2590,7 @@ mod tests {
         }
         let mut ini = Ini::new();
         c.write_ini(&mut ini);
-        let back = Config::from_ini(&ini, 96);
+        let back = Config::from_ini(&ini);
         for key in Key::ALL.iter().copied() {
             assert_eq!(
                 back.get_i32(key),
@@ -2431,12 +2604,12 @@ mod tests {
     #[test]
     fn adapter_defaults_to_auto() {
         // 空串 = 自动。默认必须是自动，否则新用户会被钉在某块卡上。
-        assert!(Config::defaults(96).adapter.is_empty());
+        assert!(Config::defaults().adapter.is_empty());
     }
 
     #[test]
     fn adapter_roundtrips_through_graphics_section() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.adapter = "NVIDIA GeForce RTX 5070 Laptop GPU".to_owned();
         let mut ini = Ini::new();
         c.write_ini(&mut ini);
@@ -2448,7 +2621,7 @@ mod tests {
         );
         assert_eq!(ini.get("Settings", "Adapter"), None);
 
-        let back = Config::from_ini(&Ini::parse(&ini.to_text()), 96);
+        let back = Config::from_ini(&Ini::parse(&ini.to_text()));
         assert_eq!(back.adapter, c.adapter);
     }
 
@@ -2458,7 +2631,7 @@ mod tests {
     /// 以为这个用户调过顺序，而实际上是默认值。
     #[test]
     fn cc_order_only_written_when_set() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         assert!(c.cc_order.is_empty());
         let mut ini = Ini::default();
         c.write_ini(&mut ini);
@@ -2467,12 +2640,12 @@ mod tests {
             "没拖过就不该有这一行"
         );
 
-        let mut c2 = Config::defaults(96);
+        let mut c2 = Config::defaults();
         c2.cc_order = "5,0,1,2,3,4,6,7".to_owned();
         let mut ini2 = Ini::default();
         c2.write_ini(&mut ini2);
         assert_eq!(
-            Config::from_ini(&ini2, 96).cc_order,
+            Config::from_ini(&ini2).cc_order,
             "5,0,1,2,3,4,6,7",
             "拖过之后要原样读回来"
         );
@@ -2480,11 +2653,11 @@ mod tests {
 
     #[test]
     fn adapter_auto_roundtrips_as_empty_string() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         let mut ini = Ini::new();
         c.write_ini(&mut ini);
         assert_eq!(ini.get("Graphics", "Adapter"), Some(""));
-        assert!(Config::from_ini(&ini, 96).adapter.is_empty());
+        assert!(Config::from_ini(&ini).adapter.is_empty());
     }
 
     #[test]
@@ -2506,7 +2679,7 @@ mod tests {
     /// 必须与上游 118 个键逐项对应，混进去会废掉那条回归测试。
     #[test]
     fn panel_dismiss_defaults_on_and_roundtrips() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         assert_eq!(c.get_i32(Key::PANEL_DISMISS), 1);
         assert_eq!(Key::PANEL_DISMISS.section(), "widgets");
         assert!(Key::EXTRA.contains(&Key::PANEL_DISMISS));
@@ -2516,16 +2689,16 @@ mod tests {
         c.write_ini(&mut ini);
         assert_eq!(ini.get("widgets", "PanelDismiss"), Some("1"));
         ini.set("widgets", "PanelDismiss", "0");
-        assert_eq!(Config::from_ini(&ini, 96).get_i32(Key::PANEL_DISMISS), 0);
+        assert_eq!(Config::from_ini(&ini).get_i32(Key::PANEL_DISMISS), 0);
         // 越界值夹回 0/1，不留悬空状态。
         ini.set("widgets", "PanelDismiss", "9");
-        assert_eq!(Config::from_ini(&ini, 96).get_i32(Key::PANEL_DISMISS), 1);
+        assert_eq!(Config::from_ini(&ini).get_i32(Key::PANEL_DISMISS), 1);
     }
 
     /// 实验性模糊开关默认关（保留原高斯），落 `[appearance]` 段并能往返。
     #[test]
     fn frost_illusion_defaults_off_and_roundtrips() {
-        let c = Config::defaults(96);
+        let c = Config::defaults();
         assert_eq!(c.get_i32(Key::FROST_ILLUSION), 0);
         assert_eq!(Key::FROST_ILLUSION.section(), "appearance");
         // 必须进 EXTRA：否则 from_ini / write_ini 都遍历不到，开关重启就丢。
@@ -2536,10 +2709,10 @@ mod tests {
         c.write_ini(&mut ini);
         assert_eq!(ini.get("appearance", "FrostIllusion"), Some("0"));
         ini.set("appearance", "FrostIllusion", "1");
-        assert_eq!(Config::from_ini(&ini, 96).get_i32(Key::FROST_ILLUSION), 1);
+        assert_eq!(Config::from_ini(&ini).get_i32(Key::FROST_ILLUSION), 1);
         ini.set("appearance", "FrostIllusion", "7");
         assert_eq!(
-            Config::from_ini(&ini, 96).get_i32(Key::FROST_ILLUSION),
+            Config::from_ini(&ini).get_i32(Key::FROST_ILLUSION),
             1,
             "布尔键越界要夹紧"
         );
@@ -2549,6 +2722,6 @@ mod tests {
     fn adapter_from_ini_is_sanitized() {
         let mut ini = Ini::new();
         ini.set("Graphics", "Adapter", "  NVIDIA RTX 5070\r\n");
-        assert_eq!(Config::from_ini(&ini, 96).adapter, "NVIDIA RTX 5070");
+        assert_eq!(Config::from_ini(&ini).adapter, "NVIDIA RTX 5070");
     }
 }

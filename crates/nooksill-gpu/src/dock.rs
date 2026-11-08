@@ -211,6 +211,8 @@ pub struct DockGeom {
     pub act_c: Vec<f32>,
     /// 每个槽位的**基准**中心（未放大）。
     pub base_c: Vec<f32>,
+    /// 外部拖入预留空槽的左边界；`None` = 当前没有插入位。
+    pub insert_l: Option<f32>,
 }
 
 /// 一批从资源管理器拖进来的东西。
@@ -355,6 +357,11 @@ pub struct Dock {
     pub show_delay_ms: u64,
     /// 隐藏状态下"光标已进入热区"的起始时刻。
     show_pending_ms: Option<u64>,
+    /// 当前 DPI（`update` 每帧写入）。
+    ///
+    /// 配置里的长度是 96 DPI 逻辑像素，绘制期要靠它换成物理像素 ——
+    /// 与 `calc_metrics` 的换算保持同一口径。
+    dpi: i32,
     /// 当前拖拽状态。`None` = 没有按住任何条目。
     drag: Option<DragState>,
     /// 本帧发生过重排，`update` 据此补位移动画。
@@ -366,7 +373,18 @@ pub struct Dock {
     /// `Dock` 只持有 `DockItem`（名称 + 类型），启动所需的完整 `Item`
     /// 在主循环那边。两边各自维护一份列表时，重排必须同步，
     /// 否则"点了图标启动的是别人"。用这个字段把变更单向下发。
-    pending_move: Option<(usize, usize)>,
+    ///
+    /// 是**队列**而不是单个值：主循环每轮先把消息队列抽干，一帧里可能
+    /// 连着发生好几次换位。只留最后一次的话，配置里的顺序会比栏体差
+    /// 一格 —— 点 A 启动了 B。那样连"拖动被打断"都不如。
+    pending_moves: Vec<(usize, usize)>,
+    /// 前多少项是**固定条目**（配置里的），其后是运行中应用的临时条目。
+    ///
+    /// 两段的顺序分别存在 `[Items]` 与扫描线程里，中间没有第三处能放
+    /// "固定项夹在临时项中间"这种顺序。运行中应用拖进固定区时由主循环
+    /// 就地固定（顺序仍然可写回），反向则夹在固定区末尾 —— 见
+    /// [`Self::clamp_segment`]。
+    pinned: usize,
     /// 待处理的点击 `(下标, 是否强制新实例)`。
     ///
     /// 存下标而不是 bool：主循环要启动**被点的那个**条目，
@@ -392,6 +410,14 @@ pub struct Dock {
     pending_merge: Option<(usize, usize)>,
     /// 光标拖出了 Dock 窗口（松手即移除）。
     drop_outside: bool,
+    /// 拖出时把被拖项宽度压 0，让两侧图标**动态合拢**预览移除结果。
+    remove_preview: Option<usize>,
+    /// 外部拖文件经过时，落在第 N 个条目之前的动态插入位。
+    external_drop: Option<usize>,
+    /// 插入/合拢刚改过布局，下一帧要补位移动画。
+    slot_shift: bool,
+    /// 上一帧的槽位左边界，让位动画据此算位移。
+    prev_slot_l: Vec<f32>,
     /// 待处理的移除（被拖项下标）。
     pending_remove: Option<usize>,
     /// 从资源管理器拖进来的路径。
@@ -428,6 +454,9 @@ impl Dock {
     #[must_use]
     pub fn new(cfg: Config, items: Vec<DockItem>, work: LRect) -> Self {
         Self {
+            // 建窗时列表里只有固定条目（运行中应用是第一轮扫描之后才来的）。
+            // 先按"全部可重排"起步，`set_pinned` 之后会按真实分段改。
+            pinned: items.len(),
             widget_click: None,
             cpu_sampler: nooksill_platform::CpuSampler::new(),
             sysinfo: nooksill_platform::SysInfo::default(),
@@ -451,12 +480,13 @@ impl Dock {
             hide_delay_ms: Self::HIDE_GRACE_MS,
             show_delay_ms: 0,
             show_pending_ms: None,
+            dpi: 96,
             drag: None,
             sep: None,
             sep_dirty: false,
             moved: false,
             order_changed: false,
-            pending_move: None,
+            pending_moves: Vec::new(),
             press: None,
             press_path: None,
             click: None,
@@ -471,6 +501,10 @@ impl Dock {
             merge_target: None,
             pending_merge: None,
             drop_outside: false,
+            remove_preview: None,
+            external_drop: None,
+            slot_shift: false,
+            prev_slot_l: Vec::new(),
             pending_remove: None,
             notice: None,
         }
@@ -497,6 +531,33 @@ impl Dock {
             index: self.dropped_at.take(),
             group: self.dropped_group.take(),
         }
+    }
+
+    /// 外部拖文件经过 Dock：按光标位置更新动态插入下标。
+    ///
+    /// 下标变了才标脏，避免 `DragOver` 每帧刷一次 GPU。插入位本身由
+    /// `layout::place_slots_insert` 转成空槽，右侧图标自然向右让位。
+    pub fn set_external_drop(&mut self, x: f32, y: f32) {
+        let idx = self.drop_index_at(x, y).min(self.items.len());
+        if self.external_drop != Some(idx) {
+            self.external_drop = Some(idx);
+            self.slot_shift = true;
+            self.mark_dirty();
+        }
+    }
+
+    /// 外部拖放离开 / 落下：收掉插入位与让位。
+    pub fn clear_external_drop(&mut self) {
+        if self.external_drop.take().is_some() {
+            self.slot_shift = true;
+            self.mark_dirty();
+        }
+    }
+
+    /// 当前动态插入位（离屏验收 / 单测用）。
+    #[must_use]
+    pub const fn external_drop(&self) -> Option<usize> {
+        self.external_drop
     }
 
     /// 一次外部拖入该插到栏体的哪个位置。
@@ -713,8 +774,8 @@ impl Dock {
             self.drag = None;
             self.sep = Some(SepDrag {
                 y0: v,
-                icon0: self.cfg.icon_size,
-                zoom0: self.cfg.zoom_size,
+                icon0: self.pxi(self.cfg.icon_size),
+                zoom0: self.pxi(self.cfg.zoom_size),
                 // 减掉一个节流窗口：第一次移动就能生效，不必先空等 16 ms。
                 last: Instant::now() - SEP_THROTTLE,
             });
@@ -764,9 +825,12 @@ impl Dock {
             let (icon, zoom) = layout::sep_scale(v - sep.y0, sep.icon0, sep.zoom0);
             // **只在尺寸真变时**改配置：鼠标停着不动还反复重建窗口，
             // 就是上游注释里那句 "holding still cannot flicker"。
-            if icon != self.cfg.icon_size {
-                self.cfg.apply_i32(Key::IconSize, icon);
-                self.cfg.apply_i32(Key::ZoomSize, zoom);
+            if icon != self.pxi(self.cfg.icon_size) {
+                // `sep_scale` 算的是物理像素，配置里存逻辑像素。
+                self.cfg
+                    .apply_i32(Key::IconSize, nooksill_core::units::unscale(icon, self.dpi));
+                self.cfg
+                    .apply_i32(Key::ZoomSize, nooksill_core::units::unscale(zoom, self.dpi));
                 self.sep_dirty = true;
                 self.mark_dirty();
             }
@@ -789,6 +853,13 @@ impl Dock {
             let (ww, wh) = self.physical_size();
             let outside = u < -24.0 || v < -24.0 || u > ww + 24.0 || v > wh + 24.0;
             self.drop_outside = outside;
+            // 拖出去时压扁被拖项，让两侧图标合拢预览移除；拖回来恢复。
+            let preview = outside.then_some(d.index);
+            if self.remove_preview != preview {
+                self.remove_preview = preview;
+                self.slot_shift = true;
+                self.mark_dirty();
+            }
             if outside {
                 self.merge_target = None;
             } else {
@@ -802,7 +873,7 @@ impl Dock {
                     // 必须把自己排除掉：`drag_to` 开头已经 `take()` 了状态，
                     // `place_for` 里读 `self.drag` 只会拿到 `None`，于是把被拖项
                     // 也算进"左边有几个"，每次都会多挪一格。
-                    let target = self.place_for(u, d.index);
+                    let target = self.clamp_segment(self.place_for(u, d.index), d.index);
                     if target != d.index {
                         self.move_item(d.index, target);
                         d.index = target;
@@ -869,6 +940,39 @@ impl Dock {
             .count()
     }
 
+    /// 拖动中光标允许落在的插入下标。
+    ///
+    /// **运行中应用可以拖到任何位置**：落进固定区就由主循环就地固定
+    /// （`reorder_bar` 的 `PinnedNow`），顺序因此永远可写回配置。
+    ///
+    /// 反向不允许：固定条目拖不进"运行中"那一段。配置里没有"固定项排在
+    /// 临时项之后"这种顺序，而且那个手势也不是"取消固定"（那是右键菜单
+    /// 的事）——拖过去只会让图标在松手时莫名跳回来。
+    fn clamp_segment(&self, target: usize, dragged: usize) -> usize {
+        let n = self.pinned.min(self.items.len());
+        if dragged < n {
+            // 移出之后固定段还剩 n-1 项，能插的位置是 [0, n-1]。
+            target.min(n.saturating_sub(1))
+        } else {
+            target.min(self.items.len().saturating_sub(1))
+        }
+    }
+
+    /// 前 `n` 项是固定条目（取自配置），其后是运行中应用。
+    pub fn set_pinned(&mut self, n: usize) {
+        self.pinned = n.min(self.items.len());
+    }
+
+    /// 是否正按着某个条目（含还没越过起拖阈值的候选）。
+    ///
+    /// 主循环拿它决定"现在能不能重建 `items`"：重建会清掉按下与拖拽
+    /// 状态。`dragging()` 只覆盖已经起拖的情形，按下但还没动的那几帧
+    /// 用它才算得全。
+    #[must_use]
+    pub fn press_active(&self) -> bool {
+        self.drag.is_some() || self.press.is_some()
+    }
+
     /// 把第 `from` 项移到 `to`。图标纹理同步搬动，否则会"图标跟着位置跑"。
     fn move_item(&mut self, from: usize, to: usize) {
         if from == to || from >= self.items.len() || to >= self.items.len() {
@@ -886,7 +990,7 @@ impl Dock {
         }
         self.moved = true;
         self.order_changed = true;
-        self.pending_move = Some((from, to));
+        self.pending_moves.push((from, to));
     }
 
     /// 取走"顺序变过"的标记。
@@ -894,9 +998,9 @@ impl Dock {
         std::mem::take(&mut self.order_changed)
     }
 
-    /// 取走最近一次重排（主循环用它同步自己的配置副本）。
-    pub fn take_pending_move(&mut self) -> Option<(usize, usize)> {
-        self.pending_move.take()
+    /// 取走最近的重排队列（主循环按顺序施加到自己的配置副本上）。
+    pub fn take_pending_moves(&mut self) -> Vec<(usize, usize)> {
+        std::mem::take(&mut self.pending_moves)
     }
 
     /// 取走待处理的归组（被拖项 → 目标组）。
@@ -1064,7 +1168,28 @@ impl Dock {
             })
             .collect();
 
+        // 尺寸也跟着搬：`from_item` 给的 `cur` 是 0，直接换掉等于整条栏体
+        // 从零重新长出来。而扫描线程发现运行中应用变化就会重建一次
+        // （约 1.2 s 一次），那样每次重建都会闪一下。真正新出现的条目
+        // 仍然是 0，入场动画照旧。
+        let mut cur: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+        for it in &self.items {
+            if !it.path.is_empty() {
+                cur.entry(it.path.clone()).or_insert(it.cur);
+            }
+        }
+        let prev = std::mem::take(&mut self.items);
         self.items = items;
+        for (i, it) in self.items.iter_mut().enumerate() {
+            it.cur = if it.path.is_empty() {
+                // 分组 / 分割线没有路径，按位置沿用（它们不会换位）。
+                prev.get(i)
+                    .filter(|p| p.path.is_empty())
+                    .map_or(0.0, |p| p.cur)
+            } else {
+                cur.remove(&it.path).unwrap_or(0.0)
+            };
+        }
         self.hover = false;
         self.mouse = (-1.0, -1.0);
         self.press = None;
@@ -1188,7 +1313,7 @@ impl Dock {
         }
         let m = &self.metrics;
         let bars = layout::bars(m);
-        let gap = self.cfg.get_i32(Key::REFL_GAP).clamp(0, 30);
+        let gap = self.pxi(self.cfg.get_i32(Key::REFL_GAP).clamp(0, 30));
         let height = (m.refl_h - gap as f32 - 2.0).round() as i32;
         if height < 2 || bars.top < 0.0 {
             return None;
@@ -1221,6 +1346,19 @@ impl Dock {
         }
     }
 
+    /// 配置里的长度（96 DPI 逻辑像素）→ 物理像素。
+    ///
+    /// 与 `calc_metrics` 同一个换算函数：`Metrics` 之后全是物理像素，
+    /// 绘制层不必再想 DPI —— 除了这些直接读 `cfg` 的零散值。
+    fn pxf(&self, v: i32) -> f32 {
+        nooksill_core::units::scale(v, self.dpi) as f32
+    }
+
+    /// 同上，整数版。
+    fn pxi(&self, v: i32) -> i32 {
+        nooksill_core::units::scale(v, self.dpi)
+    }
+
     /// 窗口的**物理**像素尺寸。egui 画布尺寸 = 这个值 / ppp。
     ///
     /// 名字里带 `physical` 是有意的：`metrics.lw/lh` 是物理像素，
@@ -1251,6 +1389,7 @@ impl Dock {
     /// `dpi` 只在度量里用来做 DPI 缩放。几何计算全部委托给
     /// [`nooksill_core::layout`]，这里只负责把结果搬进 `geom`。
     pub fn update(&mut self, dpi: i32, dt_ms: f32) {
+        self.dpi = dpi;
         let kinds: Vec<SlotKind> = self.items.iter().map(DockItem::slot_kind).collect();
         let n_sep = kinds.iter().filter(|k| k.is_separator()).count();
         let m = layout::calc_metrics(&self.cfg, dpi, kinds.len(), n_sep, self.work);
@@ -1276,12 +1415,23 @@ impl Dock {
         let moved = std::mem::take(&mut self.moved);
 
         // 实际槽位与命中（用本帧槽位，否则气泡会比图标慢一帧）。
-        let cur: Vec<f32> = self.items.iter().map(|i| i.cur).collect();
-        let slots = layout::place_slots(&m, &cur, m.widget_extra);
+        let mut cur: Vec<f32> = self.items.iter().map(|i| i.cur).collect();
+        // 拖出栏体时把被拖项压成 0 宽，两侧图标**动态合拢**预览移除结果；
+        // 拖回来宽度恢复，图标滑回原位。
+        // `drag` 被 take（松手 / 丢失捕获）后预览自动失效，不必各处清理。
+        if let Some(i) = self.remove_preview.filter(|_| self.drag.is_some()) {
+            if let Some(c) = cur.get_mut(i) {
+                *c = 0.0;
+            }
+        }
+        // 外部文件拖入：在落点预留一个图标宽的空槽，左右图标分别让位。
+        let insert = self.external_drop.map(|at| (at.min(cur.len()), m.s));
+        let slots = layout::place_slots_insert(&m, &cur, m.widget_extra, insert);
         let bars = layout::bars(&m);
         self.hot = layout::hit_test(&m, &bars, &slots, &cur, view);
 
         self.geom = DockGeom {
+            insert_l: slots.insert_l,
             bar_l: slots.bar_l,
             bar_w: slots.bar_w,
             bar_top: bars.top,
@@ -1299,6 +1449,20 @@ impl Dock {
                 it.slide += it.prev_l - l;
             }
         }
+        // 插入空槽 / 移除预览也会挪动图标。用上一帧槽位补一次 `slide`，
+        // 让"两个图标向左右让出位置"是滑过去的而不是瞬间跳过去。
+        // 与上面的重排补偿不会同时触发（拖入时不在重排，反之亦然）。
+        if self.slot_shift {
+            self.slot_shift = false;
+            for (it, (&old, &new)) in self
+                .items
+                .iter_mut()
+                .zip(self.prev_slot_l.iter().zip(&slots.slot_l))
+            {
+                it.slide += old - new;
+            }
+        }
+        self.prev_slot_l = slots.slot_l.clone();
         for it in &mut self.items {
             if it.slide.abs() > 0.5 {
                 it.slide *= 0.62;
@@ -1462,9 +1626,7 @@ impl Dock {
             painter.text(
                 bar.center(),
                 Align2::CENTER_CENTER,
-                // 只承诺**真能**做到的：文件与文件夹能拖进来，网址要
-                // OLE 拖放（`IDropTarget`），还没接。
-                "将应用或文件夹拖到这里",
+                "将应用、文件夹或网址拖到这里",
                 FontId::proportional(13.0),
                 Color32::from_rgba_unmultiplied(255, 255, 255, 190),
             );
@@ -1486,12 +1648,34 @@ impl Dock {
         self.paint_tray_card(painter, p, dark);
         self.paint_separators(painter, p, dark);
         self.paint_icons(painter, p, dark);
+        self.paint_insert_mark(painter, p, dark);
         // 残影必须画在所有槽位内容之后，否则会被后面画的图标盖住。
         self.paint_drag_ghost(painter, p, dark);
         self.paint_hover_bubble(painter, p);
         self.paint_drag_hint(painter, p, bar);
         // 操作回执最后画：它要压在所有图标与悬停气泡之上。
         self.paint_notice(painter, p, bar, dark);
+    }
+
+    /// 外部文件拖入时在预留空槽里画一条胶囊插入标记。
+    ///
+    /// 空槽本身已经把左右图标推开，这条线让"会插在这里"更明确。
+    fn paint_insert_mark(&self, painter: &egui::Painter, p: Proj, dark: bool) {
+        let Some(u) = self.geom.insert_l else {
+            return;
+        };
+        let m = &self.metrics;
+        let slot_w = m.s + m.gap;
+        let mark_w = 4.0;
+        let h = m.bar_h * 0.72;
+        let top = self.geom.bar_top + (m.bar_h - h) * 0.5;
+        let rect = self.map(u + (slot_w - mark_w) * 0.5, top, mark_w, h, p);
+        let color = if dark {
+            Color32::from_rgba_unmultiplied(120, 190, 255, 235)
+        } else {
+            Color32::from_rgba_unmultiplied(46, 123, 246, 235)
+        };
+        painter.rect_filled(rect, CornerRadius::same(3), color);
     }
 
     /// 拖出栏体时给一句"松手移除"，否则用户不知道这个手势存在。
@@ -1678,7 +1862,7 @@ impl Dock {
 
     /// 栏体圆角：配置值不得大于半个栏高，否则 egui 的圆角会把矩形画成椭圆。
     fn bar_radius(&self, p: Proj) -> f32 {
-        let r = (self.cfg.radius as f32).min(self.metrics.bar_h / 2.0);
+        let r = self.pxf(self.cfg.radius).min(self.metrics.bar_h / 2.0);
         r * p.k
     }
 
@@ -1739,7 +1923,7 @@ impl Dock {
         if v <= 0 {
             return self.bar_radius(p);
         }
-        (v as f32).min(self.metrics.bar_h / 2.0) * p.k
+        self.pxf(v).min(self.metrics.bar_h / 2.0) * p.k
     }
 
     /// 系统托盘卡片：一个向下的箭头，点了打开 Windows 通知区域。
@@ -2063,7 +2247,7 @@ impl Dock {
             let b = self.to_egui(lx + lw, ly + lh, p);
             // 线宽来自 `SepWidth`（0..16，默认 2）。0.7 的系数让默认值落在
             // 原来的 1.4 px 上，老配置的观感不变。
-            let sw = self.cfg.get_i32(Key::SEP_WIDTH).clamp(0, 16) as f32;
+            let sw = self.pxf(self.cfg.get_i32(Key::SEP_WIDTH).clamp(0, 16));
             painter.line_segment([a, b], Stroke::new((sw * 0.7).max(0.5) * p.k, color));
         }
     }
@@ -2194,10 +2378,9 @@ impl Dock {
             return;
         }
 
-        // 没有图标 → 首字占位（中性 tonal 底 + 主题色首字母）。
-        if let Some(ch) = it.name.chars().next() {
-            crate::glyph::paint_monogram(painter, inner, ch, style, dark);
-        }
+        // 没有 shell 图标 → 按类型画预制图标（不读名称）。
+        // 旧版这里显示首字，中文在小尺寸下辨识度差、同名条目也分不出。
+        crate::glyph::paint_kind(painter, inner, it.kind, style, dark);
     }
 
     /// 归组提示：目标组图标外一圈强调色描边。
@@ -2865,7 +3048,7 @@ mod tests {
         let mut sizes = Vec::new();
         for dpi in [96, 120, 144, 192] {
             let ppp = dpi as f32 / 96.0;
-            let cfg = Config::defaults(dpi);
+            let cfg = Config::defaults();
             let m = layout::calc_metrics(&cfg, dpi, 3, 0, LRect::new(0, 0, 2560, 1400));
             // 卡片逻辑高度 = 物理 ÷ ppp；两行各占一半，上下各 4 逻辑点。
             let line_h = (m.bar_h / ppp - 8.0) / 2.0;
@@ -3043,7 +3226,7 @@ mod tests {
     }
 
     fn settled_dock(n: usize) -> Dock {
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         let items: Vec<DockItem> = (0..n)
             .map(|i| {
                 let it = Item::new(ItemKind::File, format!("第{i}项"), format!("C:/x{i}.exe"));
@@ -3079,7 +3262,7 @@ mod tests {
     /// 倒影：只有底部停靠、且开关打开时才有几何。
     #[test]
     fn reflection_only_for_a_bottom_dock() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.reflect = true;
         let mut dock = Dock::new(c.clone(), Vec::new(), LRect::new(0, 0, 2560, 1600));
         dock.update(96, nooksill_core::layout::REF_FRAME_MS);
@@ -3104,7 +3287,7 @@ mod tests {
     /// 小组件卡片的命中判定。
     #[test]
     fn widget_at_finds_the_card() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.clock = true;
         c.apply_i32(Key::RES_MON, 1);
         let mut dock = Dock::new(c, Vec::new(), LRect::new(0, 0, 2560, 1600));
@@ -3143,7 +3326,7 @@ mod tests {
     /// 图标条，`near_dock` 就会把小组件那一段判成离开了 Dock。
     #[test]
     fn hot_zone_covers_the_widget_strip() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.clock = true;
         c.apply_i32(Key::RES_MON, 1);
         let mut dock = Dock::new(c, Vec::new(), LRect::new(0, 0, 2560, 1600));
@@ -3184,7 +3367,7 @@ mod tests {
     /// 底停靠时，光标落在时钟上必须算"靠近"（回归：早先只认图标条）。
     #[test]
     fn cursor_on_clock_counts_as_near() {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.apply_i32(Key::RES_MON, 1);
         c.edge = Edge::Bottom;
         let mut dock = Dock::new(c, Vec::new(), LRect::new(0, 0, 2560, 1600));
@@ -3246,7 +3429,7 @@ mod tests {
 
     /// 侧边要留够空间，否则 3 个图标就占满整条栏，拖不出"另一个位置"。
     fn drag_dock() -> Dock {
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         let items: Vec<DockItem> = (0..3)
             .map(|i| {
                 let it = Item::new(ItemKind::File, format!("第{i}项"), format!("C:/x{i}.exe"));
@@ -3282,7 +3465,7 @@ mod tests {
     /// 组挤走）、松手时产出一条归组请求。
     #[test]
     fn dragging_onto_a_group_merges_instead_of_reordering() {
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         let items: Vec<DockItem> = vec![
             {
                 let it = Item::new(ItemKind::File, "记事本", "C:/a.exe");
@@ -3311,7 +3494,7 @@ mod tests {
         dock.drag_to(x1, y);
         assert_eq!(dock.merge_target(), Some(1), "应当认出下面是组");
         // 停在组上时**不能**重排：组一被挤走用户就瞄不准了。
-        assert_eq!(dock.take_pending_move(), None, "停在组上时不该重排");
+        assert!(dock.take_pending_moves().is_empty(), "停在组上时不该重排");
 
         assert_eq!(dock.release_at(x1, y), None, "拖过不算点击");
         assert_eq!(dock.take_pending_merge(), Some((0, 1)));
@@ -3321,7 +3504,7 @@ mod tests {
     /// 停在组上时不会重排 —— 拖到空白处又会重排。
     #[test]
     fn reorder_resumes_after_leaving_the_group() {
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         let items: Vec<DockItem> = vec![
             {
                 let it = Item::new(ItemKind::File, "记事本", "C:/a.exe");
@@ -3351,7 +3534,7 @@ mod tests {
         // 拖到组的右边（空白处）→ 归组目标消失，重排恢复。
         dock.drag_to(x1 + s, y);
         assert_eq!(dock.merge_target(), None, "离开组后不该再提示归组");
-        assert!(dock.take_pending_move().is_some(), "离开组后应当能重排");
+        assert!(!dock.take_pending_moves().is_empty(), "离开组后应当能重排");
     }
 
     /// 拖出栏体松手 = 移除，不是点击也不是重排。
@@ -3367,7 +3550,7 @@ mod tests {
         // 拖到窗口上方很远处：24 px 容差之外。
         dock.drag_to(x0 + 20.0, -100.0);
         assert!(dock.drag_outside(), "应当认出拖出了栏体");
-        assert_eq!(dock.take_pending_move(), None, "拖出去时不该重排");
+        assert!(dock.take_pending_moves().is_empty(), "拖出去时不该重排");
 
         assert_eq!(dock.release_at(x0 + 20.0, -100.0), None);
         assert_eq!(dock.take_pending_remove(), Some(0));
@@ -3451,7 +3634,7 @@ mod tests {
 
         let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
         assert_eq!(names, ["第1项", "第2项", "第0项"], "第 0 项应当被挪到最后");
-        assert_eq!(dock.take_pending_move(), Some((0, 2)));
+        assert_eq!(dock.take_pending_moves(), vec![(0, 2)]);
         assert!(dock.take_order_changed());
     }
 
@@ -3489,7 +3672,7 @@ mod tests {
     /// 再也不动，表现为"所有图标都小一圈、点击坐标全对不上"。
     #[test]
     fn entrance_animation_converges_to_base_size() {
-        let cfg = Config::defaults(96);
+        let cfg = Config::defaults();
         let items: Vec<DockItem> = (0..3)
             .map(|i| {
                 DockItem::from_item(&Item::new(
@@ -3559,6 +3742,24 @@ mod tests {
         dock.cancel_drag();
         assert_eq!(dock.release_at(u, v), None, "丢了捕获就不该再触发点击");
         assert!(dock.take_click().is_none());
+    }
+
+    /// 外部拖入时布局真的预留空槽，离开后收干净。
+    #[test]
+    fn external_drop_reserves_and_releases_an_insert_slot() {
+        let mut dock = settled_dock(3);
+        let (u, v) = item_center(&dock, 1);
+        assert_eq!(dock.external_drop(), None);
+
+        dock.set_external_drop(u, v);
+        assert!(dock.external_drop().is_some(), "应当记下插入位");
+        dock.update(96, 16.0);
+        assert!(dock.geom.insert_l.is_some(), "布局必须画出插入标记位置");
+
+        dock.clear_external_drop();
+        assert_eq!(dock.external_drop(), None);
+        dock.update(96, 16.0);
+        assert!(dock.geom.insert_l.is_none(), "离开后不能残留空槽");
     }
 
     /// 自动隐藏：宽限期内不收起，超过才收起；一靠近立刻回来。
@@ -3936,7 +4137,7 @@ mod tests {
 
     /// 造一条中间带分割线的 Dock（下标 1），返回它和分割线的命中坐标。
     fn dock_with_sep(enabled: bool) -> (Dock, f32, f32) {
-        let mut cfg = Config::defaults(96);
+        let mut cfg = Config::defaults();
         cfg.apply_i32(Key::SEP_SCALE, i32::from(enabled));
         let kinds = [ItemKind::File, ItemKind::Separator, ItemKind::File];
         let items: Vec<DockItem> = kinds
@@ -4008,5 +4209,215 @@ mod tests {
         dock.cancel_drag();
         assert!(dock.cfg.icon_size > icon0, "尺寸改动保留");
         assert!(!dock.sep_cursor(u + 400.0, v), "已经不在拖拽态");
+    }
+
+    /// 逐帧扫过整条栏：重排必须单调前进，不能来回跳。
+    ///
+    /// 这条钉的是一个真实手感问题 —— 用户描述为"拖动在切换的一瞬间就
+    /// 被什么东西打断了"。真机上每次 `drag_to` 之后都会跟一帧
+    /// `update()`（重算放大与槽位），所以场景必须带 `update` 才能复现；
+    /// 只连发 `drag_to` 的测试永远是绿的。
+    #[test]
+    fn dragging_across_the_bar_never_ping_pongs() {
+        let mut dock = drag_dock();
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x0 = dock.geom.act_c[0];
+        let last = *dock.geom.act_c.last().unwrap();
+
+        assert!(dock.press_at(x0, y, false));
+        let mut orders: Vec<Vec<String>> = Vec::new();
+        let mut x = x0;
+        while x < last + s * 1.5 {
+            // 步长要大于起拖阈值，否则第一帧还没进入拖拽态。
+            x += 10.0;
+            dock.mouse = (x, y);
+            dock.hover = true;
+            dock.drag_to(x, y);
+            assert!(
+                dock.dragging().is_some(),
+                "x={x:.0} 时拖拽状态丢了: drag={:?} press={:?} sep={} lock={}",
+                dock.drag,
+                dock.press,
+                dock.sep.is_some(),
+                dock.cfg.lock
+            );
+            // 真机每帧都会走一次 `update`（`step_layout`），放大动画会
+            // 改变 `act_c`，而这正是可能让 `place_for` 反悔的来源。
+            dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+            let order: Vec<String> = dock.items.iter().map(|i| i.name.clone()).collect();
+            if orders.last() != Some(&order) {
+                orders.push(order);
+            }
+        }
+        // 期望：0 号一路挪到末尾，中间不回头。
+        let seen: Vec<Vec<&str>> = orders
+            .iter()
+            .map(|o| o.iter().map(String::as_str).collect())
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                vec!["第0项", "第1项", "第2项"],
+                vec!["第1项", "第0项", "第2项"],
+                vec!["第1项", "第2项", "第0项"],
+            ],
+            "顺序应当单调向右挪，出现回头就是抖动"
+        );
+    }
+
+    /// 造一条"固定条目 + 运行中应用"混排的 Dock。
+    fn dock_with_temps(pinned: usize, total: usize) -> Dock {
+        let cfg = Config::defaults();
+        let items: Vec<DockItem> = (0..total)
+            .map(|i| {
+                let it = Item::new(ItemKind::File, format!("第{i}项"), format!("C:/x{i}.exe"));
+                let mut d = DockItem::from_item(&it);
+                d.cur = cfg.icon_size as f32;
+                d
+            })
+            .collect();
+        let mut dock = Dock::new(cfg, items, LRect::new(0, 0, 2560, 1400));
+        dock.set_pinned(pinned);
+        dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        dock
+    }
+
+    /// 从头拖到尾，只在这个 Dock 上扫一遍（步长大于起拖阈值）。
+    fn sweep_right(dock: &mut Dock) -> Vec<(usize, usize)> {
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x0 = dock.geom.act_c[0];
+        let last = *dock.geom.act_c.last().unwrap();
+        assert!(dock.press_at(x0, y, false));
+        let mut x = x0;
+        while x < last + s {
+            x += 12.0;
+            dock.mouse = (x, y);
+            dock.hover = true;
+            dock.drag_to(x, y);
+            dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        }
+        dock.take_pending_moves()
+    }
+
+    /// 固定条目拖不过"运行中应用"那一段（反向是允许的，见下一条）。
+    ///
+    /// 栏体顺序最终要写回 `[Items]`，而配置里只有一条列表 ——
+    /// "固定项排在临时项之后"没有地方存。夹住之后主循环只需要搬数组
+    /// 就能同步，**不必整条重建**（重建会清掉 `drag`，那正是
+    /// "图标刚换位、拖动立刻断了"的成因）。
+    #[test]
+    fn dragging_never_crosses_the_pinned_boundary() {
+        let mut dock = dock_with_temps(2, 4);
+        let moves = sweep_right(&mut dock);
+        let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["第1项", "第0项", "第2项", "第3项"],
+            "被拖的固定条目应当停在第 2 段之前"
+        );
+        assert_eq!(moves, vec![(0, 1)], "只该换一格");
+        assert!(dock.dragging().is_some(), "拖动不该被换位打断");
+    }
+
+    /// 运行中应用可以拖进固定区 —— 主循环会就地把它固定（`BarMove::PinnedNow`）。
+    ///
+    /// `Dock` 自己不改 `pinned`：分段是主循环的事（`set_pinned`），窗口过程
+    /// 只负责"光标落在哪个插入位"。两者在同一轮消息循环里同步，用户看不到
+    /// 中间态。
+    #[test]
+    fn running_items_can_be_dragged_into_the_pinned_zone() {
+        let mut dock = dock_with_temps(2, 4);
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x3 = dock.geom.act_c[3];
+        let x0 = dock.geom.act_c[0];
+
+        assert!(dock.press_at(x3, y, false), "按在第 4 项上");
+        // 要扫到最左图标的**左侧**才算"插到第 0 位"：`place_for` 数的是
+        // "中心在光标左边的条目"，停在第一个图标上方只会得到 1。
+        let mut x = x3;
+        while x > x0 - 2.0 * s {
+            x -= 12.0;
+            dock.mouse = (x, y);
+            dock.hover = true;
+            dock.drag_to(x, y);
+            dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        }
+        let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names[0], "第3项", "运行中应用应当能拖到最前面");
+        assert!(dock.dragging().is_some(), "拖动不该被换位打断");
+    }
+
+    /// 全是运行中应用时照样能换位 —— 用户的 `[Items]` 可能就是空的。
+    #[test]
+    fn running_items_swap_among_themselves() {
+        let mut dock = dock_with_temps(0, 3);
+        sweep_right(&mut dock);
+        let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["第1项", "第2项", "第0项"], "临时条目之间要能换位");
+    }
+
+    /// 按下但还没越过阈值也算"手上有东西"。
+    ///
+    /// 主循环拿它决定能不能重建列表：这一小段空档里重建，
+    /// 等于在用户按下与起拖之间把 `press` 抹掉。
+    #[test]
+    fn press_state_covers_the_frames_before_the_drag_starts() {
+        let mut dock = drag_dock();
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x = dock.geom.act_c[0];
+
+        assert!(!dock.press_active());
+        assert!(dock.press_at(x, y, false));
+        assert!(dock.press_active(), "按下即算，不能等到越过阈值");
+        dock.drag_to(x + 40.0, y);
+        assert!(dock.press_active());
+        assert_eq!(dock.release_at(x + 40.0, y), None);
+        assert!(!dock.press_active(), "松手之后必须放行重建");
+    }
+
+    /// 重建列表不能把已经长大的图标缩回去。
+    ///
+    /// 扫描线程发现运行中应用变化就重建一次（约 1.2 s 一次），`from_item`
+    /// 给的 `cur` 是 0 —— 直接换掉等于整条栏体从零重新长出来，每次扫描都闪。
+    #[test]
+    fn replacing_items_keeps_the_current_icon_size() {
+        let mut dock = drag_dock();
+        let s = dock.metrics.s;
+        dock.items[1].cur = s * 0.5;
+        let keep = dock.items.clone();
+        dock.replace_items(keep);
+        assert_eq!(dock.items[1].cur, s * 0.5, "同路径的条目要沿用尺寸");
+
+        let mut more = dock.items.clone();
+        more.push(DockItem::from_item(&Item::new(
+            ItemKind::File,
+            "新",
+            "C:/new.exe",
+        )));
+        dock.replace_items(more);
+        assert_eq!(dock.items[1].cur, s * 0.5);
+        assert_eq!(dock.items[3].cur, 0.0, "真正新出现的条目仍要入场动画");
+    }
+
+    /// `pinned` 比列表还大也不能 panic（配置热更新会短暂错位）。
+    #[test]
+    fn a_stale_pinned_count_cannot_break_the_clamp() {
+        let mut dock = dock_with_temps(3, 3);
+        dock.replace_items(vec![DockItem::from_item(&Item::new(
+            ItemKind::File,
+            "只剩一项",
+            "C:/only.exe",
+        ))]);
+        dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        let s = dock.metrics.s;
+        let y = dock.geom.icon_bottom - s / 2.0;
+        let x = dock.geom.act_c[0];
+        assert!(dock.press_at(x, y, false));
+        dock.drag_to(x + 40.0, y);
+        assert!(dock.take_pending_moves().is_empty(), "一项没有可换的位置");
     }
 }

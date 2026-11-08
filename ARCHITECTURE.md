@@ -290,7 +290,7 @@ async 运行时带来的调度开销与栈占用都不划算。
     所有几何计算里"检查尺寸 <= 0 就早退"必须写在 clamp **之前**，
     并同时挡 `NaN` / 无穷。可变上界的 clamp（如 `w as f32 - 1.001`）
     也要先保证上界非负。
-16. **所有弹出面板的视觉样式只有一个来源**：`gpu::panel_style::PanelStyle`。
+16. **所有弹出面板的视觉样式只有一个来源**：`gpu::widgets::style::PanelStyle`。
     七个面板（日历 / 控制中心 / 计时器 / 资源 / 速记 / 分组 / 编辑）统一
     走 `paint_frame()`（底色 → 磨砂叠加层 → 细边框）与
     `ink / ink_sub / faint / card / card_hover / line`；圆角只用
@@ -298,6 +298,50 @@ async 运行时带来的调度开销与栈占用都不划算。
     注意 `argbc(a,r,g,b)` 是 alpha 在前，与 egui 的
     `from_rgba_unmultiplied(r,g,b,a)` 相反 —— 这个项目已经因此错两次。
     配置经进程级 `sync_prefs` 同步，不要在单个面板里另读 `Config`。
+    这些面板的物理位置统一在 `gpu::widgets/`（见不变式 17）。
+17. **小组件代码按「一个面板一个模块」放在 `gpu::widgets/`**：
+    `calendar / control / timer / resource / notes / group / editor / style`。
+    `lib.rs` 用 `pub use widgets::calendar as calendar_win` 保留旧路径，
+    外部调用方可以逐步迁移；模块内部一律用 `widgets::` 新路径。
+    新增小组件只需在 `widgets/mod.rs` 加一行声明。
+18. **拖入走 `gpu::drop_target::DockDropTarget`（OLE `IDropTarget`）**，
+    `DragAcceptFiles` 只是注册失败时的兜底。`DragOver` 只负责把落点写进
+    [`Dock::set_external_drop`]，数据落地一律在 `Drop` 里走
+    `CF_HDROP` → `push_dropped_paths` —— 与 `WM_DROPFILES` 共用同一条
+    路径，别在两条分支里各写一套解析。`STGMEDIUM` 必须无条件
+    `ReleaseStgMedium`。回调在 UI 线程（STA），可直接解引用
+    `GWLP_USERDATA` 上的 `Dock`。
+19. **插入让位是布局层职责，不是绘制层 hack**：
+    `layout::place_slots_insert` 预留空槽并把 `insert_l` 交给绘制层；
+    `Dock::update` 用上一帧 `slot_l` 补 `slide` 做平滑。移除预览同理，
+    把被拖项宽度压 0 让两侧合拢，并用 `drag.is_some()` 自动失效。
+    别在 `paint` 里硬挪图标 —— 那样命中测试会与视觉错位。
+20. **取不到 shell 图标时画 `glyph::paint_kind(ItemKind)`，不读名称**。
+    `Builtin::from_kind` 是穷尽匹配，新增 `ItemKind` 会被编译器逼着补
+    预制图标。`paint_monogram`（名称首字）只保留给图标画廊展示，
+    生产路径不得调用 —— 中文首字在 20px 下辨识度差、同名条目分不出。
+21. **按住期间不重建栏体列表**。`App::sync_items` 在
+    `Dock::press_active()`（按下即算，不等起拖阈值）时只置
+    `items_stale`，由 `flush_items_stale` 在松手后补。`replace_items` 会
+    清掉 `drag / press / hover`，边拖边重建的表现是"图标刚换位、拖动
+    立刻断"。同理，`pending_moves` 是**队列**：一帧里可能连换好几次位，
+    只留最后一次会让配置与栏体差一格（点 A 启动 B）。
+22. **换位只在「可写回」的方向上跨段**（`Dock::clamp_segment` +
+    `reorder_bar`）：前 `pinned` 项来自配置 `[Items]`，其后是运行中应用。
+    栏体上"固定项夹在临时项中间"这种顺序配置装不下，所以：
+    - **运行中应用 → 固定区**：允许，并在落点**就地固定**（`BarMove::PinnedNow`）。
+      这就是"把正在运行的应用固定到 Dock"的手势，顺序天然可写回。
+    - **固定条目 → 运行中区**：夹在固定区末尾。那不是"取消固定"的手势
+      （取消固定走右键菜单），拖过去只会在松手时莫名跳回来。
+    - 运行中应用之间可以换位，顺序写回 `temp_keys`（扫描线程按它保序，
+      不写回会被 1.2 s 后的扫描冲掉），但**不落盘**：它是会话状态。
+23. **长度键存 96 DPI 逻辑像素，物理换算只在渲染处做一次**。
+    `Key::is_length()` 是唯一判定（表驱动键看 `NUMERIC_KEYS` 最后一列），
+    收口只有 `layout::calc_metrics`（栏体几何）与 `Dock::pxf/pxi`（零散
+    绘制点）两处。新增长度键只改表的最后一个布尔值，不要在读取处再乘
+    `dpi/96`；弹出面板走 egui 的逻辑点（`pixels_per_point`），已经是
+    DPI 无关的，重复缩放会让它在 150% 下变大 1.5 倍。ini 里的旧值是
+    物理像素，由 `Config::migrate_units`（v3 → v4）一次性换算。
 
 ## 八、与 C 版的模块映射
 

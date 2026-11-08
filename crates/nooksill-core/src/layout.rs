@@ -251,7 +251,7 @@ impl WidgetStrip {
     ///
     /// `clock_w` 是时钟卡片自己的宽度（由内容决定，不走 `width()` 公式）。
     #[must_use]
-    pub fn build(cfg: &Config, bar_h: f32, gap: f32, clock_w: i32) -> Self {
+    pub fn build(cfg: &Config, dpi: i32, bar_h: f32, gap: f32, clock_w: i32) -> Self {
         // `WOrder` 只交换前两位，其余固定，
         // 托盘永远排在最后一个。
         let order = if cfg.get_i32(Key::W_ORDER) != 0 {
@@ -276,7 +276,8 @@ impl WidgetStrip {
             ]
         };
 
-        let gap_extra = cfg.get_i32(Key::WIDGET_GAP).clamp(0, 24) as f32;
+        // 卡片之间的额外间距：配置里是逻辑像素，这里换成物理。
+        let gap_extra = units::scale(cfg.get_i32(Key::WIDGET_GAP).clamp(0, 24), dpi) as f32;
         let mut items = [None; 7];
         let mut len = 0usize;
         let mut extra = 0.0f32;
@@ -486,22 +487,26 @@ fn span(pad_x: f32, s: f32, gap: f32, sep_w: f32, n_icon: usize, n_sep: usize) -
 /// `work` 是目标显示器的**工作区**（已排除任务栏）。
 #[must_use]
 pub fn calc_metrics(cfg: &Config, dpi: i32, n_items: usize, n_sep: usize, work: Rect) -> Metrics {
-    let s0 = cfg.icon_size as f32;
+    // 配置里的长度是**96 DPI 逻辑像素**，这里统一换成物理像素。
+    // 全部出口只有这一处：`Metrics` 之后全是物理像素，绘制层不必再换算，
+    // 也就不会出现"某个尺寸忘了跟 DPI"。
+    let sc = |v: i32| crate::units::scale(v, dpi) as f32;
+    let s0 = sc(cfg.icon_size);
     // 放大尺寸不得小于基准尺寸，否则计算出的 `overhang` 会变成负数。
     let z0 = if cfg.zoom {
-        cfg.zoom_size.max(cfg.icon_size) as f32
+        sc(cfg.zoom_size.max(cfg.icon_size))
     } else {
         s0
     };
-    let g0 = cfg.spacing as f32;
-    let pad0 = cfg.pad as f32;
+    let g0 = sc(cfg.spacing);
+    let pad0 = sc(cfg.pad);
     // 分割线宽度由 `SepGap` 决定
     // （旧版是写死的 `16 + spacing/2`）。
-    let sep0 = cfg.get_i32(Key::SEP_GAP) as f32;
+    let sep0 = sc(cfg.get_i32(Key::SEP_GAP));
     // 横向内边距自 v1.6.5 起独立成 `HPad`，
     // 不再是 `pad + 2`。默认值因此从 10 变成 12 —— 栏体两侧各宽 2 px，
     // 这是 1.6.5 起对外可见的变化。
-    let pad_x0 = cfg.get_i32(Key::HPAD).max(0) as f32;
+    let pad_x0 = sc(cfg.get_i32(Key::HPAD).max(0));
 
     let n_icon = n_items.saturating_sub(n_sep);
     let wb = span(pad_x0, s0, g0, sep0, n_icon, n_sep);
@@ -527,7 +532,7 @@ pub fn calc_metrics(cfg: &Config, dpi: i32, n_items: usize, n_sep: usize, work: 
 
     // 倒影高度可调：`ReflSize` 百分比 + `ReflGap` 间距。
     let refl_h = if cfg.reflect && cfg.edge == Edge::Bottom {
-        s * (cfg.get_i32(Key::REFL_SIZE) as f32 / 100.0) + cfg.get_i32(Key::REFL_GAP) as f32 + 2.0
+        s * (cfg.get_i32(Key::REFL_SIZE) as f32 / 100.0) + sc(cfg.get_i32(Key::REFL_GAP)) + 2.0
     } else {
         0.0
     };
@@ -537,7 +542,7 @@ pub fn calc_metrics(cfg: &Config, dpi: i32, n_items: usize, n_sep: usize, work: 
     // 小组件条带。v1.4.0 只有时钟一个成员，
     // 这里的 `extra` 恰好等于旧版的 `clock_extra`。
     let clock_w = clock_width(cfg, dpi);
-    let widgets = WidgetStrip::build(cfg, bar_h, gap, clock_w);
+    let widgets = WidgetStrip::build(cfg, dpi, bar_h, gap, clock_w);
     let widget_extra = widgets.extra;
 
     // 栏体之上要留出的空间：放大溢出 + 半个图标（标签气泡）+ 固定余量。
@@ -923,19 +928,40 @@ pub struct Slots {
     pub slot_r: Vec<f32>,
     /// 每个槽位的实际中心。
     pub act_c: Vec<f32>,
+    /// 外部拖入时预留空槽的**左边界**（逻辑像素）；`None` = 没有插入位。
+    /// 绘制层用它画插入标记。
+    pub insert_l: Option<f32>,
 }
 
 /// 由当前边长推出实际槽位。`cur` 的顺序与条目一致。
-///
-/// 栏宽超过可用宽度时整体截断（`max_w`），此时右端图标会被裁掉 ——
-/// 宁可裁边，也不要让栏体溢出屏幕。
 #[must_use]
 pub fn place_slots(m: &Metrics, cur: &[f32], widget_extra: f32) -> Slots {
+    place_slots_insert(m, cur, widget_extra, None)
+}
+
+/// 带**插入空槽**的槽位计算。
+///
+/// `insert = Some((index, width))` 表示在第 `index` 个条目之前预留一个
+/// 宽度为 `width` 的空位（外部拖文件进 Dock 时的动态让位）。空槽计入
+/// 栏体总宽，插入点右侧的所有图标依次右移；`index == cur.len()` 时
+/// 空槽落在末尾。
+///
+/// 与旧函数分开是为了让所有既有调用点零改动，也让"有没有插入空槽"
+/// 在测试里能直接断言。
+#[must_use]
+pub fn place_slots_insert(
+    m: &Metrics,
+    cur: &[f32],
+    widget_extra: f32,
+    insert: Option<(usize, f32)>,
+) -> Slots {
     let n = cur.len();
+    // 空槽本身 + 它带来的一次额外间隔。
+    let extra = insert.map_or(0.0, |(_, w)| w + m.gap);
     let total = if n == 0 {
-        2.0 * m.pad_x + m.s * 4.0
+        2.0 * m.pad_x + m.s * 4.0 + extra
     } else {
-        2.0 * m.pad_x + cur.iter().sum::<f32>() + m.gap * (n - 1) as f32
+        2.0 * m.pad_x + cur.iter().sum::<f32>() + m.gap * (n - 1) as f32 + extra
     };
     // 可用宽度必须夹到 >= 0。小组件条带占位超过窗口宽度时（空条目 +
     // 多个小组件是很常见的组合），`lw - 4 - widget_extra` 会是负数，
@@ -949,18 +975,33 @@ pub fn place_slots(m: &Metrics, cur: &[f32], widget_extra: f32) -> Slots {
     let mut slot_l = Vec::with_capacity(n);
     let mut slot_r = Vec::with_capacity(n);
     let mut act_c = Vec::with_capacity(n);
-    for &c in cur {
+    for (i, &c) in cur.iter().enumerate() {
+        if insert.is_some_and(|(at, _)| at == i) {
+            x += extra;
+        }
         slot_l.push(x);
         slot_r.push(x + c);
         act_c.push(x + c / 2.0);
         x += c + m.gap;
     }
+    // 末尾插入时空槽不在循环里，但 `total` 已经把它算进 bar_w，这里
+    // 只记录位置供绘制插入标记用（通过 Slots::insert_l 带出）。
+    let insert_l = insert.map(|(at, _)| {
+        let at = at.min(n);
+        if at < n {
+            // `slot_l[at]` 已经让位右移过，减去整个空槽才是它的左边界。
+            slot_l[at] - extra
+        } else {
+            slot_r.last().copied().unwrap_or(x - m.gap) + m.gap
+        }
+    });
     Slots {
         bar_l,
         bar_w,
         slot_l,
         slot_r,
         act_c,
+        insert_l,
     }
 }
 
@@ -1016,7 +1057,7 @@ mod tests {
     use crate::config::Config;
 
     fn cfg96() -> Config {
-        Config::defaults(96)
+        Config::defaults()
     }
 
     fn work() -> Rect {
@@ -1060,6 +1101,25 @@ mod tests {
     /// `widget_extra` 大于 `lw`，旧写法 `total.min(lw - 4 - extra)`
     /// 直接得到约 -50.67，栏体渐变在 `radius.clamp(0.0, -25.33)`
     /// 处 panic —— 表现为"双击打开就报错"。
+    /// 外部拖入的插入空槽：插入点左侧左移、右侧右移，共同让出一个图标宽。
+    #[test]
+    fn insert_slot_pushes_icons_apart() {
+        let m = calc_metrics(&cfg96(), 96, 0, 0, work());
+        let cur = vec![48.0; 4];
+        let plain = place_slots(&m, &cur, 0.0);
+        let with = place_slots_insert(&m, &cur, 0.0, Some((2, 48.0)));
+        let extra = 48.0 + m.gap;
+        // 栏体变宽会让整体左移一点，插入点右侧再多右移一个空槽。
+        // 用「右差距 - 左差距」消去居中偏移，结果必须正好是空槽宽度。
+        let left = with.slot_l[0] - plain.slot_l[0];
+        let right = with.slot_l[2] - plain.slot_l[2];
+        assert!((right - left - extra).abs() < 0.01, "两侧没有让出位置");
+        assert!((with.slot_l[1] - plain.slot_l[1] - left).abs() < 0.01);
+        assert!((with.slot_l[3] - plain.slot_l[3] - right).abs() < 0.01);
+        assert!(plain.insert_l.is_none());
+        assert!(with.insert_l.is_some(), "绘制层要拿到插入标记位置");
+    }
+
     #[test]
     fn widget_strip_larger_than_window_never_yields_negative_bar_width() {
         let m = calc_metrics(&cfg96(), 96, 0, 0, work());
@@ -1077,7 +1137,7 @@ mod tests {
         let mut cfg = cfg96();
         let mut build = |gap: i32| {
             cfg.apply_i32(Key::WIDGET_GAP, gap);
-            WidgetStrip::build(&cfg, 76.0, 8.0, 166)
+            WidgetStrip::build(&cfg, 96, 76.0, 8.0, 166)
         };
         let a = build(6);
         let b = build(18);
@@ -1484,7 +1544,7 @@ mod tests {
 
     #[test]
     fn metric_scales_with_dpi() {
-        let c = Config::defaults(144);
+        let c = Config::defaults();
         let m = calc_metrics(&c, 144, 3, 0, Rect::new(0, 0, 2560, 1400));
         assert_eq!(m.s, 72.0);
     }

@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::time::Instant;
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::item::ItemKind;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -577,11 +577,13 @@ fn paint(
                 EguiRect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
-        } else if let Some(c) = kid.name.chars().next() {
-            crate::glyph::paint_monogram(
+        } else {
+            // 取不到 shell 图标时按类型画预制图标，不再用名称首字。
+            // 中文首字在 20px 下辨识度差，同名条目也分不出来。
+            crate::glyph::paint_kind(
                 painter,
                 cell,
-                c,
+                kid.kind,
                 crate::glyph::IconStyle::new(
                     Color32::WHITE,
                     Color32::from_rgb(46, 123, 246),

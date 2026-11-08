@@ -20,6 +20,7 @@
 
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect as EguiRect, Stroke};
 use nooksill_core::control::Tile;
+use nooksill_core::item::ItemKind;
 
 /// 24px 画布的 20px 安全区（归一化半径）。
 const SAFE: f32 = 0.40;
@@ -101,7 +102,11 @@ impl IconStyle {
     }
 }
 
-/// 需要现画的 Dock 内置条目。
+/// 需要现画的预制图标：Dock 内置条目 + **按条目类型**的兜底图标。
+///
+/// 后半组是给"取不到 shell 图标"的条目用的。以前这类条目退化成
+/// `paint_monogram`（名称首字），中文首字在小尺寸下辨识度差、同名
+/// 条目也分不出来；现在按类型画可辨识的矢量图形。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Builtin {
     /// `nooksill:start` —— 四格窗。
@@ -110,6 +115,18 @@ pub enum Builtin {
     Launchpad,
     /// `nooksill:notes` —— 一张带横线的便签。
     Notes,
+    /// 文件夹：标签 + 圆角盒身。
+    Folder,
+    /// 普通文件：一张带横线的纸。
+    File,
+    /// 网址：圆环 + 经纬线。
+    Url,
+    /// 分组：2×2 圆点（与 `Start` 的方块区分）。
+    Group,
+    /// 回收站：桶身 + 盖。
+    Trash,
+    /// 分割线：一条竖线。
+    Separator,
 }
 
 impl Builtin {
@@ -124,6 +141,21 @@ impl Builtin {
             Some(Self::Notes)
         } else {
             None
+        }
+    }
+
+    /// 按条目类型选预制图标。覆盖 `ItemKind` 全部分支，新增类型时
+    /// 编译器会强制在这里补一档，不会悄悄退回"显示名字"。
+    #[must_use]
+    pub const fn from_kind(kind: ItemKind) -> Self {
+        match kind {
+            ItemKind::File => Self::File,
+            ItemKind::Folder => Self::Folder,
+            ItemKind::Url => Self::Url,
+            ItemKind::Group => Self::Group,
+            ItemKind::Trash => Self::Trash,
+            ItemKind::Note => Self::Notes,
+            ItemKind::Separator => Self::Separator,
         }
     }
 }
@@ -391,7 +423,97 @@ pub fn paint_tile(painter: &Painter, rect: EguiRect, kind: Builtin, style: IconS
                 );
             }
         }
+        // ---- 按条目类型的预制兜底图标 ---------------------------------
+        // 统一是「主题色圆角底 + 白色图形」，与上面的内置条目同一套
+        // 视觉语言；全部只用圆 / 圆角矩形 / 线段，不留锐角。
+        Builtin::Folder => {
+            painter.rect_filled(t, radius, style.accent);
+            let pad = s * 0.22;
+            let tab = EguiRect::from_min_size(
+                Pos2::new(t.left() + pad, t.top() + pad * 0.85),
+                egui::vec2(s * 0.34, s * 0.18),
+            );
+            painter.rect_filled(tab, CornerRadius::same(pix(s * 0.05)), Color32::WHITE);
+            let body = EguiRect::from_min_max(
+                Pos2::new(t.left() + pad, t.top() + pad * 1.35),
+                Pos2::new(t.right() - pad, t.bottom() - pad),
+            );
+            painter.rect_filled(body, CornerRadius::same(pix(s * 0.06)), Color32::WHITE);
+        }
+        Builtin::File => {
+            painter.rect_filled(t, radius, style.accent);
+            let pad = s * 0.24;
+            let doc = EguiRect::from_min_size(
+                Pos2::new(t.left() + pad, t.top() + pad),
+                egui::vec2(s - 2.0 * pad, s - 2.0 * pad),
+            );
+            painter.rect_filled(doc, CornerRadius::same(pix(s * 0.05)), Color32::WHITE);
+            let x0 = doc.left() + doc.width() * 0.20;
+            let lw = doc.width() * 0.60;
+            for k in 0..3 {
+                let y = doc.top() + doc.height() * (0.36 + k as f32 * 0.19);
+                painter.line_segment(
+                    [Pos2::new(x0, y), Pos2::new(x0 + lw, y)],
+                    Stroke::new(s * 0.035, style.accent),
+                );
+            }
+        }
+        Builtin::Url => {
+            painter.rect_filled(t, radius, style.accent);
+            let (cx, cy) = (t.center().x, t.center().y);
+            let r = s * 0.27;
+            let w = Stroke::new(s * 0.05, Color32::WHITE);
+            painter.circle_stroke(Pos2::new(cx, cy), r, w);
+            painter.line_segment([Pos2::new(cx - r, cy), Pos2::new(cx + r, cy)], w);
+            painter.line_segment([Pos2::new(cx, cy - r), Pos2::new(cx, cy + r)], w);
+        }
+        Builtin::Group => {
+            painter.rect_filled(t, radius, style.accent);
+            let q = s * 0.22;
+            let gap = s * 0.13;
+            let o = (s - 2.0 * q - gap) / 2.0;
+            for i in 0..4 {
+                let x = t.left() + o + (i % 2) as f32 * (q + gap) + q / 2.0;
+                let y = t.top() + o + (i / 2) as f32 * (q + gap) + q / 2.0;
+                painter.circle_filled(Pos2::new(x, y), q / 2.0, Color32::WHITE);
+            }
+        }
+        Builtin::Trash => {
+            painter.rect_filled(t, radius, style.accent);
+            let pad = s * 0.26;
+            let lid_y = t.top() + pad * 1.15;
+            painter.line_segment(
+                [
+                    Pos2::new(t.left() + pad * 0.75, lid_y),
+                    Pos2::new(t.right() - pad * 0.75, lid_y),
+                ],
+                Stroke::new(s * 0.055, Color32::WHITE),
+            );
+            let body = EguiRect::from_min_max(
+                Pos2::new(t.left() + pad, lid_y + s * 0.04),
+                Pos2::new(t.right() - pad, t.bottom() - pad),
+            );
+            painter.rect_filled(body, CornerRadius::same(pix(s * 0.05)), Color32::WHITE);
+        }
+        Builtin::Separator => {
+            painter.rect_filled(t, radius, style.accent);
+            let (cx, cy) = (t.center().x, t.center().y);
+            painter.line_segment(
+                [Pos2::new(cx, cy - s * 0.25), Pos2::new(cx, cy + s * 0.25)],
+                Stroke::new(s * 0.07, Color32::WHITE),
+            );
+        }
     }
+}
+
+/// 按条目类型画**预制图标**，不读名称。
+///
+/// 用于 shell 图标缺失时的兜底。以前这里退化成 `paint_monogram`（名称
+/// 首字），中文首字在 20px 下辨识度差，同名条目也分不出来；现在按类型
+/// 画可辨识的矢量图形，且新增 `ItemKind` 会由 `from_kind` 的穷尽匹配
+/// 强制补图标。
+pub fn paint_kind(painter: &Painter, rect: EguiRect, kind: ItemKind, style: IconStyle, dark: bool) {
+    paint_tile(painter, rect, Builtin::from_kind(kind), style, dark);
 }
 
 /// 没有 shell 图标时的首字占位：中性 field 底 + 主题色首字母。
@@ -634,6 +756,45 @@ pub fn speaker(painter: &Painter, rect: EguiRect, style: IconStyle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 每个条目类型都要有一个**可辨识**的预制图标，不能退回名称首字。
+    /// `from_kind` 是穷尽匹配，新增 ItemKind 会在这里被编译器逼着补档。
+    #[test]
+    fn every_item_kind_has_its_own_prefab_icon() {
+        let kinds = [
+            ItemKind::File,
+            ItemKind::Folder,
+            ItemKind::Url,
+            ItemKind::Separator,
+            ItemKind::Group,
+            ItemKind::Trash,
+            ItemKind::Note,
+        ];
+        let mapped: Vec<Builtin> = kinds.iter().copied().map(Builtin::from_kind).collect();
+        for (i, b) in mapped.iter().enumerate() {
+            assert!(!mapped[..i].contains(b), "类型图标不能互相撞车：{b:?}");
+        }
+    }
+
+    /// `from_path` 只认三个内置动作路径，绝不能返回类型图标 ——
+    /// `bin/dock.rs` 的点击分支按这个前提写了兜底 `_ => {}`。
+    #[test]
+    fn path_lookup_never_returns_kind_icons() {
+        for p in [
+            "nooksill:start",
+            "NOOKSILL:Launchpad",
+            "nooksill:notes",
+            r"C:\Apps\a.exe",
+            "https://example.com",
+        ] {
+            if let Some(b) = Builtin::from_path(p) {
+                assert!(
+                    matches!(b, Builtin::Start | Builtin::Launchpad | Builtin::Notes),
+                    "意外把 {p} 识别成类型图标"
+                );
+            }
+        }
+    }
 
     /// 路径识别不看大小写：ini 是用户手改的，`NOOKSILL:Launchpad` 也得认。
     #[test]

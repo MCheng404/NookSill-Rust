@@ -37,6 +37,8 @@ pub enum MenuCmd {
     QuitApp,
     /// 在当前项右侧插入一条分割线。
     AddSepAfter,
+    /// 把一个运行中的临时条目固定进 Dock（写进配置）。
+    PinItem,
     /// 从 Dock 移除（普通条目）。
     RemoveItem,
     /// 删除这条分割线。
@@ -255,6 +257,19 @@ impl Menu {
                 }
                 if running && matches!(kind, ItemKind::File | ItemKind::Url) {
                     entries.push(MenuEntry::new("退出应用", MenuCmd::QuitApp, false, false));
+                }
+                // 运行中但还没固定的应用：给它一条"留下"的路。
+                //
+                // 此前这类条目的菜单只有"打开 / 退出"——想把运行中的应用
+                // 留在 Dock 上，唯一办法是去设置页手动添加一遍。拖进固定
+                // 区也会固定（`App::reorder_bar`），但那是手势，不是入口。
+                if temp && matches!(kind, ItemKind::File | ItemKind::Url) {
+                    entries.push(MenuEntry::new(
+                        "固定到 Dock",
+                        MenuCmd::PinItem,
+                        false,
+                        false,
+                    ));
                 }
                 if !temp {
                     entries.push(MenuEntry::new("重命名…", MenuCmd::Rename, false, false));

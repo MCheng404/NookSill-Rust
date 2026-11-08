@@ -12,7 +12,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
 use nooksill_core::tool::{format_ms, ToolMode, ToolState, MAX_TODOS};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};

@@ -130,7 +130,7 @@ mod tests {
     }
 
     fn cfg() -> Config {
-        let mut c = Config::defaults(96);
+        let mut c = Config::defaults();
         c.clock = true;
         c.edge = Edge::Bottom;
         c

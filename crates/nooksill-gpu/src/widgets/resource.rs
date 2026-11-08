@@ -9,7 +9,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, FontId, Rect as EguiRect, Stroke};
 use nooksill_platform::{CpuSampler, SysInfo};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};

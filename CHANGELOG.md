@@ -6,6 +6,224 @@
 
 ---
 
+## 未发布 — 运行中应用可固定 / 长度键改逻辑像素（2026-11-08）
+
+### 依据
+
+三条用户需求，加一个在改它们时暴露出来的旧 bug：
+
+1. 正在运行的应用应当能**固定**进 Dock，而不是永远挂在右边；
+2. 运行中应用应当能**自由排序**（上一轮只做到"段内可排"，跨段被夹住）；
+3. 图标大小等尺寸应当"**先 DPI 自动调整，再经人工设置**"，其余渲染同理；
+4. 顺带发现：`[Settings]` 里 10 个键（`HideDelay` / `ShowDelay` 两对、
+   `Widget*` / `Panel*` 共 6 个）**从来没进过读写列表** —— 滑块能调、当次
+   生效、重启回默认值。它们是前几轮加的键，`Key::ALL` / `EXTRA` 都没补。
+
+### 改了什么
+
+| 位置 | 做法 |
+|---|---|
+| 固定（菜单） | `MenuCmd::PinItem` + `App::pin_item`：把临时条目搬进 `raw` 并写盘，追加到固定区末尾 |
+| 固定（手势） | `reorder_bar` 返回 `BarMove{Pinned,Running,PinnedNow}`；**运行中应用拖进固定区 = 就地固定**，落点就是它在配置里的位置。`Dock::clamp_segment` 只挡"固定条目拖进运行中区" |
+| 分段边界 | `Dock::set_pinned` 在固定发生时立刻更新（不能等 `sync_items` —— 拖动期间它是挂起的） |
+| 长度单位 | `Config` 存 96 DPI 逻辑像素；`calc_metrics` / `Dock::pxf` 乘 `dpi/96`；`Key::is_length()` 是唯一判定（`NUMERIC_KEYS` 最后一列，顺手补齐了 `SepWidth` / `ReflGap` / `WidgetRadius` / `WidgetGap`） |
+| 迁移 | `CONFIG_VERSION` 3 → 4；`Config::migrate_units` 把旧 ini 的长度键按当前 DPI 换算成逻辑像素；1.x 文件在 `upgrade_legacy` 里一并换算。百分比 / 角度 / 颜色 / 毫秒一律不动 |
+| 持久化 | 10 个漏写的键补进 `Key::EXTRA`；新增 `every_numeric_key_is_persisted` 单测守住"表里有、读写列表里没有"这类漏配 |
+| 验收工具 | `dock_shot` 跑 120 帧再截屏（此前只跑一帧，图标还停在入场动画的 30%，看不出真实比例） |
+
+### 单位换算的实际效果
+
+同一份 ini 在 100% 下 `IconSize=48` 画 48 px，在 150% 下画 72 px。
+用户已有的配置升级一次后**物理尺寸完全不变**（72 物理 → 48 逻辑 → 72 物理），
+但从此换显示器 / 换缩放比不用再手调。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿。新增/改写的单测：
+
+- `dock::running_items_can_be_dragged_into_the_pinned_zone`（运行中应用能拖到
+  最前面且拖动不断）、`dock::running_items_swap_among_themselves`；
+- `reorder_bar` 三条：固定段内换位、运行中段内换位（`temp_keys` 同步）、
+  **拖进固定区就地固定**（`raw` / `temps` / `temp_keys` 三者都对）；
+  以及"固定条目拖不进运行中区"必须被拒；
+- `config::defaults_are_logical_pixels`、`length_keys_are_exactly_the_pixel_sized_ones`、
+  `migrate_units_converts_only_the_length_keys`（含幂等）、
+  `every_numeric_key_is_persisted`；
+- `units::unscale_round_trips_the_common_tiers`。
+
+离屏验收：`dock_shot` 在 dpi=120 下出图，图标充满卡片高度、圆角与倒影正常
+（换算后 48 逻辑 → 60 物理）。
+
+### 注意
+
+行为变化两处：① 运行中应用拖进固定区会被**永久固定**（写 ini）；
+② 从菜单固定时图标会跳到固定区末尾（拖拽固定则落在原地）。
+
+---
+
+## 未发布 — 修复拖动换位被打断（2026-11-08）
+
+### 依据
+
+用户报告："拖动调整 Dock 图标，在换位的一瞬间就被什么东西打断了"。
+
+根因不在拖拽状态机（逐帧扫过整条栏的模拟是单调的），而在**换位之后
+主循环的重建**：`step_reorder` 拿到的 `(from, to)` 只要有一个落在
+"运行中应用"那一段，就判定成"配置里没有这一项"，随即
+`sync_items()` → `Dock::replace_items()`，而 `replace_items` 会把
+`drag`、`press`、`hover` 一起清掉 —— 用户看到的就是图标刚换到新位置、
+拖动立刻断，并且栏体顺序被还原。实机配置 `[Items] Count=0`（全部图标
+都来自"显示运行中应用"），所以**第一次换位就会撞上**。
+
+同时发现两个同源问题：`pending_move` 只有一个槽位，一帧里连着换位
+（消息队列被抽干时才轮到主循环）只会记住最后一次，配置顺序与栏体
+差一格 —— 点 A 启动 B；`sync_items` 也没有"正在拖动"的概念。
+
+### 改了什么
+
+| 位置 | 做法 |
+|---|---|
+| 分段 | `Dock` 新增 `pinned`（前 N 项来自配置）+ `set_pinned`；`drag_to` 用 `clamp_segment` 把插入下标夹在被拖项**自己那一段**里。栏体上"固定项夹在临时项中间"这种顺序配置装不下，夹住之后同步就只是搬数组，不必整条重建 |
+| 重排队列 | `pending_move: Option<_>` → `pending_moves: Vec<_>`，`take_pending_moves()` 按顺序施加上去，一帧多次换位不再丢 |
+| 落点 | 新增 `reorder_bar(raw, temps, temp_keys, from, to)`：固定条目改 `raw`；运行中应用改 `temps` **并同步 `temp_keys`**（扫描线程按它保序，不写回的话约 1.2 s 后的扫描会把顺序冲掉）。跨段或越界返回 `false` |
+| 重建挂起 | `sync_items` 在 `Dock::press_active()` 期间只置 `items_stale`，由 `flush_items_stale` 在松手后补（主循环 ③.5）。`press_active` 覆盖"按下但还没越过起拖阈值"的几帧 —— `dragging()` 只认已起拖 |
+| 写盘 | 只有固定条目进了配置才 `touch_items()`：全是运行中应用的栏体拖完不该产生一次内容没变的 `[Items]` 回写 |
+| 重建观感 | `replace_items` 按路径（内置条目按位置）沿用上一帧的 `cur`：条目列表因"运行中应用变化"重建时不再让整条栏体从 0 重新长出来。真正新出现的条目仍是 0，入场动画照旧 |
+| 移除/归组 | 拖出或拖到组上的若是运行中应用，给出明确提示并重建回配置顺序（松手后重建，不再打断拖动） |
+
+### 验证
+
+新增 9 条单测：
+
+- `dock::dragging_across_the_bar_never_ping_pongs` —— 每次 `drag_to` 后跟一帧
+  `update()`（真机就是这样），顺序必须单调向右、不回头；
+- `dock::dragging_never_crosses_the_pinned_boundary`（2 固定 + 2 运行中：
+  只换一格且 `dragging()` 仍为 `Some`）、`dock::running_items_swap_among_themselves`
+  （`pinned=0` 时照样能换位）、`dock::press_state_covers_the_frames_before_the_drag_starts`、
+  `dock::a_stale_pinned_count_cannot_break_the_clamp`、
+  `dock::replacing_items_keeps_the_current_icon_size`；
+- `dock::reorder_inside_the_pinned_segment_edits_raw`、
+  `dock::reorder_between_running_items_keeps_temp_keys_in_step`、
+  `dock::reorder_across_the_segments_is_refused`。
+
+`./scripts/build.sh --gate` 全绿（fmt + clippy `-D warnings` + 全量测试）。
+
+实机日志（`NOOKSILL_GEOM=1`）确认了成因现场：启动即是
+`[items] 重建 raw=0 temps=3` —— 固定条目为 0、全是运行中应用，所以
+**第一次换位**就一定落到旧代码的"丢弃 + 重建"分支。真机逐帧拖动的
+注入验证受桌面上的真实鼠标干扰，没能拿到干净的 `[reorder]` 序列；
+本轮以单测为准。
+
+### 注意
+
+行为变化：固定条目拖不过"运行中应用"那一段（会在分界处停住）。
+换位后的运行中应用顺序**只活在本次会话**（`temp_keys`，不写 ini）。
+
+---
+
+## 未发布 — 拖放动态让位（OLE IDropTarget，2026-11-08）
+
+### 依据
+
+从桌面 / 资源管理器 / 任务管理器拖图标进 Dock 时，旧版只在松手时收到
+一条 `WM_DROPFILES` —— 拖拽过程中没有任何反馈，看不到"会插在哪"。
+用户要求拖到两个图标之间时，两侧图标实时向左右让出位置；拖出移除时
+也要看到合拢预览。`DragAcceptFiles` 拿不到 `DragOver`，因此必须接 OLE
+`IDropTarget`（PORTING.md 台账第 5 条）。
+
+### 改了什么
+
+| 层 | 做法 |
+|---|---|
+| OLE 目标 | 新增 `gpu::drop_target::DockDropTarget`（`#[implement(IDropTarget)]`）。`DragEnter` 用 `QueryGetData` 只收 `CF_HDROP`；`DragOver` 把 `POINTL` 转客户区并写 [`Dock::set_external_drop`]；`DragLeave`/`Drop` 清让位；`Drop` 从 `IDataObject` 取 `STGMEDIUM`，`DragQueryFileW` 拿路径后**无条件** `ReleaseStgMedium`，再复用现有 `push_dropped_paths` |
+| 注册 | `run()` 里 `OleInitialize` → `RegisterDragDrop(hwnd, &target)`，`app.run()` 结束后、窗口销毁前 `RevokeDragDrop`。`IDropTarget` 保持为 `run()` 局部变量，晚于 Revoke 析构。`DragAcceptFiles` 留作注册失败兜底；`WM_DROPFILES` 分支不动 |
+| 布局 | `layout::place_slots_insert(m, cur, extra, Some((index, width)))` 在插入点预留一个图标宽的空槽并计入 `bar_w`；旧 `place_slots` 包装调用它，所有既有调用与测试零改动。`Slots` 新增 `insert_l` 给绘制层 |
+| 让位动画 | `Dock::update` 对比上一帧 `slot_l`，空槽出现/消失时给每个图标补一次 `slide`，让位与合拢是滑过去的而不是瞬间跳变；与既有重排补偿互不重叠 |
+| 插入标记 | `paint_insert_mark` 在空槽中央画一条圆角胶囊线，深/浅各一档；空状态文案不再写"网址要 OLE 拖放，还没接" |
+| 移除逻辑 | 拖出栏体时把被拖项宽度压 0（`remove_preview`），两侧图标**动态合拢**预览移除结果；拖回来恢复。用 `drag.is_some()` 过滤，松手后自动失效，无需在多处清理 |
+
+### 验证
+
+新增 2 条单测：`layout::insert_slot_pushes_icons_apart`（左右偏移差正好等于
+空槽宽度、插入点右侧整体平移、`insert_l` 有/无）、
+`dock::external_drop_reserves_and_releases_an_insert_slot`
+（`update()` 后 `geom.insert_l` 出现并随 `clear` 消失）。
+
+`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
+`dock_shot` 增加第 4 个参数 `insert`（模拟拖到第 2、3 图标之间），
+出 `dock_insert.bmp` 与 `dock_plain.bmp` 对照：空槽确实把右侧图标推开、
+圆角胶囊插入标记居中显示，深浅主题各自可读。
+
+### 注意
+
+本轮工作区同时存在**非本轮的并行实验改动**（`frame.rs` /
+`shaders/illusion.*` / `gpu.rs` / `settings_win.rs` 等的时域重投影）。
+门禁运行期间它多次出现接口不一致的中间状态（`blur_frost` 参数、
+`Illusion::set_base` 签名、`REFRESH_DELTA` import 等），本轮**没有修改
+这些文件**。本轮结果未提交。
+
+---
+
+## 未发布 — 清理构建产物 / 拆分小组件模块 / 预制图标（2026-11-08）
+
+### ① 清理中间构建产物
+
+只读扫描后按「可再生 + 本会话产物」两条标准精确删除：
+
+| 项 | 体积 | 依据 |
+|---|---|---|
+| `target/x86_64-pc-windows-msvc/debug/incremental/` | 6.0 GB | cargo 增量缓存，下次构建自动重建 |
+| `scratch/panel_dark|panel_light/`（14 张） | 本轮生成的对比图 |
+| `scratch/widgets_*.bmp` / `settings_{interaction,appearance}.bmp` / `NookSill-fixed-*.exe` | — | 本会话生成的临时产物 |
+
+`target` 由 21 GB 降到 15 GB。**未动** `scratch/` 里的 202 张 png /
+92 个 py / 11 个 exe 等 529 个实验素材，也未动 `deps`(11 GB) /
+`examples`(1.5 GB) —— 它们正被并行编译使用。三者都在 `.gitignore`。
+
+### ② 统一拆分小组件 rs 位置
+
+`src/` 根目录原先散着 `calendar_win.rs` / `cc_win.rs` / `tool_win.rs` /
+`resmon_win.rs` / `note_win.rs` / `group_win.rs` / `edit_win.rs` +
+`panel_style.rs`，想单独维护一个面板要在一堆无关模块里翻。
+
+- `git mv` 到 `src/widgets/`，命名去掉 `*_win` 后缀：
+  `calendar / control / timer / resource / notes / group / editor / style`。
+- 新建 `widgets/mod.rs` 统一声明；7 个面板内部的
+  `crate::panel_style` 改为 `crate::widgets::style`。
+- `lib.rs` 用 `pub use widgets::calendar as calendar_win` 之类**保留旧路径
+  重导出**，`bin/dock.rs` 与 `examples/*.rs` 零改动，降低拆分风险。
+
+### ③ 预制图标替代名称首字
+
+`glyph::paint_monogram`（名称首字）此前是「取不到 shell 图标」时的兜底，
+中文首字在 20px 下辨识度差、同名条目也分不出来。
+
+- `Builtin` 新增 `Folder / File / Url / Group / Trash / Separator` 六个
+  矢量图标，全部「主题色圆角底 + 白色图形」，与既有内置条目同一套
+  视觉语言，且只用圆 / 圆角矩形 / 线段，不留锐角。
+- `Builtin::from_kind(ItemKind)` 是**穷尽匹配**，新增类型会被编译器
+  强制补图标；`paint_kind()` 直接按类型画。
+- 替换 `widgets/group.rs` 与 `dock.rs` 两处首字占位。`paint_monogram`
+  保留，但生产路径已不再使用（只剩 `icon_sheet` 画廊展示它本身）。
+- `bin/dock.rs` 的 `from_path` 分支补 `_ => {}`，并加单测钉住
+  「路径识别绝不返回类型图标」。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
+`glyph` 新增 2 条单测（7 种 ItemKind 的预制图标互不相同、
+`from_path` 只返回三个内置动作）。
+`panels_shot` 的分组示例改为混合 5 种 `ItemKind`，出图确认
+5 个图标分别是文档 / 文件夹 / 地球 / 四圆点 / 回收站，
+图标内不再出现名称首字。
+
+### 注意
+
+本轮**未提交**。工作区在清理前已被外部进程提交推送为 `b57a1b6`
+（含上一轮弹出面板统一打磨与实验性时域重投影），本轮改动独立留在工作区。
+
+---
+
 ## 未发布 — 模糊延迟优化 + 实验性时域重投影（2026-11-08）
 
 ### 为什么

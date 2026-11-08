@@ -32,13 +32,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu = Gpu::new("")?;
 
     // ① 分组面板：5 个子项（跨两行），第 2 项悬停 → 显示 × 与 ← →。
+    // 故意混入多种 ItemKind，用来核对「按类型画预制图标」而不是首字占位。
+    let kinds = [
+        ItemKind::File,
+        ItemKind::Folder,
+        ItemKind::Url,
+        ItemKind::Group,
+        ItemKind::Trash,
+    ];
     let kids: Vec<GroupKid> = ["记事本", "VS Code", "GitHub", "终端", "画图"]
         .iter()
         .enumerate()
         .map(|(i, name)| GroupKid {
             name: (*name).to_owned(),
             path: format!(r"C:\app{i}.exe"),
-            kind: ItemKind::File,
+            kind: kinds[i],
             running: i == 1,
         })
         .collect();

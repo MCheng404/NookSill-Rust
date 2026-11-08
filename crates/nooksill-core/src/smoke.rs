@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn tuning_reads_config_tables() {
-        let mut cfg = Config::defaults(96);
+        let mut cfg = Config::defaults();
         cfg.apply_i32(Key::SMOKE, 1);
         cfg.edge = Edge::Bottom;
         let t = Tuning::from_config(&cfg, PALETTE[3]);
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn tone_lightens_instead_of_whitening() {
-        let mut cfg = Config::defaults(96);
+        let mut cfg = Config::defaults();
         cfg.apply_i32(Key::SMOKE, 1);
         let base = Tuning::from_config(&cfg, PALETTE[0]).color_at(0, 0.0);
         cfg.apply_i32(Key::SMOKE_TONE, 1);

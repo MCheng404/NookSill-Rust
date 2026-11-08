@@ -3,7 +3,7 @@
 //! # 为什么面板里没有输入框
 //!
 //! 面板是 `WS_EX_NOACTIVATE` 风格的分层窗口，拿键盘焦点很麻烦。文本的
-//! 录入与中文输入法统一走 [`crate::edit_win`] 的模态弹窗（那里已经接了
+//! 录入与中文输入法统一走 [`crate::widgets::editor`] 的模态弹窗（那里已经接了
 //! `WM_CHAR` + `WM_IME_*` + 多行 `TextEdit`）。面板只负责"看到列表、
 //! 点中哪一条"，动作由 `App` 取走后执行。
 //!
@@ -16,7 +16,7 @@
 use std::pin::Pin;
 use std::time::Instant;
 
-use crate::panel_style::PanelStyle;
+use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::note::{Note, NoteBook};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};

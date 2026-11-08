@@ -772,6 +772,7 @@ dependencies = [
  "pollster",
  "rayon",
  "windows",
+ "windows-core",
  "winresource",
 ]
 
