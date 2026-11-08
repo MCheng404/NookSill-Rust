@@ -6,6 +6,7 @@
 
 #![deny(missing_debug_implementations)]
 
+pub mod adapter;
 pub mod app_window;
 pub mod appbar;
 pub mod audio;

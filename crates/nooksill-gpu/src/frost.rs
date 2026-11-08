@@ -203,7 +203,13 @@ fn run(hwnd: isize, out: &Sender<FrostFrame>, waker: Waker, stop: &Receiver<()>)
         }
 
         // Subtract capture time so the interval is a real period.
-        match stop.recv_timeout(interval.saturating_sub(started.elapsed())) {
+        // 但**必须留 1 ms 下限**：抓屏+模糊比 interval 还慢时（高分辨率、
+        // 弱 CPU），`saturating_sub` 会钳到 0，`recv_timeout(0)` 立刻返回
+        // Timeout，循环无退避地反复抓屏，单核长期满载。
+        let wait = interval
+            .saturating_sub(started.elapsed())
+            .max(Duration::from_millis(1));
+        match stop.recv_timeout(wait) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }

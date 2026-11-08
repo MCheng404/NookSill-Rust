@@ -6,6 +6,80 @@
 
 ---
 
+## 未发布 — 审查驱动的一轮：空闲出帧、泄漏、忙循环、主题缓存、图标去重、有线网卡（2026-11-08）
+
+提交并推送 `a48ab52` 之后做了一轮系统性只读审查（稳定性 / 性能两条线），
+下面六项都是**核实过代码**才动的，不是照抄审查结论。
+
+### ① 稳定性：三个面板让 Dock 空闲时全速出帧（真 bug）
+
+`calendar_win` / `cc_win` / `launchpad_win` 的 `next_repaint` 是裸
+`Instant`，`show()` 与所有事件分支都设成 `now`，但 `render()` 从不推进。
+于是面板可见期间 `due()` **恒为真** → 主循环每轮都渲染面板并把主 Dock
+一起拖进约 60 fps 常驻提交，与「空闲不出帧」的承诺直接冲突。这三个
+窗口都没有周期动画，全部靠事件唤醒；在每个 `render()` 末尾把闹钟推到
+`+1h`（与 `tool_win` 停表时的做法一致）。
+
+### ② 稳定性：文件对话框的 COM 字符串泄漏
+
+`filedialog.rs` 写的是 `raw.to_string().ok()?` 再 `CoTaskMemFree`。
+`GetDisplayName` 返回的是 COM 堆上的 `PWSTR`，转换失败时 `?` 提前返回，
+释放被跳过。改成**先转、无条件释放、再判错**。NTFS 允许未配对代理项
+文件名，能稳定触发这条路径。
+
+### ③ 稳定性：磨砂抓屏线程在超时后无退避忙循环
+
+`frost.rs` 用 `interval.saturating_sub(started.elapsed())` 当
+`recv_timeout` 的等待时长。一次抓屏+模糊超过 interval 时（高分辨率 /
+弱 CPU）结果钳到 0，`recv_timeout(0)` 立刻返回 Timeout，后台线程以
+最高频率反复抓屏、单核满载。给等待加 1 ms 下限。
+
+### ④ 性能：每帧两次相同的 DWM 跨进程调用 + 一次注册表读
+
+`App::render()` 里 `runtime_accent` 与 `runtime_icon_accent` 各自调了一次
+`accent::resolve`（注释还写着「DWM 调用不重复」）；`dock_is_dark` 又每帧
+读一次注册表。改成**两个开关共用一次解析**；系统深浅模式缓存进
+`App::system_dark`，只在 `look_epoch` 变化（`WM_SETTINGCHANGE`）时重读，
+`cfg.dock_is_dark()` 仍每帧算（配置随时可能改）。画质与出帧条件都不变。
+
+### ⑤ 性能：图标请求 in-flight 去重
+
+网址、失效 `.lnk`、缺解码器的图片**永远取不到图标**，`has_icon()` 一直
+false，于是每次列表变更都会把它们再排一遍，后台线程反复跑
+`SHGetImageList`。`IconLoader` 加 `(下标, 路径)` 集合抑制在途请求，
+`drain()` 按 `ReadyIcon` 的这两个字段精确清除。
+
+**不能只用路径做键**：分组条目的 `path` 恒为空串，多个分组会互相抑制，
+只有第一个能拿到四宫格图标 —— 这条用单测钉死了。`change_icon` /
+`reset_icon` 调 `forget` 解绑，保证换图标仍能重新请求。
+
+### ⑥ 功能：控制中心识别有线网卡
+
+`control::tiles_ordered` 早有 `wired` 参数，调用方一直硬传 `false`。
+新增 `platform::adapter`（`GetAdaptersAddresses` 遍历链表，找处于 Up 的
+以太网接口；为此启用 3 个 `windows` feature），建窗与每次 `show_at()`
+都重查，中途插拔网线会生效。**任何失败降级为 `false`**（= 显示 WiFi），
+与改动前行为一致，零回归风险。链表判定抽成独立函数，用假链表做了
+4 条单测（空 / 纯无线 / 有线在第二位 / 有线但 Down）。
+
+### 验证
+
+`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets`
+通过（新 feature 编译正常）；`dock_shot` / `settings_shot` /
+`panels_shot` 四张图全部正常出帧，像素无回归。
+新增单测：`IconLoader` 去重 1 条、`platform::adapter` 链表 4 条 +
+1 条 `#[ignore]` 真机冒烟。
+
+### 仍未做 / 未实机验证
+
+Backlog 里的大项没动：磨砂玻璃默认值仍是渐变（`BgMode::Frost` 退化）、
+`Fan*` 扇形展开、`Sb*` 顶部状态栏、PNG/JPEG 图标解码（WIC）、
+OLE 网址/纯文本拖入、DWM 窗口预览。
+本轮的空闲出帧修复、有线网卡识别、真实中文输入与多文件拖入都还需要
+桌面会话确认；亮度控制仍缺。
+
+---
+
 ## 未发布 — 拖放改进：按落点插入 / 快捷方式 / 去重 / 落组（2026-11-08）
 
 ### 依据

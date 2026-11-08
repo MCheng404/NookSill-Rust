@@ -316,6 +316,10 @@ struct App {
     /// DWM 强调色。启动时读一次：它只在用户改主题时变，而改主题会发
     /// `WM_SETTINGCHANGE` —— 那时才需要重读，不必每帧问系统。
     accent: [f32; 3],
+    /// **系统**深浅模式缓存。`theme::is_dark()` 每次都读注册表，
+    /// 而系统主题变化同样会走 `look_epoch` 唤醒，所以没必要每帧问。
+    /// `cfg.dock_is_dark()` 只是读配置字段，仍每帧算（配置随时可能改）。
+    system_dark: bool,
     /// 已处理到的外观变更计数（见 [`Dock::look_epoch`]）。
     look_epoch: u32,
     /// 写 ini（串行，天然保序）。
@@ -646,6 +650,7 @@ impl App {
             fps_at: Instant::now(),
             smoke,
             accent: theme::accent().unwrap_or(PALETTE[0]),
+            system_dark: theme::is_dark(),
             look_epoch: 0,
             disk,
             opener,
@@ -1919,6 +1924,9 @@ impl App {
         // `replace_items` 按 `path` 搬纹理，而这里变的是 `icon_src`。
         // 不精确清一下就会一直显示旧图标。
         self.dock.clear_icon(index);
+        // 路径没变但 `icon_src` 变了：解绑 in-flight 抑制，否则
+        // `request_missing_icons` 会以为这个路径刚排过队、不再请求新图标。
+        self.icons.forget(index, &self.raw[index].path);
         self.apply_item_change();
         self.status(format!("已更换「{}」的图标", self.raw[index].name));
     }
@@ -1934,6 +1942,8 @@ impl App {
         let name = item.name.clone();
         item.icon_src.clear();
         self.dock.clear_icon(index);
+        // 同上：清掉图标后要允许重新排队取默认图标。
+        self.icons.forget(index, &self.raw[index].path);
         self.apply_item_change();
         self.status(format!("已恢复「{name}」的默认图标"));
     }
@@ -2903,7 +2913,6 @@ impl App {
         // **Dock 主题**，不是设置窗口主题：`UiTheme` 与 `DockTheme` 的 0/1
         // 含义相反（见 `config.rs` 里那条防回归测试）。用错会把整个 Dock
         // 画成另一套配色，而且看起来"只是颜色不对"，很难察觉是取值取错了。
-        let dark = self.dock.cfg.dock_is_dark(theme::is_dark());
         // 文字由 `core::clock` 生成：日期格式、周几、行数、顺序都在那里，
         // 日期格式、周几、行数、顺序都在那里（曾经在 bin 里手拼，少了年份）。
         let clock: Option<Vec<ClockLine>> = if self.dock.cfg.clock {
@@ -2911,30 +2920,29 @@ impl App {
         } else {
             None
         };
-        // 系统外观变过就重读强调色（烟雾的 `accent` 色档要用）。
+        // 系统外观变过就重读强调色（烟雾的 `accent` 色档要用）与深浅模式。
+        // 这两者都只在用户改主题时变，而改主题会递增 `look_epoch`。
         if self.dock.look_epoch != self.look_epoch {
             self.look_epoch = self.dock.look_epoch;
             self.accent = theme::accent().unwrap_or(PALETTE[0]);
+            self.system_dark = theme::is_dark();
         }
+        let dark = self.dock.cfg.dock_is_dark(self.system_dark);
 
         let ppp = self.ppp;
-        // 主题色同步到 Dock：运行时值不写 ini，每帧出图时重算一次
-        // （空闲时本就不出帧，DWM 调用可以忽略）。必须在下面取 `&Dock`
-        // 之前写 —— 之后 cfg 就被不可变借用了。
-        self.dock.cfg.runtime_accent = if self.dock.cfg.get_i32(Key::UI_ACCENT_DOCK) != 0 {
-            nooksill_gpu::accent::resolve(&self.dock.cfg)
-        } else {
-            None
-        };
-        // 图标主题色：两个独立开关任一开启才解析一次（DWM 调用不重复）。
-        // 存运行时字段，Dock / 控制中心共用；各自再按自己的开关决定上色。
+        // 主题色同步到 Dock：运行时值不写 ini。两个开关**共用一次**解析 ——
+        // `accent::resolve` 在"跟随系统"时要跨进程问 DWM，原先两个字段
+        // 各调一次，等于每帧白做一次 DWM 往返。
+        let dock_accent_on = self.dock.cfg.get_i32(Key::UI_ACCENT_DOCK) != 0;
         let icon_on = self.dock.cfg.get_i32(Key::UI_ACCENT_DOCK_ICONS) != 0
             || self.dock.cfg.get_i32(Key::UI_ACCENT_CC_ICONS) != 0;
-        self.dock.cfg.runtime_icon_accent = if icon_on {
+        let resolved = if dock_accent_on || icon_on {
             nooksill_gpu::accent::resolve(&self.dock.cfg)
         } else {
             None
         };
+        self.dock.cfg.runtime_accent = if dock_accent_on { resolved } else { None };
+        self.dock.cfg.runtime_icon_accent = if icon_on { resolved } else { None };
         let cc_accent = if self.dock.cfg.get_i32(Key::UI_ACCENT_CC_ICONS) != 0 {
             self.dock.cfg.runtime_icon_accent
         } else {

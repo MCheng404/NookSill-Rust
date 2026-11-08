@@ -37,7 +37,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -137,6 +137,17 @@ pub struct ReadyIcon {
 pub struct IconLoader {
     tx: Option<Sender<IconRequest>>,
     rx: Receiver<ReadyIcon>,
+    /// 已排队、还没拿到结果的任务键 `(下标, 路径)`。
+    ///
+    /// 网址、失效 `.lnk`、缺解码器的图片这类条目**永远拿不到图标**，
+    /// 但 `has_icon()` 一直是 false，于是每次列表变更都会把它们再排
+    /// 一遍，后台线程反复跑 `SHGetImageList`。留在这个集合里的键正好
+    /// 抑制这种无效重试；成功返回的由 `drain` 清除。
+    ///
+    /// **不能只用 `path` 做键**：分组条目的 `path` 恒为空串，多个分组
+    /// 会互相抑制，只有第一个能拿到四宫格图标。带上 `index` 才能区分，
+    /// 而 `ReadyIcon` 正好也带这两个字段，`drain` 可以精确清除。
+    inflight: Mutex<HashSet<(usize, String)>>,
     /// 只用来给线程起名以便调试；退出时**不 join**（见 `Drop`）。
     _thread: JoinHandle<()>,
 }
@@ -154,21 +165,62 @@ impl IconLoader {
         Ok(Self {
             tx: Some(req_tx),
             rx: res_rx,
+            inflight: Mutex::new(HashSet::new()),
             _thread: thread,
         })
     }
 
-    /// 排一个取图标任务。队满或线程已退出时静默丢弃 —— 图标取不到只是
-    /// 退回首字占位，不该影响别的功能。
+    /// 排一个取图标任务。
+    ///
+    /// 同一路径在**结果回来之前**只排一次。队满或线程已退出时静默丢弃
+    /// —— 图标取不到只是退回首字占位，不该影响别的功能。
     pub fn submit(&self, req: IconRequest) {
+        // 锁只在这里和 `drain` 里短暂持有，不跨 Win32 调用；中毒时
+        // 取回内部值继续，不因为一次 panic 把图标链路永久锁死。
+        let mut set = match self.inflight.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if !set.insert((req.index, req.path.clone())) {
+            return;
+        }
+        drop(set);
         if let Some(tx) = &self.tx {
             let _ = tx.send(req);
         }
     }
 
-    /// 取走本轮已完成的图标（不阻塞）。
+    /// 让某个条目重新可请求（换图标 / 恢复默认图标时调）。
+    pub fn forget(&self, index: usize, path: &str) {
+        let mut set = match self.inflight.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        set.remove(&(index, path.to_owned()));
+    }
+
+    /// 取走本轮已完成的图标（不阻塞）。成功返回的路径从 in-flight 移除。
     pub fn drain(&self) -> Vec<ReadyIcon> {
-        self.rx.try_iter().collect()
+        let out: Vec<ReadyIcon> = self.rx.try_iter().collect();
+        if !out.is_empty() {
+            let mut set = match self.inflight.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for r in &out {
+                set.remove(&(r.index, r.path.clone()));
+            }
+        }
+        out
+    }
+
+    /// 测试用：当前被抑制的键数。
+    #[cfg(test)]
+    fn inflight_len(&self) -> usize {
+        self.inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -747,6 +799,38 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// 图标请求去重：同一下标同一路径只排一次；不同分组（`path` 恒空串）
+    /// 不能互相抑制；`forget` 能让换图标的条目重新排队。
+    ///
+    /// 这条是为了防止"去重键只用 path"的回归 —— 那样多个分组会共用一个
+    /// 空串键，只有第一个分组能拿到四宫格图标。
+    #[test]
+    fn icon_requests_are_deduplicated_per_slot() {
+        let loader = IconLoader::spawn(Waker::new(HWND::default()), None).expect("起线程");
+        let req = |index, path: &str| IconRequest {
+            index,
+            kind: ItemKind::File,
+            path: path.to_owned(),
+            icon_src: String::new(),
+            fit: 0,
+            kids: Vec::new(),
+        };
+
+        loader.submit(req(0, r"C:\a.exe"));
+        loader.submit(req(0, r"C:\a.exe")); // 完全重复
+        assert_eq!(loader.inflight_len(), 1);
+
+        // 分组的 path 是空串，两个组要能同时排队。
+        loader.submit(req(1, ""));
+        loader.submit(req(2, ""));
+        assert_eq!(loader.inflight_len(), 3, "不同下标不该被抑制");
+
+        loader.forget(0, r"C:\a.exe");
+        assert_eq!(loader.inflight_len(), 2, "forget 要解绑");
+        loader.submit(req(0, r"C:\a.exe"));
+        assert_eq!(loader.inflight_len(), 3, "解绑后能再排一次");
     }
 
     /// 在**工作线程**上跑一遍 shell 取图标。

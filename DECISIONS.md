@@ -1881,8 +1881,12 @@ VSOP87，为一个 Dock 的日历背那套表不划算。
 
 - 亮度没做。上游有 DDC/CI 与 `\\.\LCD` 两条路（`CcBright` / `CcLcdBright`），
   但 v1.6.0 的绘制里没用到，属于"有代码没入口"，跳过。
-- 有线网卡检测没做（要 `GetAdaptersInfo`，得再加一个 `Win32_NetworkManagement_IpHelper`
-  feature），所以永远显示「无线网络」。对台式机用户是个可见的偏差。
+- 有线网卡检测**已补**（2026-11-08，`platform::adapter`）：用
+  `GetAdaptersAddresses` 遍历适配器链表，找 `IfType == ETHERNET_CSMACD`
+  且 `OperStatus == IfOperStatusUp` 的接口；控制中心建窗与每次
+  `show_at()` 都重查，中途插拔网线会生效。任何失败降级为 `false`
+  （= 显示 WiFi），与改动前行为一致。
+  原先因缺 `IpHelper` feature 而永远显示「无线网络」，对台式机是可见偏差。
 
 
 ## ADR-043 · 起动台：把 700 行 C 拆成"模型 + 窗口"
@@ -2740,8 +2744,9 @@ C:\ProgramData\Microsoft\Windows\Start Menu\Programs\…
 
 - 设置界面里没有"恢复默认顺序"按钮。用户把顺序弄乱之后只能手改 ini
   （`Order` 删掉即可）。要加的话属于设置页的活，跟本轮分开。
-- 有线网卡检测仍未接（`tiles_ordered` 的 `wired` 参数恒为 `false`，
-  跟改动前一样），属台账第 9 条。
+- 有线网卡检测当时未接（`tiles_ordered` 的 `wired` 参数恒为 `false`，
+  跟改动前一样），属台账第 9 条。**2026-11-08 已补**：见
+  `platform::adapter` 与 ADR-042 上方的说明，本条仅保留当时的状态记录。
 
 ---
 

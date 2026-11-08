@@ -14,7 +14,7 @@
 //! 深色还要通知主循环重读主题（`dirty_theme`）。
 
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::glyph::{IconState, IconStyle};
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
@@ -143,7 +143,13 @@ impl CcWindow {
         }
 
         // 顺序来自 `[widgets] Order`；没拖过就是空表 → 默认顺序。
-        let tiles = control::tiles_ordered(order, energy_on, hotspot_on, false);
+        // 网络磁贴按真实的物理连接方式决定，不再恒显示 WiFi。
+        let tiles = control::tiles_ordered(
+            order,
+            energy_on,
+            hotspot_on,
+            nooksill_platform::adapter::wired_connected(),
+        );
         let (pw, ph) = physical_size(ppp, tiles.len());
         let hwnd = unsafe {
             CreateWindowExW(
@@ -230,6 +236,18 @@ impl CcWindow {
             self.mute = a.muted();
         }
         self.energy = sysact::is_power_saver();
+        // 网络磁贴每次打开都重查：用户可能中途插了网线或拔了网线。
+        // 只替换网络那一格，保留用户拖过的磁贴顺序与窗口尺寸（格数不变）。
+        let net = if nooksill_platform::adapter::wired_connected() {
+            nooksill_core::control::Tile::Ethernet
+        } else {
+            nooksill_core::control::Tile::Wifi
+        };
+        for t in &mut self.tiles {
+            if t.is_net() {
+                *t = net;
+            }
+        }
         let (pw, ph) = physical_size(self.ppp, self.tiles.len());
         let (x, y) = place(pw, ph, anchor, edge, self.ppp);
         self.pos = (x, y);
@@ -297,6 +315,9 @@ impl CcWindow {
         })?;
         self.hits = hits;
         self.slider = slider;
+        // 与 `tool_win` 停表时一致：画完推走闹钟，靠事件唤醒。
+        // 否则 `due()` 恒真，面板开着时整个 Dock 空闲也全速出帧。
+        self.next_repaint = Instant::now() + Duration::from_secs(3600);
         Ok(())
     }
 

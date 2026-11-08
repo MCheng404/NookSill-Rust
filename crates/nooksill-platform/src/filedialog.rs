@@ -105,8 +105,13 @@ fn finish(dialog: IFileOpenDialog, owner: Option<isize>) -> Option<PathBuf> {
         }
         let item: IShellItem = dialog.GetResult().ok()?;
         let raw = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
-        let text = raw.to_string().ok()?;
+        // `GetDisplayName` 给的是 COM 堆上的 PWSTR，必须无条件释放。
+        // 先转字符串再 free：若写 `raw.to_string().ok()?`，转换失败时
+        // `?` 会提前返回，这一块内存就漏了（NTFS 允许未配对代理项的
+        // 文件名，能稳定触发）。
+        let text = raw.to_string();
         CoTaskMemFree(Some(raw.0.cast()));
+        let text = text.ok()?;
         Some(PathBuf::from(text))
     }
 }

@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect as EguiRect, Stroke};
 use nooksill_core::launchpad::{Launchpad, TakeOut, Top};
@@ -631,6 +631,9 @@ impl LaunchpadWindow {
         self.icons = icons;
         self.hits = hits;
         self.icon_rects = icons_rects;
+        // 起动台没有常驻动画：搜素/翻页/悬停都靠事件把闹钟设回 now。
+        // 画完推走，否则可见期间 `due()` 恒真、Dock 被拖进 60 fps 常驻提交。
+        self.next_repaint = Instant::now() + Duration::from_secs(3600);
         Ok(())
     }
 

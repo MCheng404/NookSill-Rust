@@ -13,7 +13,7 @@
 //! 算法全在 `nooksill_core::calendar` 里，这里只负责画和判命中。
 
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::calendar::{self, CalendarState};
@@ -258,6 +258,10 @@ impl CalendarWindow {
             hits = draw_panel(ui, dark, &state, today, hover);
         })?;
         self.hits = hits;
+        // 画完就把闹钟推走。面板没有动画定时器，全靠事件唤醒；
+        // 不推进的话 `due()` 在可见期间恒为真，主循环会把 Dock 一起
+        // 拖进 60 fps 常驻提交 —— 与"空闲不出帧"的约定直接冲突。
+        self.next_repaint = Instant::now() + Duration::from_secs(3600);
         Ok(())
     }
 
