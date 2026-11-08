@@ -1,7 +1,7 @@
-//! 系统深浅色 / 强调色 / 开机自启动（注册表）。
+//! System dark mode, accent color and autostart (registry).
 //!
-//! 全部是"读一次、失败就用默认值"的语义：注册表被策略锁死时 Dock 也要能
-//! 起得来。
+//! Everything reads once and falls back to a default on failure, so a
+//! policy-locked registry cannot stop the dock from starting.
 
 use windows::core::w;
 use windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
@@ -13,7 +13,7 @@ use windows::Win32::System::Registry::{
 
 use crate::win::{last_error, to_wide};
 
-/// 系统是否为深色模式（`AppsUseLightTheme == 0`）。
+/// Whether the system uses dark mode (`AppsUseLightTheme == 0`).
 #[must_use]
 pub fn is_dark() -> bool {
     let mut value: u32 = 1;
@@ -30,16 +30,17 @@ pub fn is_dark() -> bool {
         )
     };
     if status != ERROR_SUCCESS {
-        // 读不到就按浅色处理：与"系统默认浅色"的观感一致。
+        // Treat unreadable as light, matching the system default look.
         return false;
     }
     value == 0
 }
 
-/// Windows 强调色（DWM 的着色色）原始 RGB，未做明度归一化。
+/// DWM colorization color as raw RGB, not lightness-normalized.
 ///
-/// `None` = 取不到（远程会话、组策略禁用等）。界面主题色要用这个原始值，
-/// 因为自定义色与系统色走的是同一条 COLORREF 路径；归一化版见 [`accent`]。
+/// `None` when unavailable (remote session, policy). The theme wants the raw
+/// value because custom and system colors share one COLORREF path; see
+/// [`accent`] for the normalized variant.
 #[must_use]
 pub fn accent_raw() -> Option<[u8; 3]> {
     use windows::core::BOOL;
@@ -47,7 +48,7 @@ pub fn accent_raw() -> Option<[u8; 3]> {
 
     let mut color: u32 = 0;
     let mut opaque = BOOL(0);
-    // SAFETY: 两个参数都是本栈帧上的有效指针，调用期间不会被移动。
+    // SAFETY: both pointers refer to live locals for the whole call.
     unsafe { DwmGetColorizationColor(&mut color, &mut opaque) }.ok()?;
     Some([
         ((color >> 16) & 0xFF) as u8,
@@ -56,10 +57,12 @@ pub fn accent_raw() -> Option<[u8; 3]> {
     ])
 }
 
-/// Windows 强调色，归一化到**最大分量 170**：DWM 给的是用户自己调的颜色，
-/// 明度差异很大 —— 冰蓝的 (200,230,255) 与深蓝的 (0,60,120) 直接拿去当
-/// 烟雾色，前者会亮到糊成白团、后者几乎看不见。压到同一上限之后只有色相
-/// 在起作用，这正是烟雾"跟随强调色"想要的语义。
+/// Accent color normalized so the largest channel is 170.
+///
+/// DWM returns whatever the user picked, from near-white (200,230,255) to deep
+/// blue (0,60,120). Fed straight into the fog color, the first blows out to
+/// white and the second is invisible. Clamping to one ceiling leaves hue as the
+/// only variable, which is what "follow the accent" needs.
 #[must_use]
 pub fn accent() -> Option<[f32; 3]> {
     let raw = accent_raw()?;
@@ -75,11 +78,10 @@ pub fn accent() -> Option<[f32; 3]> {
     ])
 }
 
-/// 开机自启动是否已注册。
+/// Whether autostart is registered.
 ///
-/// 判定方式是"值存在"，不是"值等于当前路径"。
-/// 用户挪动过 exe 之后旧路径仍在，这里会如实返回 true；`set_autostart(true)`
-/// 会把它改写成当前路径。
+/// Presence of the value is enough, it is not compared against the current
+/// path: a moved exe still reports true, and `set_autostart(true)` rewrites it.
 #[must_use]
 pub fn get_autostart() -> bool {
     let mut key = HKEY::default();
@@ -104,7 +106,7 @@ pub fn get_autostart() -> bool {
     status == ERROR_SUCCESS
 }
 
-/// 注册 / 取消开机自启动。返回值表示是否成功写入。
+/// Register or remove the autostart entry. Returns whether the write succeeded.
 pub fn set_autostart(on: bool) -> bool {
     let mut key = HKEY::default();
     let status = unsafe {
@@ -134,7 +136,7 @@ pub fn set_autostart(on: bool) -> bool {
             unsafe { std::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), wide.len() * 2) };
         unsafe { RegSetValueExW(key, w!("NookSill"), None, REG_SZ, Some(bytes)) == ERROR_SUCCESS }
     } else {
-        // 值不存在也算成功。
+        // A missing value counts as removed.
         let s = unsafe { RegDeleteValueW(key, w!("NookSill")) };
         s == ERROR_SUCCESS || s == WIN32_ERROR(2) // ERROR_FILE_NOT_FOUND
     };
@@ -145,7 +147,7 @@ pub fn set_autostart(on: bool) -> bool {
     ok
 }
 
-/// 最后一次注册表操作的错误码，便于日志（`set_autostart` 失败时用）。
+/// Code of the last registry operation, for logging failed `set_autostart` calls.
 #[must_use]
 pub fn last_registry_error() -> u32 {
     last_error()

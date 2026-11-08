@@ -1,8 +1,7 @@
-//! Win32 系统服务。
+//! Win32 system services.
 //!
-//! 这一层只做"取系统信息 / 调系统 API"，不含任何 Dock 逻辑。
-//! 所有函数都返回安全类型（`String`、`Rect`、`bool`、`PathBuf`），
-//! `unsafe` 不外泄。
+//! This layer only reads system state and calls shell APIs; no dock logic
+//! lives here. Every function returns safe types, `unsafe` never escapes.
 
 #![deny(missing_debug_implementations)]
 

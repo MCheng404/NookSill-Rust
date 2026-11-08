@@ -60,7 +60,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         super::widgets::button(ctx, ui, "查看许可全文", Command::OpenUrl(LICENSE_URL));
     });
 
-    // 隐藏入口：连点版本号 5 次才会出现，设置窗口一关就收回。
+    // Hidden entry: five version clicks unlock it, closing the window drops it.
     if ctx.state.advanced {
         card(
             ctx,
@@ -94,12 +94,12 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     }
 }
 
-/// 版本号那一行。连点 5 次解锁隐藏的「高级」卡片。
 fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    // 自绘控件也要有 AccessKit 信息：读屏软件要能读到，kittest 也要能点到。
+    // Hand-painted widgets still need AccessKit info, for screen readers
+    // and kittest.
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "版本"));
     let painter = ui.painter();
     painter.text(
@@ -125,7 +125,7 @@ fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     ui.add_space(7.0);
 }
 
-/// 更新卡片：状态一行 + 按阶段出现的按钮。
+/// Buttons appear only at stages the update state allows.
 fn update_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,

@@ -1,21 +1,9 @@
-//! 实验性「实时模糊 + 视觉欺骗」组合的 GPU 侧：分区时域色彩重投影。
+//! GPU half of the experimental "real blur plus perceptual cheat" scheme.
 //!
-//! 纯视觉欺骗把高斯基底**冻结**了，桌面结构一直不动，观感很假。现在两条
-//! 路径按列分工、同时工作：
-//!
-//! - 每帧由 [`super::frost::GpuBlur`] 对一部分列跑真正的两趟高斯
-//!   （变化列优先；大面积变化时按条带轮转限幅），结构因此**持续更新**；
-//! - 其余列不重算卷积，只用一个无循环的 compute pass 把 24×16 低频
-//!   色场相对「该 tile 上次真模糊时」的差值叠回基底，并在 90 ms 内
-//!   插值过渡 —— 颜色始终实时、变化连续。
-//!
-//! 已跑真模糊的列由 `dirty_x0..dirty_x1` 标出，shader 对它们跳过色场
-//! 补偿，避免同一处颜色变化被算两遍。
-//!
-//! 为什么看起来还是模糊：面板 tint 只透出约 22% 的模糊层，而模糊本身
-//! 已把高频细节抹平；人眼对这层能察觉的主要是 **颜色与明暗**，不是结构。
-//! 于是「局部真卷积 + 全局颜色补偿」在观感上接近整幅重卷积，
-//! 每帧卷积量却有硬上限。
+//! Input is the real-blur base texture plus three `gw*gh` color fields
+//! (base, prev, cur); output is the same base with the low-frequency color
+//! delta added back. Alpha is carried through untouched, so the base stays
+//! premultiplied.
 
 use std::time::{Duration, Instant};
 
@@ -28,11 +16,11 @@ const WGSL: &str = include_str!("illusion.wgsl");
 const N: usize = GRID_W * GRID_H;
 const FIELD_BYTES: usize = N * 16;
 
-/// 颜色过渡时长。把「桌面突然换了一张壁纸」摊成一段连续渐变，
-/// 而不是一帧跳过去 —— 割裂感主要来自跳变而不是模糊本身。
+/// Color transition duration. Spreads a desktop change into a continuous fade
+/// instead of a single-frame jump.
 pub const FADE: Duration = Duration::from_millis(90);
 
-/// 色场差值作用到最终颜色的比例。
+/// Fraction of the color-field delta applied to the final color.
 const GAIN: f32 = 1.0;
 
 pub struct Illusion {
@@ -42,13 +30,15 @@ pub struct Illusion {
     fields: wgpu::Buffer,
     out: Option<(wgpu::Texture, wgpu::TextureView)>,
     size: (u32, u32),
-    /// 每个 tile 上次被真模糊刷新时的色场（补偿的参考点）。
+    /// Color field at each tile's last real blur, i.e. the compensation
+    /// reference.
     base: ColorField,
     prev: ColorField,
     cur: ColorField,
-    /// 本帧被真高斯覆盖的列；shader 对这些列跳过色场补偿。
+    /// Columns covered by real blur this frame; the shader skips compensation
+    /// there, so the same color change is never applied twice.
     cols: std::ops::Range<u32>,
-    /// 0..1 的插值进度。
+    /// Interpolation progress, 0..1.
     t: f32,
     last: Instant,
     dirty: bool,
@@ -101,8 +91,9 @@ impl Illusion {
         self.out.as_ref().map(|(_, v)| v)
     }
 
-    /// 整幅真模糊重建后调用：所有 tile 的参考点都刷新到当前色场，
-    /// 整幅标记为「已覆盖」，清掉未完成的过渡。
+    /// Sets the reference after a full real-blur rebuild: every tile's
+    /// reference moves to the current field, the full width is marked covered
+    /// and any fade is dropped.
     pub fn set_base(&mut self, field: &ColorField, w: u32) {
         self.base = field.clone();
         self.prev = field.clone();
@@ -113,8 +104,9 @@ impl Illusion {
         self.dirty = true;
     }
 
-    /// 局部真模糊帧：`cols` 里的列刚算过真高斯，参考点同步刷新；
-    /// 其余列仍用色场差值补偿，并把颜色变化摊成一段插值。
+    /// Handles a partial real-blur frame: columns in `cols` were just
+    /// convolved, so their reference tiles refresh; the rest still get the
+    /// delta, faded in.
     pub fn push(&mut self, field: &ColorField, cols: std::ops::Range<u32>, w: u32) {
         self.refresh_base_tiles(field, &cols, w);
         self.prev = blend(&self.prev, &self.cur, self.t);
@@ -125,9 +117,9 @@ impl Illusion {
         self.dirty = true;
     }
 
-    /// 被真高斯覆盖的列，其对应 tile 的参考色场要跟着更新。
-    /// 没覆盖的 tile 保留旧参考点，于是 `cur - base` 正好等于
-    /// 「这块区域自上次真模糊以来变了多少颜色」。
+    /// Refreshes the reference color field of the tiles covered by the real
+    /// Gaussian. Tiles outside keep their old reference, so `cur - base` is
+    /// exactly how much the color changed there since the last real blur.
     fn refresh_base_tiles(&mut self, field: &ColorField, cols: &std::ops::Range<u32>, w: u32) {
         if w == 0 || cols.start >= cols.end {
             return;
@@ -145,7 +137,8 @@ impl Illusion {
         }
     }
 
-    /// 推进时间插值。返回是否还需要下一帧（用于向 egui 要重绘）。
+    /// Advances the time interpolation. Returns whether another frame is
+    /// needed (used to ask egui for a repaint).
     pub fn advance(&mut self) -> bool {
         if self.t >= 1.0 {
             return false;
@@ -162,12 +155,14 @@ impl Illusion {
         self.t < 1.0
     }
 
-    /// 有未呈现的色场/插值变化时取走脏标记。
+    /// Takes the dirty flag for an unrendered color field or interpolation
+    /// change.
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
     }
 
-    /// 把三段色场 + 参数上传，跑一次重投影，返回输出纹理视图。
+    /// Uploads the three color fields plus the parameters, runs one
+    /// reprojection pass and returns the output texture view.
     pub fn render(
         &mut self,
         base: &wgpu::TextureView,
@@ -267,8 +262,9 @@ mod tests {
         out
     }
 
-    /// 色场与基底一致时输出应等于基底；色场变亮后输出跟着变亮。
-    /// 同时验证 WGSL 能编译、bind group 自动布局合法、dispatch 不报错。
+    /// A color field equal to the base must reproduce the base; a brighter
+    /// field must brighten the output. Also checks that the WGSL compiles, the
+    /// bind group layout is legal and the dispatch does not error.
     #[test]
     #[ignore = "requires a GPU; run with --ignored"]
     fn reprojection_is_identity_then_tracks_colour() {
@@ -299,7 +295,8 @@ mod tests {
             );
         }
 
-        // 没有任何列跑真模糊时，色场变亮必须让整幅跟着变亮。
+        // With no column under the real blur, a brighter field must brighten
+        // the whole frame.
         let brighter: ColorField = field.iter().map(|_| [160.0, 160.0, 160.0]).collect();
         ill.push(&brighter, 0..0, w);
         std::thread::sleep(FADE + Duration::from_millis(10));
@@ -314,7 +311,8 @@ mod tests {
         );
     }
 
-    /// 组合模式的核心：真高斯覆盖的列直接取基底，其余列才用色场补偿。
+    /// Core of the combined mode: columns under the real Gaussian take the
+    /// base, the rest get the color field compensation.
     #[test]
     #[ignore = "requires a GPU; run with --ignored"]
     fn true_blur_columns_skip_colour_projection() {
@@ -329,7 +327,7 @@ mod tests {
         let field = crate::frost::color_field(&src, w as usize, h as usize);
         ill.set_base(&field, w);
         let brighter: ColorField = field.iter().map(|_| [160.0, 160.0, 160.0]).collect();
-        // 左半跑真模糊、右半只做视觉欺骗。
+        // Left half runs the real blur, right half only the visual cheat.
         ill.push(&brighter, 0..w / 2, w);
         std::thread::sleep(FADE + Duration::from_millis(10));
         ill.advance();

@@ -1,16 +1,6 @@
-//! OLE 拖放目标：让 Dock 在**拖放过程中**就显示插入位。
-//!
-//! `DragAcceptFiles` 只在松手时给一条 `WM_DROPFILES`，拿不到 `DragOver`，
-//! 所以旧版做不到「拖到两个图标之间，左右图标让出位置」。这里注册
-//! `IDropTarget`：
-//! - `DragOver` 把光标位置写进 [`Dock::set_external_drop`]，由布局层
-//!   预留一个空槽，图标左右让位并画插入标记；
-//! - `Drop` 从 `IDataObject` 的 `CF_HDROP` 取路径，复用
-//!   [`Dock::push_dropped_paths`]（与旧 `WM_DROPFILES` 分支同一条落地路径）。
-//!
-//! 回调发生在注册窗口所在的 STA 线程（UI 线程），因此可以直接解引用
-//! `GWLP_USERDATA` 上的 `Box<Dock>`，不需要跨线程同步。`WM_DROPFILES`
-//! 保留作为 OLE 注册失败时的兜底。
+//! OLE drop target, so the insertion slot shows while a drag is in progress.
+//! `WM_DROPFILES` only fires on release and gives no `DragOver`. Callbacks run
+//! on the UI thread, so the `Box<Dock>` is reachable without synchronization.
 
 use windows::core::{implement, Ref, Result as WinResult};
 use windows::Win32::Foundation::HWND;
@@ -27,10 +17,8 @@ use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWLP_USERDATA};
 
 use crate::dock::Dock;
 
-/// 注册在 Dock 窗口上的拖放目标。
-///
-/// `#[implement]` 生成 COM vtable；`DockDropTarget_Impl` 是宏产生的
-/// 实现载体，字段通过 Deref 访问。
+/// Drop target registered on the dock window; `#[implement]` generates the
+/// COM vtable and the fields are reached through Deref.
 #[derive(Debug)]
 #[implement(IDropTarget)]
 pub struct DockDropTarget {
@@ -43,16 +31,17 @@ impl DockDropTarget {
         Self { hwnd }
     }
 
-    /// UI 线程上的 `Box<Dock>`；窗口销毁前会被 wndproc 清空。
+    /// The UI thread's `Box<Dock>`; the wndproc clears it before the window dies.
     fn dock(&self) -> *mut Dock {
-        // SAFETY: 与 wndproc 的 `dock_ptr` 同一套约定，先判空再解引用。
+        // SAFETY: Same contract as the wndproc's `dock_ptr`; callers null-check
+        // the result before dereferencing.
         unsafe { GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut Dock }
     }
 
-    /// `POINTL` 是屏幕坐标，转成窗口客户区**物理像素**。
+    /// `POINTL` is in screen coordinates; return client-area physical pixels.
     fn client(&self, pt: &POINTL) -> (f32, f32) {
         let mut p = POINT { x: pt.x, y: pt.y };
-        // SAFETY: p 是本栈帧有效、可写的 POINT。
+        // SAFETY: p is a valid, writable POINT on this stack frame.
         unsafe {
             let _ = ScreenToClient(self.hwnd, &mut p);
         }
@@ -63,8 +52,8 @@ impl DockDropTarget {
         let (x, y) = self.client(pt);
         let p = self.dock();
         if !p.is_null() {
-            // SAFETY: 回调在 UI 线程，Dock 存活且未被同时可变借用
-            //（`DragOver` 期间主循环不会被重入）。
+            // SAFETY: Runs on the UI thread with the Dock alive and not mutably
+            // borrowed: the main loop is not re-entered during `DragOver`.
             unsafe { (*p).set_external_drop(x, y) }
         }
     }
@@ -80,22 +69,23 @@ fn hdrop_format() -> FORMATETC {
     }
 }
 
-/// 只接受带文件列表（`CF_HDROP`）的拖放：桌面、资源管理器、任务管理器
-/// 拖出的应用/快捷方式都走这个格式；纯文本 / 网址 OLE 拖放不收。
+/// Accept file lists only (`CF_HDROP`): desktop, Explorer and Task Manager
+/// drags all use it; plain text or URL drags are rejected.
 fn has_files(data: &IDataObject) -> bool {
-    // SAFETY: fmt 是栈上完整的 FORMATETC，ptd 为 null 表示默认目标设备。
+    // SAFETY: fmt is a complete stack FORMATETC; a null ptd means the default
+    // target device.
     unsafe { data.QueryGetData(&hdrop_format()) }.is_ok()
 }
 
-/// 从 `IDataObject` 取出被拖的文件路径。`ReleaseStgMedium` 无条件调用。
+/// Extract the dropped file paths. `ReleaseStgMedium` runs unconditionally.
 fn paths_from(data: &IDataObject) -> Vec<String> {
     let mut medium = match unsafe { data.GetData(&hdrop_format()) } {
         Ok(m) => m,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    // SAFETY: GetData 成功后 medium 持有合法的 HGLOBAL；无论解析结果如何，
-    // 函数结束前都会 ReleaseStgMedium，不会泄漏 COM 内存。
+    // SAFETY: After a successful GetData the medium holds a valid HGLOBAL, and
+    // ReleaseStgMedium runs before return, so no COM memory leaks.
     unsafe {
         if medium.tymed == TYMED_HGLOBAL.0 as u32 {
             let hdrop = HDROP(medium.u.hGlobal.0);
@@ -115,8 +105,8 @@ fn paths_from(data: &IDataObject) -> Vec<String> {
     out
 }
 
-/// COM 回调的 `pdweffect: *mut DROPEFFECT` 由 `IDropTarget_Impl` 签名固定，
-/// 无法改成安全引用；写入前已由 OLE 保证指针有效。
+/// `pdweffect: *mut DROPEFFECT` is fixed by the `IDropTarget_Impl` signature and
+/// cannot become a safe reference; OLE guarantees it is writable.
 #[expect(
     clippy::not_unsafe_ptr_arg_deref,
     reason = "IDropTarget_Impl signatures are fixed by the COM ABI"
@@ -130,7 +120,7 @@ impl IDropTarget_Impl for DockDropTarget_Impl {
         effect: *mut DROPEFFECT,
     ) -> WinResult<()> {
         let ok = pdataobj.as_ref().is_some_and(has_files);
-        // SAFETY: OLE 保证 pdweffect 可写。
+        // SAFETY: OLE guarantees pdweffect is writable.
         unsafe { *effect = if ok { DROPEFFECT_COPY } else { DROPEFFECT_NONE } };
         if ok {
             self.over(pt);
@@ -168,7 +158,8 @@ impl IDropTarget_Impl for DockDropTarget_Impl {
         let files = pdataobj.as_ref().map(paths_from).unwrap_or_default();
         let p = self.dock();
         if !p.is_null() {
-            // 先收掉让位，再落地路径 —— 否则插入标记会残留到下一帧。
+            // Clear the reserved slot before consuming the paths, otherwise the
+            // insertion marker survives into the next frame.
             unsafe {
                 (*p).clear_external_drop();
                 if !files.is_empty() {

@@ -1,11 +1,7 @@
 //! Minimal HTTP client on WinHTTP.
 //!
-//! Why not a crate: the app makes three kinds of request (GitHub API, a DoH
-//! resolver, release assets) and already links Win32. WinHTTP gives the system
-//! proxy, the OS trust store, chunked/redirect handling and HTTP/1.1 for free;
-//! `reqwest` would add a TLS stack and ~1 MB to a 7 MB binary.
-//!
-//! Only `GET` is implemented — every request we make is a download.
+//! WinHTTP brings the system proxy, the OS trust store, redirects and HTTP/1.1,
+//! so no TLS stack or extra crate is linked. Only `GET` is implemented.
 
 use std::fmt;
 
@@ -18,8 +14,8 @@ use windows::Win32::Networking::WinHttp::{
 };
 
 /// Body caps. API answers and DoH replies are kilobytes; a release asset is a
-/// 7 MB stable exe or a ~35 MB debug one. The cap exists so a hostile mirror
-/// cannot make us allocate without bound — it is not a size policy.
+/// few MB. The cap stops a hostile mirror from forcing unbounded allocation, it
+/// is not a size policy.
 pub const SMALL_BODY: usize = 16 * 1024 * 1024;
 pub const LARGE_BODY: usize = 128 * 1024 * 1024;
 
@@ -225,7 +221,7 @@ struct Parts<'a> {
     tls: bool,
 }
 
-/// `https://host[:port]/path?query` → parts. Fragments are dropped.
+/// `https://host[:port]/path?query` to parts. Fragments are dropped.
 fn split_url(url: &str) -> Option<Parts<'_>> {
     let (tls, rest) = url
         .strip_prefix("https://")

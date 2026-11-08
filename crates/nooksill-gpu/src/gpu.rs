@@ -1,14 +1,8 @@
-//! wgpu 设备与颜色格式。
+//! wgpu device and color format.
 //!
-//! M0 的结论改变了这里的设计：**不再创建 `wgpu::Surface`**。
-//! wgpu 在 Windows 上没有带 alpha 的交换链（DX12/Vulkan 都只报 `Opaque`），
-//! 所以渲染目标改成离屏纹理，呈现交给 `present.rs` 的 `UpdateLayeredWindow`
-//! （ADR-008）。好处是逐像素透明与逐像素命中都回来了。
-//!
-//! 适配器选择（ADR-012）：
-//! - `""`（自动）→ `PowerPreference::LowPower`，让后端挑省电的那块（通常是核显）。
-//! - 非空 → 在 DX12 实例里按**名字**匹配。匹配不到就回退自动并在日志里说清楚，
-//!   而不是让程序起不来 —— 换机器、换驱动都会让名字变。
+//! No `wgpu::Surface`: Windows has no alpha swapchain (DX12/Vulkan report
+//! `Opaque`), so frames go to an offscreen texture blitted by `present.rs` with
+//! `UpdateLayeredWindow`, which restores per-pixel alpha.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -27,7 +21,7 @@ pub fn msaa_preference() -> u32 {
     MSAA_PREF.load(Ordering::Relaxed)
 }
 
-/// GPU 初始化错误。
+/// GPU initialization failure.
 #[derive(Debug)]
 pub enum GpuError {
     Wgpu(String),
@@ -45,14 +39,14 @@ impl std::fmt::Display for GpuError {
 
 impl std::error::Error for GpuError {}
 
-/// 这次到底用了哪块卡，以及为什么。
+/// Which adapter ended up in use, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selection {
-    /// 配置为自动。
+    /// Configured as automatic.
     Auto,
-    /// 按名字命中。
+    /// Matched by name.
     Pinned,
-    /// 配置了名字但没找到，已回退到自动。
+    /// A name was configured but not found; fell back to automatic.
     Fallback {
         wanted: String,
         available: Vec<String>,
@@ -60,10 +54,10 @@ pub enum Selection {
 }
 
 impl Selection {
-    /// 日志与界面用的一句话说明。
+    /// One-line description for logs and the UI.
     ///
-    /// 回退时只列前三个候选：界面里这行是橙色提示，列全会把布局撑爆
-    /// （本机有 4 个候选，其中 NVIDIA 还被 wgpu 重复枚举了一次）。
+    /// Only the first three candidates are listed: the settings UI shows this
+    /// as an orange hint and a full list overflows the layout.
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
@@ -86,18 +80,19 @@ impl Selection {
         }
     }
 
-    /// 是否发生了回退。界面据此把提示标黄。
+    /// Whether a fallback happened; the UI colors the hint with this.
     #[must_use]
     pub const fn fell_back(&self) -> bool {
         matches!(self, Self::Fallback { .. })
     }
 
-    /// 当前 ini 里的 `[Graphics] Adapter` 是否还是**启动时**用的那份。
+    /// Whether the ini `[Graphics] Adapter` still matches the adapter picked at
+    /// startup.
     ///
-    /// 设备只在进程启动时创建（ADR-012），运行中改配置不会换卡。设置界面
-    /// 靠这个判断要不要提示「重启后生效」，而不是让用户以为点完就切了。
-    /// `actual` 传 `Gpu::info.name`：按名字命中时 wgpu 可能追加厂商后缀，
-    /// 所以与 `pick_by_name` 一样用「互相包含」放宽比较。
+    /// The device is created once per process, so runtime config edits never
+    /// switch it; the settings UI warns about the required restart instead.
+    /// `actual` is `Gpu::info.name`, which wgpu may suffix with a vendor name,
+    /// hence the mutual-contains comparison used in `pick_by_name` too.
     #[must_use]
     pub fn matches_config(&self, configured: &str, actual: &str) -> bool {
         match self {
@@ -132,32 +127,29 @@ impl std::fmt::Debug for Gpu {
 }
 
 impl Gpu {
-    /// 离屏渲染用的颜色格式。
+    /// Color format for offscreen rendering.
     ///
-    /// **必须是 sRGB 目标**。第一版用了 `Rgba8Unorm`，结果 egui 在非 sRGB
-    /// 目标上自己做了一次 gamma 编码，颜色被提亮（实测面板 24 灰变成 81 灰，
-    /// 肉眼就是"磨砂变成半透明灰雾"）。换成 `Rgba8UnormSrgb` 后由硬件完成
-    /// 编码，回读出来的字节就是屏幕值。
+    /// Must be sRGB: with `Rgba8Unorm` egui gamma-encodes into a non-sRGB target
+    /// itself and everything brightens (24 grey read back as 81). With
+    /// `Rgba8UnormSrgb` the hardware encodes and the bytes match the screen.
     pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-    /// 设备限制里**唯一被收紧**的项：非采样绑定预算。
+    /// The only tightened limit: the non-sampler binding budget.
     ///
-    /// wgpu 默认 1_000_000。官方文档原话：这个值只影响 DX12 后端，
-    /// 它按此**在创建设备时预分配**全局描述符堆；核显与 CPU 共享内存，
-    /// 所以直接吃掉系统 RAM。
-    ///
-    /// 实测（AMD 610M，空设备工作集）：1_000_000 → 164 MB，4096 → 133 MB，
-    /// 再往下（256/64）没有额外收益。Dock 每帧只有 1–2 个 bind group，
-    /// 4096 绰绰有余。
+    /// wgpu defaults to 1_000_000. Per its docs this affects DX12 only, which
+    /// pre-allocates the global descriptor heap at device creation; on integrated
+    /// GPUs that comes out of system RAM. Measured on an AMD 610M: 1_000_000
+    /// costs 164 MB, 4096 costs 133 MB, lower values gain nothing. The dock uses
+    /// one or two bind groups per frame.
     pub const DESCRIPTOR_BUDGET: u32 = 4096;
 
-    /// 按适配器能力构造限制，只把描述符预算压下来。
+    /// Build limits from the adapter's own capabilities, tightening only the
+    /// descriptor budget.
     ///
-    /// **不要用 `Limits::downlevel_defaults()`**：它的
-    /// `max_texture_dimension_2d` 只有 2048，而 2560 宽的 Dock 在 150% DPI 下
-    /// 就需要 3840 px 的离屏纹理 —— 会在超宽屏上建纹理直接失败。
-    /// 这里用适配器自报的能力（通常 8192/16384），既安全又不额外吃内存
-    /// （实测三档限制的内存量完全一致）。
+    /// Do not use `Limits::downlevel_defaults()`: its `max_texture_dimension_2d`
+    /// is 2048, while a 2560-wide dock at 150% DPI needs a 3840px offscreen
+    /// texture and would fail on ultrawide screens. Adapter limits are safe and
+    /// cost no extra memory.
     fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         wgpu::Limits {
             max_non_sampler_bindings: Self::DESCRIPTOR_BUDGET,
@@ -165,9 +157,8 @@ impl Gpu {
         }
     }
 
-    /// 建实例 + 按 `wanted` 挑适配器 + 请求设备。
-    ///
-    /// `wanted` 是适配器名字，空串表示自动。
+    /// Create the instance, pick an adapter by `wanted` (empty = automatic) and
+    /// request a device.
     pub fn new(wanted: &str) -> Result<Self, GpuError> {
         let backends = requested_backends();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -202,9 +193,10 @@ impl Gpu {
         };
 
         let info = adapter.get_info();
-        // 2x MSAA 只在设备声明了 adapter-specific 格式特性时才合法：WebGPU 对
-        // `Rgba8UnormSrgb` 只保证 [1, 4]，而大窗口走 2x 省显存。请求这个特性
-        // 没有额外开销，拿不到就退回规范保证的档位（见 `perf::resolve_samples`）。
+        // 2x MSAA needs adapter-specific format features: WebGPU only guarantees
+        // [1, 4] for `Rgba8UnormSrgb`, and large windows use 2x to save VRAM.
+        // Requesting the feature is free; without it `perf::resolve_samples`
+        // falls back to the guaranteed counts.
         let mut features = wgpu::Features::empty();
         if adapter
             .features()
@@ -216,8 +208,8 @@ impl Gpu {
             label: Some("nooksill"),
             required_features: features,
             required_limits: Self::device_limits(&adapter),
-            // Dock 每帧只有一两个 bind group，不需要分配器替性能多留余量。
-            // 实测（AMD 610M 核显，空设备）：Performance 164 MB → MemoryUsage 102 MB。
+            // One or two bind groups per frame, so no allocator headroom needed.
+            // Measured on an AMD 610M: Performance 164 MB, MemoryUsage 102 MB.
             memory_hints: wgpu::MemoryHints::MemoryUsage,
             ..Default::default()
         }))
@@ -234,15 +226,15 @@ impl Gpu {
     }
 }
 
-/// 这次进程要用哪些后端。
+/// Backends this process will use.
 ///
-/// wgpu 本身已经抽象掉图形 API，锁死的是**实例创建时传的 `Backends`**：
-/// 早先三处都写死 `DX12`，Vulkan/Metal 一律拿不到适配器。而 Windows 的
-/// 默认值也不能是 `PRIMARY` —— 装了 Vulkan 驱动的机器上 wgpu 会优先挑它，
-/// 而 DX12 与 DWM 的合成路径才是我们调过的（M0 实测过差异）。
+/// wgpu abstracts the graphics API, but `Backends` is fixed at instance
+/// creation. The Windows default is deliberately not `PRIMARY`: on machines with
+/// a Vulkan driver wgpu would prefer it, and the DX12 path is the one tuned
+/// against DWM composition.
 ///
-/// `NOOKSILL_BACKEND` 只给移植验证用，不是用户设置：它决定的是"这个进程
-/// 能不能起来"，放设置里没有意义（起不来就没界面改它）。
+/// `NOOKSILL_BACKEND` is for port validation only, not a user setting: it decides
+/// whether the process starts at all, which a settings UI cannot help with.
 fn requested_backends() -> wgpu::Backends {
     use wgpu::Backends;
     let raw = std::env::var("NOOKSILL_BACKEND").unwrap_or_default();
@@ -259,8 +251,7 @@ fn requested_backends() -> wgpu::Backends {
     }
 }
 
-/// 平台默认后端：Windows 走 DX12，其它平台交给 wgpu 的 `PRIMARY`
-/// （Linux/Android 上是 Vulkan，macOS 上是 Metal）。
+/// Platform default: DX12 on Windows, wgpu's `PRIMARY` elsewhere.
 const fn default_backends() -> wgpu::Backends {
     if cfg!(windows) {
         wgpu::Backends::DX12
@@ -269,7 +260,8 @@ const fn default_backends() -> wgpu::Backends {
     }
 }
 
-/// 自动：交给后端按功耗偏好挑。Dock 常驻，别唤醒独显。
+/// Automatic: let the backend pick by power preference. The dock always runs, so
+/// keep the discrete GPU asleep.
 fn pick_auto(instance: &wgpu::Instance) -> Result<wgpu::Adapter, GpuError> {
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
@@ -280,10 +272,10 @@ fn pick_auto(instance: &wgpu::Instance) -> Result<wgpu::Adapter, GpuError> {
     .map_err(|e| GpuError::Wgpu(format!("找不到可用适配器: {e}")))
 }
 
-/// 按名字挑。
+/// Pick by name.
 ///
-/// 先精确（忽略大小写），再退化到互相包含 —— wgpu 有时会在名字后追加
-/// 厂商后缀，而用户在列表里选的是 DXGI 的原名。
+/// Exact match (case-insensitive) first, then mutual containment: wgpu may
+/// append a vendor suffix while the user picked the raw DXGI name.
 fn pick_by_name(instance: &wgpu::Instance, wanted: &str) -> Option<wgpu::Adapter> {
     let needle = wanted.to_lowercase();
     let adapters = pollster::block_on(instance.enumerate_adapters(requested_backends()));
@@ -320,7 +312,8 @@ mod tests {
         assert!(text.contains("A / B"));
     }
 
-    /// 运行中改了显卡配置必须能被认出来，否则界面不会提示重启。
+    /// A runtime adapter change must be detected, or the UI never warns about the
+    /// restart.
     #[test]
     fn matches_config_detects_a_pending_adapter_change() {
         let actual = "AMD Radeon(TM) 610M";
@@ -334,7 +327,7 @@ mod tests {
         assert!(fb.matches_config("不存在的卡", actual));
         assert!(!fb.matches_config("AMD", actual));
 
-        // wgpu 名字带厂商后缀时也算同一块卡。
+        // A vendor suffix still identifies the same card.
         assert!(Selection::Pinned.matches_config("AMD Radeon", actual));
         assert!(Selection::Pinned.matches_config("AMD Radeon(TM) 610M", actual));
         assert!(!Selection::Pinned.matches_config("NVIDIA RTX 5070", actual));
@@ -343,8 +336,8 @@ mod tests {
 
     #[test]
     fn descriptor_budget_stays_small() {
-        // 4096 是实测拐点：再往下（256/64）不会更省，往上就是白送内存。
-        // 改回 wgpu 默认的 1_000_000 会白丢 31 MB（164 vs 133）。
+        // 4096 is the measured knee: lower values save nothing more, higher ones
+        // waste memory. Restoring wgpu's 1_000_000 default throws away 31 MB.
         let budget = super::Gpu::DESCRIPTOR_BUDGET;
         assert!(
             (1024..=65536).contains(&budget),

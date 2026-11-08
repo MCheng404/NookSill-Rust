@@ -1,13 +1,8 @@
 //! In-app update: check the GitHub release, pick a mirror, download, verify.
 //!
-//! The flow is deliberately boring and always ends in a file the user can
-//! inspect: nothing is executed until the downloaded bytes match the
-//! `.sha256` the release ships.
-//!
-//! Mirrors exist because `github.com` is often unreachable from the mainland.
-//! They are plain reverse proxies: `https://<mirror>/<original-url>`. Which one
-//! is used is decided at runtime by timing a small request, not by a hardcoded
-//! order — these hosts change weekly.
+//! Nothing is executed until the bytes match the release's `.sha256`. Mirrors
+//! are plain reverse proxies (`https://<mirror>/<original-url>`) timed at
+//! runtime, because those hosts change weekly.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -22,7 +17,7 @@ use crate::net;
 pub const REPO: &str = "MCheng404/NookSill-Rust";
 
 /// Reverse proxies, fastest-first by convention; the real order comes from
-/// timing. Keep them all with a trailing slash — [`mirror_url`] relies on it.
+/// timing. Keep them all with a trailing slash because [`mirror_url`] relies on it.
 pub const MIRRORS: &[&str] = &[
     "https://gh-proxy.com/",
     "https://ghfast.top/",
@@ -43,9 +38,9 @@ pub enum UpdateError {
     Net(net::NetError),
     Json,
     Http(String),
-    /// The release has no `.exe` asset — packaging changed under us.
+    /// The release has no `.exe` asset; packaging changed under us.
     NoAsset,
-    /// GitHub 上一个已发布的版本都没有。
+    /// No release has been published on GitHub.
     NoRelease,
     Io(std::io::Error),
     /// Downloaded bytes do not match the published checksum.
@@ -58,8 +53,8 @@ pub enum UpdateError {
 impl fmt::Display for UpdateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // GitHub 匿名接口每小时只有 60 次；撞上限时给一句能懂的话，
-            // 免得用户把 403 当成仓库没了。
+            // The anonymous API allows 60 requests per hour; say so plainly so a
+            // 403 is not read as "the repository is gone".
             Self::Net(net::NetError::Status(code @ (403 | 429))) => {
                 write!(
                     f,
@@ -157,11 +152,11 @@ pub struct Release {
     pub notes: String,
     pub exe: Asset,
     pub sha256: Asset,
-    /// 预发布（`dev` 通道）。界面据此把"新版本"说成"新的预发布"。
+    /// Pre-release (the `dev` channel). The UI calls it "new pre-release".
     pub prerelease: bool,
 }
 
-/// `https://github.com/x` → `https://<mirror>/https://github.com/x`.
+/// Prefix `original` with `mirror`; an empty mirror means direct download.
 #[must_use]
 pub fn mirror_url(mirror: &str, original: &str) -> String {
     if mirror.is_empty() {
@@ -173,8 +168,8 @@ pub fn mirror_url(mirror: &str, original: &str) -> String {
 
 /// Ask GitHub for the newest release we can offer.
 ///
-/// `/releases/latest` answers **404** whenever there is no *stable* release —
-/// after a release cleanup, or while the project only has pre-releases. That
+/// `/releases/latest` answers **404** whenever there is no *stable* release,
+/// e.g. after a cleanup or while only pre-releases exist. That
 /// is a normal state, not an error: fall back to the list endpoint so "check
 /// for updates" keeps working in that window.
 pub fn latest_release() -> Result<Release, UpdateError> {
@@ -201,7 +196,7 @@ fn fetch_release(url: &str) -> Result<Release, UpdateError> {
     parse_release(&doc)
 }
 
-/// Newest non-draft entry from `/releases` — pre-releases included.
+/// Newest non-draft entry from `/releases`, pre-releases included.
 fn newest_published() -> Result<Release, UpdateError> {
     let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=15");
     let res = net::get(&url, &api_headers(), TIMEOUT_MS, net::SMALL_BODY)?;
@@ -212,11 +207,12 @@ fn newest_published() -> Result<Release, UpdateError> {
     pick_newest(list).ok_or(UpdateError::NoRelease)
 }
 
-/// 从 `/releases` 的数组里挑出最该推荐的那一个。
+/// Pick the release to recommend from the `/releases` array.
 ///
-/// 草稿跳过；缺 `.exe`/`.sha256` 的半成品跳过（否则"检查更新"会卡在一个
-/// 永远下不动的版本上）；其余按版本号取最大，不按发布时间 —— 补发的旧版本
-/// 不该盖住新的。
+/// Drafts are skipped, as is any entry missing the `.exe` or `.sha256` (update
+/// checks would otherwise stall on a version that can never download). The
+/// highest version wins, not the newest entry: a re-cut old release must not
+/// shadow a newer one.
 fn pick_newest(list: &[Json]) -> Option<Release> {
     let mut best: Option<Release> = None;
     for item in list {
@@ -236,12 +232,11 @@ fn pick_newest(list: &[Json]) -> Option<Release> {
     best
 }
 
-/// 版本号不一定在 `tag_name` 里。
+/// The version is not always in `tag_name`.
 ///
-/// 滚动预发布的 tag 固定是 `dev`（每次覆盖同一个 release），版本写在标题
-/// （`Development build 2.0.0-8-abc1234`）和资产名
-/// （`NookSill-2.0.0-8-abc1234-win64-debug.exe`）里。三个来源依次尝试，
-/// 资产名排在标题前：它是构建产物自己带的名字，比人手写的标题可靠。
+/// The rolling pre-release tag is a fixed `dev` (each build overwrites the same
+/// release), so the version lives in the title or the asset name. Asset names are
+/// tried before the title because they come from the build itself.
 fn version_of(doc: &Json) -> Option<Version> {
     if let Some(tag) = doc.get("tag_name").and_then(Json::as_str) {
         if let Some(v) = version_in(tag) {
@@ -261,17 +256,16 @@ fn version_of(doc: &Json) -> Option<Version> {
     title.split_whitespace().find_map(version_in)
 }
 
-/// 从一段文本里抠出版本号。
+/// Extract a version from arbitrary text.
 ///
-/// 认三种写法：`v1.0.0`、`1.0.0-8-abc1234`、`NookSill-1.0.0-8-abc1234-win64.exe`。
-/// 做法是找到第一个「数字开头」的位置，从那里截到最后一个点分数字/构建号为止，
-/// 再把显示用的 `text` 重建成规整形式 —— 资产名里的前后缀不该进界面。
+/// Accepts `v1.0.0`, `1.0.0-8-abc1234` and `NookSill-1.0.0-8-abc1234-win64.exe`.
+/// `text` is rebuilt in canonical form so asset prefixes never reach the UI.
 fn version_in(raw: &str) -> Option<Version> {
     let start = raw.find(|c: char| c.is_ascii_digit())?;
     let rest = &raw[start..];
     let mut parsed = Version::parse(rest)?;
-    // 只接受「点分三段都在合理范围」的解析结果，避免把 `2026.11.06` 这种
-    // 日期或 `2.0.0.1` 之后的垃圾当成版本。
+    // Only accept a sane dotted triple, so dates like `2026.11.06` and junk after
+    // a fourth group are rejected.
     if parsed.major > 999 || parsed.minor > 999 || parsed.patch > 999 {
         return None;
     }
@@ -333,10 +327,10 @@ fn parse_release(doc: &Json) -> Result<Release, UpdateError> {
     })
 }
 
-/// 这个版本该不该推给当前这份安装？
+/// Whether this release should be offered to the current install.
 ///
-/// 通道规则：dev 构建跟 dev 通道（预发布也提示），正式版只收正式版 ——
-/// 否则稳定版用户会被推一个预发布，等于替他把稳定性降级。
+/// Channel rule: a dev build follows the dev channel and sees pre-releases; a
+/// stable build only sees stable releases, so it is never silently downgraded.
 #[must_use]
 pub fn is_offered(release: &Release, installed: &Version) -> bool {
     let on_dev_channel = installed.build.is_some();
@@ -435,7 +429,8 @@ pub fn pick_mirror(target: &str, test_all: bool, allow_direct: bool) -> Option<S
 pub fn download(base: &str, asset: &Asset) -> Result<Vec<u8>, UpdateError> {
     let url = mirror_url(base, &asset.url);
     let headers = format!("User-Agent: {UA}\r\n");
-    // 资产是裸 exe：debug 版本能到 35 MB，别用 API 那档上限。
+    // The asset is a bare exe (a debug build reaches 35 MB), so the larger cap
+    // applies instead of the API one.
     let res = net::get(&url, headers.as_str(), TIMEOUT_MS, net::LARGE_BODY)?;
     Ok(res.body)
 }
@@ -529,16 +524,17 @@ mod tests {
     fn versions_parse_and_compare() {
         let rel = |s: &str| Version::parse(s).unwrap();
         assert!(rel("v1.0.1").is_newer_than(&rel("1.0.0")));
-        // 稳定版比同号的 dev 新
+        // A stable release beats a dev build of the same version.
         assert!(rel("1.0.0").is_newer_than(&rel("1.0.0-65-abc1234")));
-        // dev 之间比构建号
+        // Dev builds compare by build number.
         assert!(rel("1.0.0-66-abc1234").is_newer_than(&rel("1.0.0-65-abc1234")));
         assert!(!rel("1.0.0-65-abc1234").is_newer_than(&rel("1.0.0")));
         assert_eq!(rel("1.0.0-65-abc1234").build, Some(65));
         assert_eq!(rel("v1.0.0").build, None);
     }
 
-    /// `/releases` 的回退路径：草稿、缺资产、旧版本都要被正确跳过。
+    /// The `/releases` fallback: drafts, entries without assets and older
+    /// versions must all be skipped.
     #[test]
     fn newest_published_skips_drafts_and_broken_entries() {
         let list = json::parse(
@@ -558,7 +554,8 @@ mod tests {
         assert!(picked.prerelease, "选中的是预发布，界面要说清楚");
     }
 
-    /// 真实载荷：滚动预发布的 tag 是 `dev`，版本在标题与资产名里。
+    /// Real payload: the rolling pre-release tag is `dev`, so the version comes
+    /// from the title and the asset name.
     #[test]
     fn version_is_read_from_title_or_asset_when_tag_is_a_channel_name() {
         let doc = json::parse(

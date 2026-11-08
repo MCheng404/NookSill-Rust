@@ -1,7 +1,7 @@
-//! 共享输入框 `text_field` 的交互契约。
+//! Interaction contract of the shared `text_field`.
 //!
-//! 视觉对齐（文字垂直居中）由离屏截图像素核对；这里守住能自动化的部分：
-//! 清除按钮、焦点时收起 hint、以及输入确实写回字符串。
+//! Pixel-exact vertical centring is checked by offscreen screenshots; what is
+//! asserted here is the clear button, the hint and the write-back.
 
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
@@ -47,7 +47,7 @@ fn harness(text: &str) -> Harness<'static, St> {
         )
 }
 
-/// 有内容时右侧出现清除按钮，点一下清空并写回字符串。
+/// A clear button appears while non-empty and clears the string on click.
 #[test]
 fn 清除按钮清空输入() {
     let mut h = harness("图标");
@@ -58,7 +58,7 @@ fn 清除按钮清空输入() {
     assert_eq!(h.state().text, "", "清除按钮应清空字符串");
 }
 
-/// 清除按钮只在有内容时出现；空内容时右侧让位给快捷键提示。
+/// The clear button only exists while non-empty; otherwise the shortcut shows.
 #[test]
 fn 空内容时没有清除按钮() {
     let h = harness("");

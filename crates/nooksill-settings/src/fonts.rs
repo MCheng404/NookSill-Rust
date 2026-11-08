@@ -1,14 +1,8 @@
-//! 中文字体装载。
+//! CJK font loading.
 //!
-//! egui 的 `default_fonts` 只带 Ubuntu-Light 与 emoji，**没有 CJK**：
-//! 不装字体的话整个界面是豆腐块，而 a11y 树里的文字仍然正确 ——
-//! 也就是说单元测试会全绿，人眼看全是方块。这类"测试通过但产品报废"
-//! 的坑必须在第一层就堵住，所以字体装载是 settings crate 的入口步骤。
-//!
-//! 为什么运行时读系统字体而不是打包子集：
-//! - `msyh.ttc` 是集合字体（TTC），epaint 的 `FontData.index` 支持选 face；
-//! - 打包 Noto Sans SC 子集要 +1~3 MB，而系统字体本来就在；
-//! - 代价是"换机器可能没有这个字体"，所以按优先级逐个尝试并返回是否成功。
+//! egui's default fonts carry no CJK glyphs, so without this the UI renders
+//! tofu boxes while the AccessKit tree and tests still pass. Font files are
+//! read from the system at runtime rather than bundled as a subset.
 
 use std::sync::{Arc, OnceLock};
 
@@ -16,13 +10,13 @@ use std::sync::{Arc, OnceLock};
 /// process. `FontData` wraps an `Arc<Blob>`, so cloning it is cheap.
 static CJK: OnceLock<Option<Arc<egui::FontData>>> = OnceLock::new();
 
-/// 按优先级尝试的系统字体。第一个能读到的就装。
+/// System fonts tried in priority order; the first readable one is used.
 const CANDIDATES: &[(&str, u32)] = &[
-    (r"C:\Windows\Fonts\msyh.ttc", 0),   // 微软雅黑
-    (r"C:\Windows\Fonts\msyhbd.ttc", 0), // 微软雅黑 Bold
-    (r"C:\Windows\Fonts\Deng.ttf", 0),   // 等线
-    (r"C:\Windows\Fonts\simhei.ttf", 0), // 黑体
-    (r"C:\Windows\Fonts\simsun.ttc", 0), // 宋体
+    (r"C:\Windows\Fonts\msyh.ttc", 0),   // Microsoft YaHei
+    (r"C:\Windows\Fonts\msyhbd.ttc", 0), // Microsoft YaHei Bold
+    (r"C:\Windows\Fonts\Deng.ttf", 0),   // DengXian
+    (r"C:\Windows\Fonts\simhei.ttf", 0), // SimHei
+    (r"C:\Windows\Fonts\simsun.ttc", 0), // SimSun
 ];
 
 fn load_cjk() -> Option<Arc<egui::FontData>> {
@@ -31,11 +25,11 @@ fn load_cjk() -> Option<Arc<egui::FontData>> {
         .find(|(p, _)| std::path::Path::new(p).is_file())?;
     let bytes = std::fs::read(path).ok()?;
     let mut data = egui::FontData::from_owned(bytes);
-    data.index = *index; // TTC 里选第几个 face
+    data.index = *index; // face index inside a TTC collection
     Some(Arc::new(data))
 }
 
-/// 装载 CJK 字体。返回是否成功（失败时界面仍可用，只是中文会变方块）。
+/// Install the CJK font, returning false when no system font was found.
 pub fn install_cjk(ctx: &egui::Context) -> bool {
     let Some(data) = CJK.get_or_init(load_cjk).as_ref() else {
         return false;
@@ -45,7 +39,8 @@ pub fn install_cjk(ctx: &egui::Context) -> bool {
     fonts
         .font_data
         .insert("system-cjk".to_owned(), data.clone());
-    // 插到族表最前：中文优先用系统字体，拉丁字形仍会回落到后面自带的字体。
+    // Prepend to both families: CJK comes from the system font, Latin glyphs
+    // still fall through to the bundled ones.
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families
@@ -63,8 +58,7 @@ mod tests {
 
     #[test]
     fn font_file_is_discoverable_on_this_machine() {
-        // 这条不是断言"一定有字体"，而是给出诊断：开发机没有中文字体时
-        // 界面会变方块，但测试仍然全绿 —— 所以单独打印出来。
+        // Diagnostic only: a missing font renders tofu, which no test can see.
         let found = super::CANDIDATES
             .iter()
             .any(|(p, _)| std::path::Path::new(p).is_file());

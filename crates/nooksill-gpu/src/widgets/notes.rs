@@ -1,17 +1,20 @@
-//! 速记面板：列出所有速记，把「新建 / 编辑 / 删除」交给主循环。
+//! Quick notes panel: lists every note and hands create, edit and delete to
+//! the main loop.
 //!
-//! # 为什么面板里没有输入框
+//! No input fields
 //!
-//! 面板是 `WS_EX_NOACTIVATE` 风格的分层窗口，拿键盘焦点很麻烦。文本的
-//! 录入与中文输入法统一走 [`crate::widgets::editor`] 的模态弹窗（那里已经接了
-//! `WM_CHAR` + `WM_IME_*` + 多行 `TextEdit`）。面板只负责"看到列表、
-//! 点中哪一条"，动作由 `App` 取走后执行。
+//! The panel is a `WS_EX_NOACTIVATE` layered window and taking keyboard focus
+//! is awkward. Text entry and the IME go through the modal dialog in
+//! [`crate::widgets::editor`], which already handles `WM_CHAR`, `WM_IME_*` and
+//! a multiline `TextEdit`. The panel only shows the list and reports which row
+//! was picked; the action is executed by `App`.
 //!
-//! # 为什么分页而不是滚动
+//! Paging instead of scrolling
 //!
-//! `ScrollArea` 里的子 Ui 有滚动偏移，`ui.interact` 的矩形与 `RawInput`
-//! 的窗口坐标要额外换算，容易出现"看到的是 A、点到的是 B"。速记最多
-//! [`MAX_NOTES`] 条，固定每页 6 条 + 翻页按钮既够用又不会错位。
+//! A `ScrollArea` shifts its child Ui, so `ui.interact` rects and the
+//! `RawInput` window coords need extra conversion and it becomes easy to see
+//! one row and click another. There are at most [`MAX_NOTES`] notes, so a
+//! fixed 6 per page plus paging buttons is enough and never misaligns.
 
 use std::pin::Pin;
 use std::time::Instant;
@@ -35,9 +38,9 @@ use crate::gpu::{Gpu, GpuError};
 
 const CLASS_NAME: &str = "NookSillNotePanel";
 
-/// 每页显示几条。
+/// Notes shown per page.
 pub const PAGE_SIZE: usize = 6;
-/// 面板逻辑尺寸。
+/// Panel logical size.
 const W: f32 = 420.0;
 const H: f32 = 456.0;
 const PAD: f32 = 16.0;
@@ -47,23 +50,23 @@ const FOOTER_H: f32 = 34.0;
 const BTN_W: f32 = 56.0;
 const BTN_H: f32 = 24.0;
 
-/// 面板逻辑尺寸（离屏验收用）。
+/// Panel logical size (offscreen previews).
 pub const SIZE: (f32, f32) = (W, H);
 
-/// 面板产出的动作。
+/// An action produced by the panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoteAction {
-    /// 新建一条（弹窗问标题与正文）。
+    /// Create a note (the dialog asks for title and body).
     New,
-    /// 编辑第 `k` 条。
+    /// Edit note `k`.
     Edit(usize),
-    /// 删除第 `k` 条。
+    /// Delete note `k`.
     Remove(usize),
-    /// 翻页（面板内部消化，不外发给主循环）。
+    /// Turn the page (handled inside the panel, not sent to the main loop).
     Page(i32),
 }
 
-/// 速记面板。
+/// Quick notes panel.
 pub struct NoteWindow {
     hwnd: HWND,
     renderer: FrameRenderer,
@@ -75,7 +78,7 @@ pub struct NoteWindow {
     notes: Vec<Note>,
     page: usize,
     hover: Option<usize>,
-    /// 待主循环取走的动作。
+    /// Action waiting for the main loop.
     action: Option<NoteAction>,
     next_repaint: Option<Instant>,
 }
@@ -91,7 +94,7 @@ impl std::fmt::Debug for NoteWindow {
 }
 
 impl NoteWindow {
-    /// 建窗（默认隐藏）。
+    /// Creates the window (hidden).
     pub fn new(gpu: &Gpu, ppp: f32, dark: bool) -> Result<Pin<Box<Self>>, GpuError> {
         let hinst =
             unsafe { GetModuleHandleW(None) }.map_err(|_| GpuError::Win32("GetModuleHandleW"))?;
@@ -166,7 +169,8 @@ impl NoteWindow {
         self.visible
     }
 
-    /// 更新内容并显示。`anchor` 是速记图标的屏幕矩形（物理像素）。
+    /// Refreshes the content and shows the panel. `anchor` is the screen rect
+    /// (physical px) of the notes icon.
     pub fn show(&mut self, book: &NoteBook, anchor: (i32, i32, i32, i32)) {
         self.notes = book.notes.clone();
         self.clamp_page();
@@ -205,7 +209,7 @@ impl NoteWindow {
         self.next_repaint = Some(Instant::now());
     }
 
-    /// 数据变了之后重新喂一份，保留当前页。
+    /// Feeds new data in and keeps the current page.
     pub fn set_notes(&mut self, book: &NoteBook) {
         self.notes = book.notes.clone();
         self.clamp_page();
@@ -219,7 +223,7 @@ impl NoteWindow {
         }
     }
 
-    /// 总页数（至少 1 页，空面板也要能点「新建」）。
+    /// Number of pages (at least 1, so an empty panel can still show "new").
     #[must_use]
     pub fn pages(&self) -> usize {
         page_count(self.notes.len())
@@ -243,7 +247,7 @@ impl NoteWindow {
         }
     }
 
-    /// 取走待执行的动作。
+    /// Takes the pending action.
     pub fn take_action(&mut self) -> Option<NoteAction> {
         self.action.take()
     }
@@ -253,7 +257,7 @@ impl NoteWindow {
         self.visible && self.next_repaint.is_some_and(|t| t <= Instant::now())
     }
 
-    /// 画一帧。
+    /// Paints one frame.
     pub fn render(&mut self, gpu: &Gpu) -> Result<(), GpuError> {
         self.next_repaint = None;
         let pos = self.pos;
@@ -270,7 +274,8 @@ impl NoteWindow {
             action = paint(ui, dark, frosted, &notes, page, pages, hover);
         })?;
         match action {
-            // 翻页只改面板自己的状态，不占用主循环的动作通道。
+            // Paging only changes the panel's own state and does not use the
+            // main loop's action channel.
             Some(NoteAction::Page(delta)) => {
                 self.turn_page(delta);
                 self.next_repaint = Some(Instant::now());
@@ -337,7 +342,7 @@ impl NoteWindow {
     }
 }
 
-/// 第 `k` 行在窗口里的矩形（逻辑坐标）。
+/// Rect of row `k` in the window (logical coords).
 fn row_rect(k: usize) -> EguiRect {
     EguiRect::from_min_size(
         egui::pos2(PAD, PAD + HEADER_H + k as f32 * ROW_H),
@@ -345,14 +350,14 @@ fn row_rect(k: usize) -> EguiRect {
     )
 }
 
-/// 命中哪一行（不含页脚按钮）。
+/// Which row is hit (footer buttons excluded).
 fn row_at(x: f32, y: f32, total: usize, page: usize) -> Option<usize> {
     let start = page * PAGE_SIZE;
     let shown = total.saturating_sub(start).min(PAGE_SIZE);
     (0..shown).find(|&k| row_rect(k).contains(egui::pos2(x, y)))
 }
 
-/// 画面板。返回本帧的动作。
+/// Paints the panel. Returns the action of this frame.
 fn paint(
     ui: &mut egui::Ui,
     dark: bool,
@@ -363,7 +368,7 @@ fn paint(
     hover: Option<usize>,
 ) -> Option<NoteAction> {
     let rect = ui.max_rect();
-    // 与四个小组件面板共用同一套底色 / 磨砂叠加层 / 文字层级。
+    // Same base fill, overlay and text tiers as the other four panels.
     let style = PanelStyle::current(dark, frosted);
     let (bg, ink, faint, border, field) = palette(&style);
     let painter = ui.painter();
@@ -388,7 +393,7 @@ fn paint(
     );
 
     let mut action = None;
-    // 「新建」按钮（标题栏右侧）。
+    // "New" button, top right of the header.
     let new_rect = EguiRect::from_min_size(
         egui::pos2(rect.right() - PAD - BTN_W, rect.top() + PAD),
         egui::vec2(BTN_W, BTN_H),
@@ -406,7 +411,7 @@ fn paint(
         action = Some(NoteAction::New);
     }
 
-    // 列表。
+    // List.
     let start = page * PAGE_SIZE;
     let shown = notes.len().saturating_sub(start).min(PAGE_SIZE);
     if shown == 0 {
@@ -440,7 +445,8 @@ fn paint(
             faint,
         );
 
-        // 行内按钮。注册在整行之后，egui 的命中顺序让按钮优先。
+        // In-row buttons. Registered after the whole row, so egui's hit
+        // order lets the buttons win.
         let del_rect = EguiRect::from_min_size(
             egui::pos2(r.right() - BTN_W - 6.0, r.center().y - BTN_H / 2.0),
             egui::vec2(BTN_W, BTN_H),
@@ -474,13 +480,13 @@ fn paint(
                 action = Some(act);
             }
         }
-        // 按钮没被点时，点整行 = 编辑。
+        // When no button was hit, clicking the row means edit.
         if row_resp.clicked() && action.is_none() {
             action = Some(NoteAction::Edit(start + k));
         }
     }
 
-    // 页脚：翻页 + 条数。
+    // Footer: paging and the item count.
     let fy = rect.bottom() - PAD - FOOTER_H;
     painter.text(
         egui::pos2(rect.left() + PAD, fy + FOOTER_H / 2.0),
@@ -529,16 +535,16 @@ fn paint(
     action
 }
 
-/// 总页数。抽成纯函数才能在不开窗口的情况下测。
+/// Total number of pages. Pure function so it can be tested without a window.
 fn page_count(total: usize) -> usize {
     total.div_ceil(PAGE_SIZE).max(1)
 }
 
-/// 离屏验收入口（`examples/panels_shot.rs`）。
+/// Offscreen entry point (`examples/panels_shot.rs`).
 ///
-/// 与 `settings_win::shell` 同一个理由：截图必须走**真实窗口那一帧**的
-/// 绘制代码，自己拼一个近似版验不出问题。这里不建窗口、不碰 Win32，
-/// 只把面板内容画进调用方给的 `Ui`。
+/// Screenshots must use the real window's painting code; a hand-built
+/// approximation would not catch anything. This builds no window and touches
+/// no Win32 API, it only paints the panel into the caller's `Ui`.
 pub fn paint_preview(
     ui: &mut egui::Ui,
     dark: bool,
@@ -559,7 +565,8 @@ pub fn paint_preview(
 }
 
 fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) {
-    // 保留五个语义名，调用方后续绘制代码不动；值全部来自共享样式。
+    // Keeps five semantic names so the drawing code below stays unchanged;
+    // all values come from the shared style.
     (
         style.bg(),
         style.ink(),
@@ -569,7 +576,7 @@ fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) 
     )
 }
 
-/// 超宽就截断加省略号。
+/// Truncates overlong text and appends an ellipsis.
 fn fit_text(painter: &egui::Painter, text: &str, max_w: f32, size: f32) -> String {
     let font = FontId::proportional(size);
     if painter
@@ -601,7 +608,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     if ptr.is_null() {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
-    // SAFETY: 指针由 `attach` 挂在 `Pin<Box<Self>>` 的最终地址上。
+    // SAFETY: the pointer is stored by `attach` on the final address of the
+    // pinned `Box<Self>`.
     let win = unsafe { &mut *ptr };
     if let Some(result) = win.on_message(msg, wparam, lparam) {
         return result;
@@ -661,7 +669,8 @@ mod tests {
         assert_eq!(row_at(a.x, a.y, 3, 0), Some(0));
         let b = row_rect(1).center();
         assert_eq!(row_at(b.x, b.y, 3, 0), Some(1));
-        // 第二页的第 0 行也是页内下标 0；全局下标由调用方加 `page * PAGE_SIZE`。
+        // Row 0 of page 2 is also index 0 within the page; the global index
+        // is `page * PAGE_SIZE` plus it.
         assert_eq!(row_at(a.x, a.y, 10, 1), Some(0));
         assert_eq!(row_at(5.0, 5.0, 3, 0), None, "标题栏不算行");
     }

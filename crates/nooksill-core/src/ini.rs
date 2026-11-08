@@ -1,43 +1,35 @@
-//! `NookSill.ini` 的读、写与保真。
+//! Read, write and preserve `NookSill.ini`.
 //!
-//! 为什么不用第三方 ini crate：这个文件不是通用配置，它有三个硬约束，
-//! 现成 crate 一个都不满足：
-//!
-//! 1. **UTF-16LE + BOM**。用 `WritePrivateProfileStringW`，文件是
-//!    UTF-16LE 且带 `FF FE` 头。用 UTF-8 写回去，再读就会乱码。
-//! 2. **键序稳定**。每次保存都按同一顺序写回；键序被打乱会产生无意义的
-//!    diff，也让"改了什么"无从判断。
-//! 3. **保留未知键**。老版本读新版本写的 ini 时，不认识的键必须原样留着，
-//!    否则一次运行就抹掉别人的配置。
-//!
-//! 这里实现的是"够用的 profile API 子集"：段、`k=v`、`;` 注释、
-//! 大小写不敏感的查找。不做转义：条目格式本身用 `|` 分隔，
-//! 见 `CONFIG.md` 的已知限制。
+//! Not a generic ini file: it is UTF-16LE with a BOM, keys keep a stable
+//! order, and unknown keys survive so an older build cannot wipe a newer
+//! config. Implements the profile API subset it needs: sections, `k=v`, `;`
+//! comments, case-insensitive lookup. No escaping; item values are
+//! `|`-separated.
 
 use std::fs;
 use std::io;
 use std::path::Path;
 
-/// 文件编码。读进来是什么，写回去就是什么。
+/// File encoding. Whatever was read is what gets written back.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum Encoding {
-    /// `FF FE` + 每字符 2 字节小端。行为。
+    /// `FF FE` plus two-byte little-endian units. The default.
     #[default]
     Utf16Le,
-    /// `FE FF` + 大端。
+    /// `FE FF` plus big-endian units.
     Utf16Be,
-    /// 无 BOM 的 UTF-8（含纯 ASCII）。手工编辑过的文件常见。
+    /// UTF-8 without a BOM. Common for hand-edited files.
     Utf8,
 }
 
-/// 一个段。
+/// One section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
     pub name: String,
     pub entries: Vec<(String, String)>,
 }
 
-/// 整个 ini 文件。
+/// A whole ini file.
 #[derive(Clone, Debug, Default)]
 pub struct Ini {
     pub encoding: Encoding,
@@ -50,8 +42,9 @@ impl Ini {
         Self::default()
     }
 
-    /// 解码字节流。BOM 决定编码；没有 BOM 时按 UTF-8 处理，
-    /// 失败再退回 UTF-16LE 猜测（Windows 上偶尔会遇到无 BOM 的宽字符文件）。
+    /// Decode raw bytes. The BOM picks the encoding; without one, UTF-8 is
+    /// tried first and invalid input falls back to UTF-16LE, since Windows
+    /// sometimes emits BOM-less wide files.
     #[must_use]
     pub fn decode(bytes: &[u8]) -> (String, Encoding) {
         if bytes.starts_with(&[0xFF, 0xFE]) {
@@ -67,7 +60,7 @@ impl Ini {
         } else {
             match std::str::from_utf8(bytes) {
                 Ok(s) => (s.to_owned(), Encoding::Utf8),
-                // 不是合法 UTF-8，又没 BOM：按 UTF-16LE 再试一次。
+                // Not valid UTF-8 and no BOM: retry as UTF-16LE.
                 Err(_) => {
                     let (pairs, _) = bytes.as_chunks::<2>();
                     let units: Vec<u16> = pairs.iter().map(|c| u16::from_le_bytes(*c)).collect();
@@ -77,7 +70,7 @@ impl Ini {
         }
     }
 
-    /// 编码成字节流，写入 BOM。
+    /// Encode to bytes, including the BOM.
     #[must_use]
     pub fn encode(&self, encoding: Encoding) -> Vec<u8> {
         let text = self.to_text();
@@ -100,7 +93,7 @@ impl Ini {
         }
     }
 
-    /// 解析文本。
+    /// Parse text.
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let mut ini = Ini::new();
@@ -124,7 +117,8 @@ impl Ini {
                     continue;
                 }
                 let value = line[eq + 1..].trim().to_owned();
-                // 段外的键：Windows profile API 会忽略，这里同样丢弃。
+                // Keys outside any section are dropped, as the Windows
+                // profile API does.
                 if let Some(idx) = current {
                     ini.set_in_section(idx, key, value);
                 }
@@ -133,7 +127,7 @@ impl Ini {
         ini
     }
 
-    /// 序列化为文本（CRLF，与 profile API 一致）。
+    /// Serialize to text with CRLF line endings, as the profile API does.
     #[must_use]
     pub fn to_text(&self) -> String {
         let mut out = String::new();
@@ -184,7 +178,8 @@ impl Ini {
         }
     }
 
-    /// 读字符串。段或键不存在返回 `None`，存在但为空返回 `Some("")`。
+    /// Read a string. Missing section or key yields `None`; an empty value
+    /// yields `Some("")`.
     #[must_use]
     pub fn get(&self, section: &str, key: &str) -> Option<&str> {
         let idx = self.section_index(section)?;
@@ -195,15 +190,16 @@ impl Ini {
             .map(|(_, v)| v.as_str())
     }
 
-    /// 读整数。语义对齐 `GetPrivateProfileInt`：键不存在返回 `None`，
-    /// 存在但非数字返回 `Some(0)`。
+    /// Read an integer. Like `GetPrivateProfileInt`: a missing key yields
+    /// `None`, a non-numeric value yields `Some(0)`.
     #[must_use]
     pub fn get_i32(&self, section: &str, key: &str) -> Option<i32> {
         self.get(section, key)
             .map(|v| v.trim().parse::<i32>().unwrap_or(0))
     }
 
-    /// 写字符串。段/键不存在则追加（保持首次出现的顺序）。
+    /// Write a string. Appends the section or key when missing, keeping the
+    /// first-seen order.
     pub fn set(&mut self, section: &str, key: &str, value: impl Into<String>) {
         let idx = self.ensure_section(section);
         self.set_in_section(idx, key, value.into());
@@ -213,11 +209,11 @@ impl Ini {
         self.set(section, key, value.to_string());
     }
 
-    /// 删除单个键。段或键不存在时什么都不做。
+    /// Remove one key. Does nothing when the section or key is missing.
     ///
-    /// 没有对应 API（`WritePrivateProfileStringW(sec, key, NULL, ...)`
-    /// 就是删键），但它的调用方从不删键 —— 于是"待办从 3 条减到 1 条"
-    /// 时文件里会留着 `T1` / `T2`。这里补上。
+    /// The profile API equivalent is `WritePrivateProfileStringW(sec, key,
+    /// NULL, ...)`; without this, shrinking a todo list leaves `T1` / `T2`
+    /// behind.
     pub fn remove_key(&mut self, section: &str, key: &str) {
         let Some(idx) = self.section_index(section) else {
             return;
@@ -227,20 +223,21 @@ impl Ini {
             .retain(|(k, _)| !k.eq_ignore_ascii_case(key));
     }
 
-    /// 删除整个段（`WritePrivateProfileStringW(sec, NULL, NULL, ...)`）。
+    /// Remove a whole section (`WritePrivateProfileStringW(sec, NULL, NULL, ...)`).
     pub fn remove_section(&mut self, section: &str) {
         self.sections
             .retain(|s| !s.name.eq_ignore_ascii_case(section));
     }
 
-    /// 段内键值对数量。用于 `Count` 这类自校验字段。
+    /// Count key/value pairs in a section, used by self-check fields like `Count`.
     #[must_use]
     pub fn len_of(&self, section: &str) -> usize {
         self.section_index(section)
             .map_or(0, |i| self.sections[i].entries.len())
     }
 
-    /// 读文件。文件不存在时返回空 ini（而不是错误）——首次运行就是这种状态。
+    /// Load a file. A missing file yields an empty ini, not an error; that is
+    /// the first-run state.
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
         match fs::read(path) {
@@ -255,15 +252,16 @@ impl Ini {
         }
     }
 
-    /// 原子写入：先写 `<path>.tmp`，再改名覆盖。
+    /// Atomic write: write `<path>.tmp` first, then rename over the target.
     ///
-    /// 是逐键 `WritePrivateProfileStringW`，进程在保存中途被杀就会留下
-    /// 半截文件；`pr_en.md` 提到的"部分写入的 ini"就是这么来的。
+    /// Per-key `WritePrivateProfileStringW` can leave a half-written file if
+    /// the process dies mid-save.
     pub fn save(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
         let tmp = path.with_extension("ini.tmp");
         fs::write(&tmp, self.encode(self.encoding))?;
-        // Windows 上 rename 会覆盖已存在的目标（MoveFileEx + REPLACE_EXISTING）。
+        // Rename overwrites an existing target on Windows
+        // (MoveFileEx + REPLACE_EXISTING).
         match fs::rename(&tmp, path) {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -361,7 +359,7 @@ mod tests {
         let loaded = Ini::load(&path).expect("load");
         assert_eq!(loaded.encoding, Encoding::Utf16Le);
         assert_eq!(loaded.get("Settings", "Opacity"), Some("66"));
-        // 临时文件必须已被 rename 掉，不能留垃圾。
+        // The temp file must be renamed away, never left behind.
         assert!(!path.with_extension("ini.tmp").exists());
 
         let _ = fs::remove_file(&path);

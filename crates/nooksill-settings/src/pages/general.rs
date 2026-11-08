@@ -1,4 +1,4 @@
-//! 常规页：启动行为、锁定、快捷键、数据目录。
+//! General page: startup, locking, hotkey and data folder.
 
 use egui::Ui;
 use nooksill_core::config::Key;
@@ -9,9 +9,8 @@ use super::Command;
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(ctx, ui, "启动与常规", "", |ctx, ui| {
-        // 开机自启动没有配置键（写的是注册表），值取注册表真值；但仍走
-        // 与 toggle 完全相同的胶囊开关与行排版。切换只发命令，不改配置、
-        // 不标脏 —— 写盘由主循环的实际结果决定。
+        // Autostart has no config key: the value is the registry's truth and
+        // only a command leaves here, so the config is never marked dirty.
         let before = ctx.state.auto_start;
         if let Some(auto) = switch_row(
             ui,
@@ -56,8 +55,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
 
     card(ctx, ui, "设置界面", "", |ctx, ui| {
         combo(ctx, ui, Key::UiTheme, "设置窗口主题", UI_THEME_OPTS);
-        // 界面缩放：字体与按钮、行高、卡片间距一起缩（egui 的 ppp）。
-        // 改完由主循环就地重建窗口，不用重开。
+        // Scales fonts, buttons, row heights and card gaps through egui's ppp;
+        // the host rebuilds the window in place rather than reopening it.
         combo(
             ctx,
             ui,

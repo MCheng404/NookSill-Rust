@@ -110,13 +110,14 @@ mod tests {
     fn msaa_two_requires_the_adapter_specific_feature() {
         use egui_wgpu::wgpu::TextureFormatFeatureFlags as F;
         let all = F::MULTISAMPLE_X2 | F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8;
-        // 没声明特性时 2x 是非法值：升到 4，不能降到 1（那是改画质）。
+        // Without the feature 2x is invalid: round up to 4, never down to 1,
+        // which would change quality.
         assert_eq!(resolve_samples(2, all, false), 4);
         assert_eq!(resolve_samples(2, all, true), 2);
-        // 4 是规范保证的档位，两种设备都要给。
+        // 4 is spec-guaranteed, so both kinds of device get it.
         assert_eq!(resolve_samples(4, all, false), 4);
         assert_eq!(resolve_samples(4, all, true), 4);
-        // 硬件连 4 都不支持时只能退回单采样。
+        // Even 4 unsupported: single sample is the only option left.
         assert_eq!(resolve_samples(4, F::MULTISAMPLE_X2, false), 1);
         assert_eq!(resolve_samples(0, all, true), 1);
         assert_eq!(resolve_samples(1, all, true), 1);

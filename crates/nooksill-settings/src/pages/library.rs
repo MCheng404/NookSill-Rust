@@ -1,4 +1,4 @@
-//! 图标库页：从文件夹批量设置图标。
+//! Icon library page: bulk icon assignment from a folder.
 
 use egui::{RichText, Ui};
 

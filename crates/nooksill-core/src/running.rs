@@ -1,30 +1,22 @@
-//! 判断条目对应的应用是否在运行。
+//! Decide whether an item's app is running.
 //!
+//! Match rules, in priority order:
 //!
-//! # 为什么放在 core 而不是 platform
+//! 1. non-empty `item.target` -- the real exe path from `.lnk` resolution;
+//! 2. else `item.path` ending in `.exe`;
+//! 3. otherwise (unresolved `.lnk`, folder, url, separator) no match.
 //!
-//! `platform::app_window::running_apps()` 负责"系统里现在有哪些 exe 在跑"，
-//! 那需要 Win32；而"某个条目该拿什么去那张表里查"是纯逻辑 ——
-//! 放这里就能脱离桌面单测，也不必让 core 依赖 `HWND`。
-//!
-//! # 匹配规则（按优先级）
-//!
-//! 1. `item.target` 非空 → 用它。这是 `.lnk` 解析出来的真实 exe 路径，
-//!    最准。
-//! 2. `item.path` 本身以 `.exe` 结尾 → 用它。
-//! 3. 其余（未解析的 `.lnk`、文件夹、网址、分割线）→ 不参与匹配。
-//!
-//! 第 3 条很关键：**不能退化成"按文件名猜测"**。`网易云音乐.lnk` 指向的
-//! 是 `cloudmusic.exe`，按名字猜必然猜错，而不猜的结果是"指示点不亮"，
-//! 比"猜错了乱亮"要好 —— 后者会让用户以为某个没开的程序正在运行。
+//! Rule 3 is deliberate: never guess by file name. A shortcut named after
+//! the app usually points at a differently named exe, so a guess lights the
+//! indicator on the wrong item; a dark indicator is the lesser failure.
 
 use std::collections::HashSet;
 
 use crate::item::{Item, ItemKind};
 
-/// 这个条目应该拿什么键去"运行中的 exe 集合"里查。
+/// Key this item uses to look itself up in the running-exe set.
 ///
-/// 返回值统一小写（Windows 路径不区分大小写）。
+/// Always lowercase; Windows paths are case-insensitive.
 #[must_use]
 pub fn running_key(item: &Item) -> Option<String> {
     if item.kind != ItemKind::File {
@@ -39,10 +31,10 @@ pub fn running_key(item: &Item) -> Option<String> {
     None
 }
 
-/// 按 `running`（运行中的 exe 小写路径集合）刷新所有条目的 `running` 字段。
+/// Refresh every item's `running` flag from the lowercase exe path set.
 ///
-/// 返回**是否有条目状态发生了变化** —— 主循环据此决定要不要重绘。
-/// 每次扫描都无条件重绘会让空闲 CPU 从 0% 掉到十几帧。
+/// Returns whether any item changed, so the main loop can skip a redraw.
+/// Redrawing on every scan drops idle CPU from 0% to tens of frames per second.
 pub fn refresh_running(items: &mut [Item], running: &HashSet<String>) -> bool {
     let mut changed = false;
     for item in items.iter_mut() {
@@ -55,16 +47,18 @@ pub fn refresh_running(items: &mut [Item], running: &HashSet<String>) -> bool {
     changed
 }
 
-/// 计算"未固定的运行中应用"应该显示哪些。
+/// Compute which unpinned running apps should appear.
 ///
-/// * `running` —— 当前在运行的全部 exe（小写）。
-/// * `pinned` —— 已经固定在 Dock 上的 exe，不再重复出现。
-/// * `prev` —— 上一轮的临时条目。**保持它们的相对顺序**，只把还活着的留下。
-/// * `limit` —— 上限（栏体会按条目数缩放，太多会把 Dock 压扁）。
-/// * `skip` —— 要忽略的 exe（Dock 自己），空串表示不忽略。
+/// * `running` -- every running exe, lowercase.
+/// * `pinned` -- exes already pinned to the dock, not repeated.
+/// * `prev` -- previous round's temp items. Preserve their relative order
+///   and keep only the ones still alive.
+/// * `limit` -- cap; the bar scales with item count and gets squashed.
+/// * `skip` -- exe to ignore (the dock itself), empty means none.
 ///
-/// 顺序是"老的在前、新的按名字排在后面"：`EnumWindows` 给的是 Z 序，每轮
-/// 都变，按它重排会让图标互相穿插，每个位置还要重传图标纹理。
+/// Order is old first, new appended sorted by name: `EnumWindows` returns a Z
+/// order that changes every round, and reordering by it makes icons shuffle and
+/// forces a texture re-upload per slot.
 #[must_use]
 pub fn temp_keys(
     running: &HashSet<String>,
@@ -104,7 +98,7 @@ mod tests {
         items.iter().map(|s| (*s).to_owned()).collect()
     }
 
-    /// `target` 优先于 `path`：`.lnk` 的路径不是 exe，靠 target 才对得上。
+    /// `target` beats `path`: a `.lnk` path is not an exe, only target matches.
     #[test]
     fn target_wins_over_path() {
         let mut it = file_item(
@@ -118,7 +112,7 @@ mod tests {
         );
     }
 
-    /// 没有 target 的 `.exe` 条目直接用自己的路径。
+    /// An `.exe` item without a target uses its own path.
     #[test]
     fn exe_path_is_used_when_no_target() {
         let it = file_item("记事本", r"C:\Windows\System32\notepad.exe");
@@ -128,19 +122,19 @@ mod tests {
         );
     }
 
-    /// 未解析的 `.lnk` 不参与匹配 —— 宁可指示点不亮，也不要按名字猜。
+    /// An unresolved `.lnk` never matches: a dark indicator beats a guess.
     #[test]
     fn unresolved_lnk_never_matches() {
         let it = file_item("网易云音乐", r"C:\Users\X\Desktop\网易云音乐.lnk");
         assert_eq!(running_key(&it), None);
-        // 即使集合里有个同名的 exe，也不该匹配上。
+        // Even an identically named exe in the set must not match.
         let mut items = [it];
         let changed = refresh_running(&mut items, &set(&[r"c:\x\网易云音乐.exe"]));
         assert!(!changed);
         assert!(!items[0].running);
     }
 
-    /// 非文件条目（分割线、网址、文件夹、回收站）一律不参与。
+    /// Non-file kinds (separator, url, folder, trash) never participate.
     #[test]
     fn non_file_kinds_never_match() {
         for kind in [
@@ -150,13 +144,13 @@ mod tests {
             ItemKind::Trash,
         ] {
             let mut it = Item::new(kind, "x", r"C:\Windows\System32\notepad.exe");
-            // 故意把 target 也设上，确认 kind 判断在前面。
+            // Set target too, to prove the kind check runs first.
             it.target = r"C:\Windows\System32\notepad.exe".to_owned();
             assert_eq!(running_key(&it), None, "{kind:?} 不该参与匹配");
         }
     }
 
-    /// 大小写必须忽略：配置里存的大小写与系统返回的不一定一致。
+    /// Case must be ignored: config and system casing differ.
     #[test]
     fn matching_is_case_insensitive() {
         let mut items = [file_item("记事本", r"C:\Windows\System32\NOTEPAD.EXE")];
@@ -165,10 +159,10 @@ mod tests {
         assert!(items[0].running);
     }
 
-    /// 只在状态真的变化时返回 true。
+    /// Return true only on an actual state change.
     ///
-    /// 这条是性能约束：主循环每 1.2 秒扫一次，若每次都返回 true 就会
-    /// 无条件重绘，空闲 CPU 直接失守（M0 花了不少力气才压到 0%）。
+    /// Performance constraint: the main loop scans every 1.2 s, and returning
+    /// true unconditionally forces a redraw that breaks idle CPU at 0%.
     #[test]
     fn reports_change_only_when_state_flips() {
         let mut items = [file_item("记事本", r"C:\Windows\System32\notepad.exe")];
@@ -180,7 +174,7 @@ mod tests {
         assert!(!items[0].running);
     }
 
-    /// 分割线与其它条目共存时，只影响该影响的那些。
+    /// Separators among other items stay untouched.
     #[test]
     fn separator_is_left_alone() {
         let mut items = [
@@ -193,10 +187,10 @@ mod tests {
         assert!(!items[1].running, "分割线的 running 必须保持 false");
     }
 
-    /// 临时条目：老的保持原位，新的排在后面。
+    /// Temp items: existing ones keep their slot, new ones append.
     ///
-    /// 顺序稳定性是有代价换来的：`EnumWindows` 的 Z 序每轮都在变，照它
-    /// 重排会让图标在两次扫描之间换位置，用户根本点不准。
+    /// Stable order matters because `EnumWindows` Z-order changes every round;
+    /// reordering by it makes icons move between scans and hard to click.
     #[test]
     fn temp_keeps_existing_order_and_appends_new() {
         let running = set(&[r"c:.exe", r"c:.exe", r"c:\c.exe"]);
@@ -205,7 +199,7 @@ mod tests {
         assert_eq!(got, vec![r"c:\c.exe", r"c:.exe", r"c:.exe"]);
     }
 
-    /// 退出的应用要从列表里消失。
+    /// Exited apps disappear from the list.
     #[test]
     fn temp_drops_vanished_apps() {
         let running = set(&[r"c:.exe"]);
@@ -214,7 +208,7 @@ mod tests {
         assert_eq!(got, vec![r"c:.exe"]);
     }
 
-    /// 已固定的应用不重复出现，哪怕它也在 prev 里。
+    /// Pinned apps do not repeat, even when still in `prev`.
     #[test]
     fn temp_excludes_pinned() {
         let running = set(&[r"c:.exe", r"c:.exe"]);
@@ -224,7 +218,7 @@ mod tests {
         assert_eq!(got, vec![r"c:.exe"]);
     }
 
-    /// 上限必须生效，且截断发生在末尾（老的不被挤掉）。
+    /// The cap must apply, and truncation is at the tail so old entries stay.
     #[test]
     fn temp_honours_limit() {
         let running = set(&[r"c:.exe", r"c:.exe", r"c:\c.exe"]);
@@ -233,7 +227,8 @@ mod tests {
         assert_eq!(got, vec![r"c:.exe", r"c:.exe"]);
     }
 
-    /// Dock 自己不该出现在列表里：否则它scan到自己的窗口，凭空多一个图标。
+    /// The dock itself must not appear, or it sees its own window and adds a
+    /// phantom icon.
     #[test]
     fn temp_skips_self() {
         let running = set(&[r"c:\nooksill-dock.exe", r"c:.exe"]);

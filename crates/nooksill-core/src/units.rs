@@ -1,20 +1,19 @@
-//! DPI 与像素换算。
+//! DPI and pixel conversion.
 //!
-//! 到处是 `Sc(v)` = `MulDiv(v, g_dpi, 96)`。这里保留同样的语义
-//! （四舍五入、远离零），但把它集中成一个函数，避免"某处忘了缩放"
-//! 这类只有在 150% 缩放下才暴露的缺陷。
+//! `Sc(v)` is `MulDiv(v, g_dpi, 96)` throughout. One function keeps the exact
+//! rounding and avoids missed scaling that only shows up at 150%.
 
-/// `v * dpi / 96`，四舍五入。
+/// Compute `v * dpi / 96`, rounded.
 ///
-/// 与 Win32 `MulDiv` 对齐：内部用 64 位中间值防止 `v * dpi` 溢出，
-/// 结果向远离零的方向取整（`f64::round` 的行为）。
+/// Matches Win32 `MulDiv`: a 64-bit intermediate prevents overflow, and the
+/// result rounds away from zero.
 #[must_use]
 pub fn scale(v: i32, dpi: i32) -> i32 {
     if dpi == 96 {
         return v;
     }
     let num = i64::from(v) * i64::from(dpi);
-    // 用整数运算保持可预测性，避免浮点在极大值上的平台差异。
+    // Integer math stays predictable across platforms at extreme values.
     let half = 96 / 2;
     let r = if num >= 0 {
         (num + half) / 96
@@ -24,10 +23,10 @@ pub fn scale(v: i32, dpi: i32) -> i32 {
     r.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
-/// 物理像素 → 96 DPI 逻辑像素，四舍五入。
+/// Convert physical pixels to 96 DPI logical pixels, rounded.
 ///
-/// 两处用途：把 ini 里的旧值（物理像素）换成逻辑像素（`CONFIG_VERSION`
-/// 3 → 4 的迁移），以及把"拖动分割线算出来的物理像素"写回配置。
+/// Used to migrate legacy ini values (`CONFIG_VERSION` 3 -> 4) and to write
+/// the drag-derived splitter position back to config.
 #[must_use]
 pub fn unscale(v: i32, dpi: i32) -> i32 {
     if dpi == 96 || dpi <= 0 {
@@ -59,7 +58,7 @@ mod tests {
         assert_eq!(scale(48, 192), 96);
         // 25 * 120 / 96 = 31.25 -> 31
         assert_eq!(scale(25, 120), 31);
-        // 1 * 120 / 96 = 1.25 -> 1；1 * 144/96 = 1.5 -> 2
+        // 1 * 120 / 96 = 1.25 -> 1; 1 * 144 / 96 = 1.5 -> 2
         assert_eq!(scale(1, 120), 1);
         assert_eq!(scale(1, 144), 2);
     }
@@ -72,12 +71,12 @@ mod tests {
 
     #[test]
     fn no_overflow_on_extremes() {
-        // MulDiv 在 32 位中间值上会溢出；这里必须是饱和而不是回绕。
+        // MulDiv overflows a 32-bit intermediate; this must saturate, not wrap.
         assert_eq!(scale(i32::MAX, 480), i32::MAX);
         assert_eq!(scale(i32::MIN, 480), i32::MIN);
     }
 
-    /// `unscale` 与 `scale` 在常见档位上互为逆运算。
+    /// `unscale` inverts `scale` on the common DPI tiers.
     #[test]
     fn unscale_round_trips_the_common_tiers() {
         for dpi in [96, 120, 144, 168, 192, 240] {
@@ -86,7 +85,7 @@ mod tests {
                 assert!((back - v).abs() <= 1, "dpi={dpi} v={v} 往返变成 {back}");
             }
         }
-        // 100 * 96 / 144 = 66.67，四舍五入到 67（截断会得到 66）。
+        // 100 * 96 / 144 = 66.67, rounds to 67 (truncation gives 66).
         assert_eq!(unscale(100, 144), 67);
         assert_eq!(unscale(72, 144), 48);
     }

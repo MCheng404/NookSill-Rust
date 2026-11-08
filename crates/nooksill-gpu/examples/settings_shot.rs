@@ -1,19 +1,21 @@
-//! 把设置界面离屏渲染成 BMP，用来和 `docs/settings-prototype.html` 对照。
+//! Renders the settings window offscreen to a BMP, for comparing against
+//! `docs/settings-prototype.html`.
 //!
-//! 为什么需要它：设置窗口是分层窗口，只有真跑起来才看得到；而"布局改对了
-//! 没有"这件事又不该只能靠人肉截图。这个例子走**与真实窗口完全相同的**
-//! 渲染路径（`FrameRenderer` + `settings_win::shell`），只是最后一步不调
-//! `UpdateLayeredWindow`，改成把像素写成文件。
+//! The window is layered, so it is only visible when actually running, and
+//! whether a layout is right should not depend on a hand-taken screenshot.
+//! This takes the same path as the real window (`FrameRenderer` +
+//! `settings_win::shell`) and only skips `UpdateLayeredWindow`.
 //!
 //! ```text
-//! cargo run -p nooksill-gpu --example settings_shot -- 输出.bmp [页名] [深色]
+//! cargo run -p nooksill-gpu --example settings_shot -- out.bmp [page] [dark]
 //! ```
 //!
-//! - `页名`：`常规` / `外观` / `位置` / `图标` / `交互` / `附件` / `效果` /
-//!   `性能` / `图标库` / `添加`，省略则为「外观」。
-//! - `深色`：填 `dark` 走深色主题。
+//! `page` is a `Page::title()`, defaulting to Appearance. The rest of the
+//! arguments are order-free flags: `dark`, `tip`, `focus`, `q=<text>`,
+//! `accent=RRGGBB`, `feather=<px>`, `nodiscs`, `noroundrect`, and a bare number
+//! to scale the UI.
 //!
-//! 不需要窗口，也不需要显示器 —— 有可用的 DX12 适配器就行。
+//! Needs no window and no monitor, only a working DX12 adapter.
 
 #[path = "common/bmp.rs"]
 mod bmp;
@@ -29,15 +31,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let out_path = args.next().unwrap_or_else(|| "settings.bmp".to_owned());
     let page_name = args.next();
-    // 剩下的参数是开关（顺序随意）：`dark` 深色主题，`tip` 展开一张说明
-    // 气泡（气泡由悬停/点击驱动，离屏渲染没有指针，只能直接塞状态）。
+    // Flags, in any order: `dark` theme, `tip` for an open tooltip, `focus` for
+    // the search field, `q=<text>` to prefill it, `accent=RRGGBB` and a bare
+    // percentage to scale the UI.
+    //
+    // A tooltip is driven by hover or click, and an offscreen frame has no
+    // pointer, so its state has to be set directly.
     let rest: Vec<String> = args.collect();
     let dark = rest.iter().any(|a| a == "dark");
     let tip = rest.iter().any(|a| a == "tip");
-    // `focus`：模拟搜索框获得焦点，核对焦点光晕。
+    // Focus is normally granted by a click, so request it from memory instead.
     let focus = rest.iter().any(|a| a == "focus");
-    // 界面缩放（自定义 DPI）：裸数字按百分比（150 -> 1.5）。验证 UiScale
-    // 键的渲染 —— 字体与所有元素一起放大，逻辑布局不变。
+    // A bare number is a percentage (150 -> 1.5). Fonts and every element scale
+    // together, so this exercises the UI scale key without changing the layout.
     let scale = rest
         .iter()
         .filter_map(|a| a.parse::<f32>().ok())
@@ -74,14 +80,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stats: "空闲 · 0 帧/秒 · 上一次出帧 42 ms 前".to_owned(),
         ..SettingsState::default()
     };
-    // `q=文字`：预填搜索框内容，核对输入文字与图标/提示的对齐。
+    // `q=<text>` prefills the search box, to check text against icons.
     if let Some(text) = rest.iter().find_map(|a| a.strip_prefix("q=")) {
         state.nav_filter = text.to_owned();
     }
-    // `accent=RRGGBB`：自定义主题色出图（默认 -1 = 跟随系统）。
+    // `accent=RRGGBB`; -1 in the config means follow the system colour.
     if let Some(hex) = rest.iter().find_map(|a| a.strip_prefix("accent=")) {
         if let Ok(v) = u32::from_str_radix(hex, 16) {
-            // COLORREF 是 0x00BBGGRR，参数是 0xRRGGBB。
+            // COLORREF is 0x00BBGGRR, the argument is 0xRRGGBB.
             let r = (v >> 16) & 0xFF;
             let g = (v >> 8) & 0xFF;
             let b = v & 0xFF;
@@ -102,8 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let id = egui::Id::unique("nav-search");
         frame.ctx().memory_mut(|m| m.request_focus(id));
     }
-    // 实验开关：只在离屏出图时覆盖 TessellationOptions，用来挑出
-    // 真正影响 RectShape 圆角/圆点质量的官方参数。
+    // Overrides egui's tessellation only for shots, to isolate which official
+    // setting actually controls corner and dot quality.
     let feather = rest.iter().find_map(|a| a.strip_prefix("feather="));
     let no_discs = rest.iter().any(|a| a == "nodiscs");
     let no_round = rest.iter().any(|a| a == "noroundrect");
@@ -121,28 +127,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // `NOOKSILL_SHOT_FROST=1`：按毛玻璃模式出图，并把面板合成到一张
-    // 模拟壁纸上（左亮右暗）。毛玻璃的可读性只有压在"不知道多亮"的底上
-    // 才看得出问题，纯色底会把它掩盖掉。
+    // `NOOKSILL_SHOT_FROST=1` composites the panel over a fake wallpaper. Frost
+    // legibility only shows up against an unknown background, never on a solid
+    // one.
     let frost = std::env::var("NOOKSILL_SHOT_FROST").is_ok();
 
-    // 三帧出图：字体图集(0s) → 动画推进(0.4s) → 稳定画面(10s)。
-    //
-    // 时间必须往前走：egui 的浮层（如说明气泡）有淡入 + 滑入动画，靠
-    // `RawInput::time` 推进 —— 时间不动的话动画永远停在第一帧，气泡整个
-    // 层只有 ~8% 不透明度、位置也停在半路，截出来是"半透明脏块"。
+    // Time has to move: egui fades and slides overlays in using
+    // `RawInput::time`, so a frozen clock leaves the tooltip at a few percent
+    // opacity and halfway through its slide.
     for t in [0.0_f64, 0.4] {
         let _ = frame.render_rgba(&gpu, raw_input((w, h), ppp, t), |ui| {
             shell_with_frost(ui, &mut state, &mut cfg, &mut out, frost)
         })?;
     }
-    // 第三帧才是"字体已就绪、动画已落定"的稳定画面。
+    // The third frame has the font atlas built and the animations settled.
     let (pixels, _) = frame.render_rgba(&gpu, raw_input((w, h), ppp, 10.0), |ui| {
         shell_with_frost(ui, &mut state, &mut cfg, &mut out, frost)
     })?;
 
-    // 毛玻璃模式：底换成"模拟壁纸"—— 左亮右暗的斜向渐变。真实桌面可能是
-    // 纯白照片，也可能是一片深色；同一个面板要在两端都读得清才算过关。
+    // A bright-to-dark diagonal: a real desktop can be either, and the same
+    // panel has to stay readable at both ends.
     let wallpaper = |x: u32, y: u32| -> [u8; 3] {
         let fx = x as f32 / w.max(1) as f32;
         let fy = y as f32 / h.max(1) as f32;
@@ -177,7 +181,7 @@ fn titles() -> Vec<&'static str> {
     Page::ALL.iter().map(|p| p.title()).collect()
 }
 
-/// 单帧输入。与 `bin/dock.rs` 里的 `raw_input` 同口径。
+/// One frame of input, matching `bin/dock.rs`.
 fn raw_input(size: (u32, u32), ppp: f32, time: f64) -> egui::RawInput {
     let (w, h) = size;
     let mut raw = egui::RawInput {

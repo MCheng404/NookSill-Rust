@@ -1,11 +1,7 @@
-//! 网络适配器类型检测。
+//! Network adapter type detection.
 //!
-//! 控制中心的网络磁贴要区分 WiFi / Ethernet，`control::tiles_ordered`
-//! 早就有 `wired` 参数，但调用方一直硬传 `false` —— 插着网线也画 WiFi。
-//! 这里用 `GetAdaptersAddresses` 找一块**处于 Up 的以太网接口**补上。
-//!
-//! 不枚举无线网卡、不看 IP 是否拿到地址：磁贴表达的是"物理连接方式"，
-//! 网线插着但 DHCP 还没给地址时仍该显示 Ethernet。
+//! Reports the physical medium for the network tile, so an ethernet adapter
+//! counts as wired even before DHCP hands out an address.
 
 use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, NO_ERROR};
 use windows::Win32::NetworkManagement::IpHelper::{
@@ -14,15 +10,14 @@ use windows::Win32::NetworkManagement::IpHelper::{
 use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
 use windows::Win32::Networking::WinSock::AF_UNSPEC;
 
-/// 有没有已连接的有线网卡。
+/// Whether a wired adapter is connected.
 ///
-/// **任何失败都返回 `false`**（= 显示 WiFi 磁贴），与改动前的硬编码
-/// 行为一致 —— 检测不可用时不会引入回归，只是维持原状。
+/// Any failure returns `false`, which keeps the old Wi-Fi-tile behavior.
 #[must_use]
 pub fn wired_connected() -> bool {
     let mut size = 0_u32;
-    // 第一次只问大小。传空 buffer 时系统返回 ERROR_BUFFER_OVERFLOW
-    // 并把所需字节数写进 `size`，这是这个 API 的标准两趟用法。
+    // First call only asks for the size: a null buffer returns
+    // ERROR_BUFFER_OVERFLOW with the byte count written to `size`.
     let first = unsafe {
         GetAdaptersAddresses(
             u32::from(AF_UNSPEC.0),
@@ -36,8 +31,8 @@ pub fn wired_connected() -> bool {
         return false;
     }
 
-    // 结构体含 u64 字段，需要 8 字节对齐；`Vec<u8>` 只保证 1 字节。
-    // 用 u64 数组当后备存储，再 cast 成结构体指针。
+    // The structs contain u64 fields and need 8-byte alignment, while `Vec<u8>`
+    // guarantees one. Back the buffer with u64 words and cast the pointer.
     let mut buf = vec![0_u64; (size as usize).div_ceil(8)];
     let ret = unsafe {
         GetAdaptersAddresses(
@@ -51,26 +46,27 @@ pub fn wired_connected() -> bool {
     if ret != NO_ERROR.0 {
         return false;
     }
-    // SAFETY: `buf` 在本次调用期间有效；系统按 `size` 字节写入，`Next`
-    // 指向同一块 buffer 内的下一个结构（MSDN 保证）。
+    // SAFETY: `buf` outlives the call; the system writes `size` bytes and every
+    // `Next` points inside the same buffer.
     unsafe { any_wired_up(buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>()) }
 }
 
-/// 遍历 adapter 链表，找一块处于 Up 的以太网接口。
+/// Walk the adapter list for an ethernet interface that is Up.
 ///
-/// 抽成独立函数是为了能用假链表单测，不必依赖本机网卡状态。
+/// Split out so tests can feed a fake list instead of relying on host NICs.
 ///
 /// # Safety
-/// `head` 要么为 null，要么指向一条有效的、以 null `Next` 结尾的
-/// `IP_ADAPTER_ADDRESSES_LH` 链表。
+/// `head` is null or points at a valid `IP_ADAPTER_ADDRESSES_LH` list
+/// terminated by a null `Next`.
 unsafe fn any_wired_up(head: *const IP_ADAPTER_ADDRESSES_LH) -> bool {
     let mut cur = head;
-    // 上限防止系统给了坏链表时死循环。256 块网卡远超任何真实机器。
+    // Cap the walk in case the system returns a cyclic list; 256 adapters is
+    // far beyond any real machine.
     for _ in 0..256 {
         if cur.is_null() {
             return false;
         }
-        // SAFETY: 调用方保证链表节点有效。
+        // SAFETY: the caller guarantees every node is valid.
         let a = unsafe { &*cur };
         if a.IfType == IF_TYPE_ETHERNET_CSMACD && a.OperStatus == IfOperStatusUp {
             return true;
@@ -85,7 +81,7 @@ mod tests {
     use super::*;
     use windows::Win32::NetworkManagement::Ndis::{IfOperStatusDown, IF_OPER_STATUS};
 
-    /// `IF_TYPE_IEEE80211`（IEEE 802.11 无线）。
+    /// `IF_TYPE_IEEE80211` (IEEE 802.11 wireless).
     const WIFI: u32 = 71;
 
     fn node(
@@ -130,7 +126,8 @@ mod tests {
         assert!(!unsafe { any_wired_up(&raw const *n) });
     }
 
-    /// 真机冒烟：只要求不崩，`wired` 结果取决于本机有没有插网线。
+    /// Hardware smoke test: only asserts no panic, the result depends on
+    /// whether a cable is plugged in.
     #[test]
     #[ignore = "依赖本机网卡状态，手动运行"]
     fn real_query_does_not_panic() {

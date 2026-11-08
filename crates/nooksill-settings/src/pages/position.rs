@@ -1,4 +1,4 @@
-//! 位置页：停靠边、显示器、显示模式。
+//! Position page: dock edge, monitor and display mode.
 
 use egui::Ui;
 use nooksill_core::config::Key;
@@ -10,7 +10,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(ctx, ui, "位置", "", |ctx, ui| {
         combo(ctx, ui, Key::Edge, "Dock 位置（居中）", EDGE_OPTS);
 
-        // 显示器列表是运行期信息，选项动态生成。
+        // Monitor list is runtime data, so the options are built per frame.
         let before = ctx.cfg.monitor;
         let mut cur = before;
         let monitors = ctx.state.monitors.clone();

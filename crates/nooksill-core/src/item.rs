@@ -1,42 +1,26 @@
-//! Dock 条目模型与 `[Items]` / `[Groups]` 的序列化。
+//! Dock item model and `[Items]` / `[Groups]` serialization.
 //!
-//! 存储格式：
-//!
-//! ```text
-//! [Items]
-//! Count=3
-//! I0=<type>|<appmode>|<name>|<path>|<icon_src>|<fit>|<args>
-//! I1=...
-//! [Groups]
-//! N0=2                       ; 第 0 个条目是组，含 2 个子项
-//! G0_0=<同上 7 字段>
-//! G0_1=<同上 7 字段>
-//! ```
-//!
-//! `type`：0 文件 / 1 文件夹 / 2 网址 / 3 分割线 / 4 应用组 / 5 回收站 / 6 速记。
-//!
-//! 字段上限来自`lstrcpynW` 调用（`sizeof` 含结尾 NUL，故可用字符数少 1）。
-//! 这里用 [`truncate_units`] 按 **UTF-16 单元**截断，而不是按 `char` ——
-//! 一个 emoji 占 2 个单元，按 `char` 截会得到比 更长的字符串，
-//! 进而让 `I0` 行的总长度越过 profile API 的缓冲区边界。
+//! An item line is `type|appmode|name|path|icon_src|fit|args`. Field limits
+//! come from `lstrcpynW` calls (the NUL counts, so one unit less is usable)
+//! and truncation counts UTF-16 units, not `char`s.
 
 use crate::MAX_KIDS;
 
-/// `name` 缓冲区大小（含 NUL）。对应 `Item.name[128]`。
+/// `name` buffer size including NUL. Mirrors `Item.name[128]`.
 pub const NAME_CAP: usize = 128;
-/// `path` 缓冲区大小。对应 `Item.path[1024]`。
+/// `path` buffer size. Mirrors `Item.path[1024]`.
 pub const PATH_CAP: usize = 1024;
-/// `icon_src` 缓冲区大小。对应 `Item.icon_src[512]`。
+/// `icon_src` buffer size. Mirrors `Item.icon_src[512]`.
 pub const ICON_CAP: usize = 512;
-/// `args` 缓冲区大小。对应 `Item.args[260]`。
+/// `args` buffer size. Mirrors `Item.args[260]`.
 pub const ARGS_CAP: usize = 260;
-/// 解析后的启动目标缓冲区大小。对应 `Item.target[MAX_PATH]`。
+/// Resolved launch target buffer size. Mirrors `Item.target[MAX_PATH]`.
 pub const TARGET_CAP: usize = 260;
 
-/// 一个条目行的字段数。
+/// Fields per item line.
 const FIELD_COUNT: usize = 7;
 
-/// 条目类型。数值即 ini 里的 `type` 字段。
+/// Item type. The value is the `type` field stored in the ini.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum ItemKind {
     #[default]
@@ -50,7 +34,8 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    /// 越界返回 `None`（解析时应当**丢弃整条**，而不是猜一个类型）。
+    /// Returns `None` for out-of-range codes; the caller must drop the whole
+    /// line rather than guess a type.
     #[must_use]
     pub const fn from_code(v: i32) -> Option<Self> {
         Some(match v {
@@ -75,53 +60,55 @@ impl ItemKind {
         matches!(self, Self::Separator)
     }
 
-    /// 组和速记有专用绘制路径，不画底盘（对应 `RenderFrame` 里的判断）。
+    /// Groups and notes have a dedicated draw path and skip the plate
+    /// (mirrors the check in `RenderFrame`).
     #[must_use]
     pub const fn has_own_icon(self) -> bool {
         matches!(self, Self::Group | Self::Note)
     }
 }
 
-/// Dock 上的一个条目。
+/// One dock item.
 ///
-/// 前半部分是**持久化字段**（写进 ini），后半部分是**运行期状态**
-/// （图标位图、动画插值、运行指示）。运行期状态不参与序列化。
+/// The first half holds persisted fields (written to the ini), the second half
+/// runtime state (icon bitmap, animation interpolation, running flag). Runtime
+/// state is never serialized.
 #[derive(Clone, Debug)]
 pub struct Item {
     pub kind: ItemKind,
-    /// 网页应用的打开方式：0 = 默认浏览器，1 = `--app` 窗口。
+    /// How a web app opens: 0 = default browser, 1 = `--app` window.
     pub app_mode: i32,
-    /// 图标填充方式（0 = 等比留白，其它值见 `FitBitmap`）。
+    /// Icon fit mode (0 = letterbox, other values match `FitBitmap`).
     pub fit: i32,
-    /// 图标是否已缓存到 `icons/` 下（对应 `fav`）。
+    /// Whether the icon is cached under `icons/` (the `fav` flag).
     pub fav: bool,
-    /// 临时条目（运行中但未固定）。**不写入 ini**。
+    /// Temporary item (running but not pinned). Never written to the ini.
     pub temp: bool,
 
     pub name: String,
     pub path: String,
     pub icon_src: String,
     pub args: String,
-    /// 解析后的启动目标（.lnk 解引用、环境变量展开之后）。
+    /// Resolved launch target, after .lnk dereference and env expansion.
     pub target: String,
 
-    /// 当前图标边长（放大动画的插值结果）。
+    /// Current icon edge length, interpolated by the grow animation.
     pub cur: f32,
-    /// 重排时的横向偏移（回弹动画）。
+    /// Horizontal offset during reordering (bounce animation).
     pub slide: f32,
-    /// 上一帧的槽位左边界，用于计算 `slide` 的初值。
+    /// Previous frame's slot left edge, used to seed `slide`.
     pub prev_l: f32,
-    /// 是否正在运行（由窗口扫描填充）。
+    /// Running state, filled by the window scanner.
     pub running: bool,
-    /// 启动弹跳的起始 tick（`GetTickCount` 语义）。
+    /// Tick when the launch bounce started (`GetTickCount` semantics).
     pub bounce: u32,
 
-    /// 子项。仅 `ItemKind::Group` 使用，上限 [`MAX_KIDS`]。
+    /// Children. Only used by `ItemKind::Group`, capped at [`MAX_KIDS`].
     pub kids: Vec<Item>,
 }
 
 impl Item {
-    /// 构造一个只有持久化字段的条目。
+    /// Build an item with only the persisted fields set.
     #[must_use]
     pub fn new(kind: ItemKind, name: impl Into<String>, path: impl Into<String>) -> Self {
         Self {
@@ -144,10 +131,10 @@ impl Item {
         }
     }
 
-    /// 解析一行 `type|appmode|name|path|icon_src|fit|args`。
+    /// Parse a `type|appmode|name|path|icon_src|fit|args` line.
     ///
-    /// 失败条件与`ParseItemLine` 一致：字段少于 4 个，或 `type` 不在 0..=6。
-    /// 注意 `icon_src` 为空串时视作"无自定义图标"。
+    /// Fails like `ParseItemLine`: fewer than 4 fields, or `type` outside
+    /// 0..=6. An empty `icon_src` means no custom icon.
     #[must_use]
     pub fn parse_line(line: &str) -> Option<Self> {
         let mut f = line.splitn(FIELD_COUNT, '|');
@@ -171,7 +158,8 @@ impl Item {
         Some(it)
     }
 
-    /// 序列化为一行。写入前会清洗控制字符与 `|`（见 [`Self::sanitize_for_ini`]）。
+    /// Serialize to one line. Control chars and `|` are cleaned first, see
+    /// [`Self::sanitize_for_ini`].
     #[must_use]
     pub fn to_line(&self) -> String {
         format!(
@@ -186,14 +174,14 @@ impl Item {
         )
     }
 
-    /// 是否应写入 ini。临时条目与"回收站/速记"这类内置条目例外：
-    /// 只跳过 `temp`，内置条目仍会持久化（它们的 path 是 `shell:` 协议）。
+    /// Whether this item should be written to the ini. Only `temp` is skipped;
+    /// built-in items (trash, note) persist, their path being a `shell:` URI.
     #[must_use]
     pub fn is_persistable(&self) -> bool {
         !self.temp
     }
 
-    /// 加入子项。超过 [`MAX_KIDS`] 返回 `false`。
+    /// Add a child. Returns `false` past [`MAX_KIDS`].
     pub fn add_kid(&mut self, kid: Item) -> bool {
         if self.kids.len() >= MAX_KIDS {
             return false;
@@ -202,11 +190,12 @@ impl Item {
         true
     }
 
-    /// 清洗一个字段，使它不会破坏 ini 的行/字段结构。
+    /// Clean a field so it cannot break the ini line or field structure.
     ///
-    /// - `\r` `\n` `\0` → 空格：profile API 的值区不能换行，否则整段作废。
-    /// - `|` → 全角 `｜`：它是字段分隔符。不做处理，名字里带 `|` 的条目
-    ///   会在下一次保存后**整体错位**（type/path 全部左移一格），属于静默数据损坏。
+    /// - `\r` `\n` `\0` become spaces: a profile API value cannot span lines,
+    ///   a newline voids the whole section.
+    /// - `|` becomes the full-width form: it is the field separator, and a
+    ///   raw `|` in a name silently shifts every field on the next save.
     #[must_use]
     pub fn sanitize_for_ini(s: &str) -> String {
         s.chars()
@@ -219,8 +208,8 @@ impl Item {
     }
 }
 
-/// 按 UTF-16 单元数截断，语义等价于 `lstrcpynW(dst, src, cap)` 写入的字符数
-/// （即最多 `cap - 1` 个单元）。不会切开代理对。
+/// Truncate to at most `max_units` UTF-16 units, like `lstrcpynW(dst, src,
+/// cap)` (which leaves `cap - 1` units). Never splits a surrogate pair.
 #[must_use]
 pub fn truncate_units(s: &str, max_units: usize) -> String {
     let mut used = 0usize;
@@ -236,10 +225,11 @@ pub fn truncate_units(s: &str, max_units: usize) -> String {
     out
 }
 
-/// 模拟 `_wtoi`：跳过前导空白，取可选符号 + 连续数字，遇到非数字即停止。
+/// Emulate `_wtoi`: skip leading whitespace, take an optional sign and digits,
+/// stop at the first non-digit.
 ///
-/// **不能**用 `str::parse` —— 后者对 `"12abc"` 返回错误，而 `_wtoi` 返回 12。
-/// ini 是手改过的文件，这种"半合法"值很常见。
+/// `str::parse` is wrong here: it rejects `"12abc"`, `_wtoi` returns 12. The
+/// ini is hand-edited, so such half-valid values are common.
 #[must_use]
 pub fn atoi_like(s: &str) -> i32 {
     let t = s.trim_start();
@@ -294,8 +284,8 @@ mod tests {
 
     #[test]
     fn rejects_short_or_unknown_lines() {
-        assert!(Item::parse_line("0|0|name").is_none()); // 只有 3 段
-        assert!(Item::parse_line("9|0|name|path").is_none()); // 未知 type
+        assert!(Item::parse_line("0|0|name").is_none()); // only 3 fields
+        assert!(Item::parse_line("9|0|name|path").is_none()); // unknown type
         assert!(Item::parse_line("-1|0|name|path").is_none());
         assert!(Item::parse_line("").is_none());
     }
@@ -334,7 +324,7 @@ mod tests {
 
     #[test]
     fn truncation_counts_utf16_units() {
-        // BMP 字符 1 单元，emoji 2 单元。
+        // BMP chars take 1 unit, emoji take 2.
         assert_eq!(truncate_units("abcdef", 4), "abcd");
         assert_eq!(truncate_units("😀😀😀", 4), "😀😀");
         assert_eq!(truncate_units("😀😀😀", 5), "😀😀");

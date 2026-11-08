@@ -1,4 +1,4 @@
-//! 添加页：加条目、导入导出、重置。
+//! Add page: new items, import and export, reset.
 
 use egui::{Id, Sense, Ui};
 
@@ -18,8 +18,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         });
     });
 
-    // 网址不做模态输入框：设置窗口本来就在前台，多一层对话框只是多一次点击。
-    // 输入框 + 「添加」按钮，回车也能提交。
+    // Inline field instead of a modal: the settings window is already in
+    // front, and Enter submits.
     card(
         ctx,
         ui,

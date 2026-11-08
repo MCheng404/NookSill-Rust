@@ -1,13 +1,14 @@
-//! 图标提取的诊断工具：把某个路径的图标 dump 成原始 RGBA，便于外部核对。
+//! Icon extraction diagnostic: dump one path's icon as raw RGBA for external
+//! inspection.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```text
-//! cargo run -p nooksill-platform --example icon_dump -- <路径> [输出前缀]
+//! cargo run -p nooksill-platform --example icon_dump -- <path> [output prefix]
 //! ```
 //!
-//! 输出两个文件：`<前缀>.rgba`（行优先 RGBA）与 `<前缀>.txt`（宽高与统计）。
-//! 不生成 PNG 是刻意的：platform 层不引图像库，换算交给外部工具。
+//! Writes two files: `<prefix>.rgba` (row-major RGBA) and `<prefix>.txt` (size and
+//! statistics). No PNG on purpose: the platform layer links no image library.
 
 use nooksill_core::icon::{fit_icon, FitMode};
 use nooksill_platform::icon::{resource_icon, shell_icon, IconBitmap};
@@ -25,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let res = resource_icon(&path, 0);
     report("resource[0]", res.as_ref());
 
-    // 优先 dump shell 的（Dock 正常路径），没有就用资源里的。
+    // Prefer the shell icon (the dock's normal path), fall back to resources.
     let Some(bmp) = shell.or(res) else {
         println!("两种方式都没取到图标");
         return Ok(());
@@ -33,13 +34,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dump(&bmp, &prefix)?;
     println!("已写出 {prefix}.rgba / {prefix}.txt");
 
-    // 适配结果：这一项直接决定 Dock 上画出来是"整块底板"还是"中间图形"。
+    // Fit result: decides whether the dock shows a full plate or a centered glyph.
     for (name, mode) in [
         ("自动", FitMode::Auto),
         ("完整", FitMode::Full),
         ("裁切", FitMode::Square),
     ] {
-        // 遮罩要改像素，先克隆一份。
+        // The mask changes pixels, so work on a clone.
         let mut work = bmp.clone();
         let fit = fit_icon(&work.rgba, work.width, work.height, mode);
         if let Some(r) = fit.rounded {

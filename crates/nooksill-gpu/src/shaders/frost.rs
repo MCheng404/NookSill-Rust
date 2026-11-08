@@ -7,6 +7,9 @@
 //!
 //! Layout note: pass 1 writes `mid[x * h + y]` (transposed) so pass 2 can read
 //! a contiguous column, matching the CPU reference exactly.
+//!
+//! Colors are plain `Rgba8Unorm` (not sRGB) and the corner roundness is
+//! applied as premultiplied alpha in the second pass.
 
 use std::num::NonZeroU64;
 
@@ -18,14 +21,14 @@ const WGSL: &str = include_str!("frost.wgsl");
 
 const WORKGROUP: u32 = 64;
 
-/// Pipeline and per-size GPU resources for one frost layer.
+/// Holds the pipeline and the per-size GPU resources of one frost layer.
 pub struct GpuBlur {
     rt: ShaderRuntime,
     bgl: wgpu::BindGroupLayout,
     h_pipeline: wgpu::ComputePipeline,
     v_pipeline: wgpu::ComputePipeline,
     target: Option<Target>,
-    /// 高斯权重只在半径/尺寸变化后才需要重传。
+    /// Gaussian weights are re-uploaded only when the radius or size changes.
     weights_ready: bool,
 }
 
@@ -59,7 +62,7 @@ impl std::fmt::Debug for GpuBlur {
 }
 
 impl GpuBlur {
-    /// Compile the shader and both pipelines. Called lazily, once per window
+    /// Compiles the shader and both pipelines. Called lazily, once per window
     /// that actually enables frost.
     #[must_use]
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
@@ -140,14 +143,15 @@ impl GpuBlur {
         })
     }
 
-    /// The output texture view, registered with egui by the caller.
+    /// Returns the output texture view, registered with egui by the caller.
     #[must_use]
     pub fn view(&self) -> Option<&wgpu::TextureView> {
         self.target.as_ref().map(|t| &t.view)
     }
 
-    /// Upload captured RGBA bytes, run both passes over the whole image.
-    /// Returns `None` on invalid input so the caller can fall back to CPU.
+    /// Uploads the captured RGBA bytes and runs both passes over the whole
+    /// image. Returns `None` on invalid input so the caller can fall back to
+    /// the CPU path.
     pub fn blur(
         &mut self,
         bits: &[u8],
@@ -159,12 +163,13 @@ impl GpuBlur {
         self.blur_range(bits, w, h, radius, corner_px, 0..w)
     }
 
-    /// 只重算 `cols` 这些列。
+    /// Recomputes only the columns in `cols`.
     ///
-    /// 高斯卷积逐像素独立：源图第 x 列变化只影响输出 `[x-r, x+r]` 列，
-    /// 其余列在输出纹理里保持上一帧即可。桌面局部变化（时钟、光标、
-    /// 单个窗口拖动）时 GPU 工作量按比例下降，回读也更早完成。
-    /// 新建目标（尺寸/半径变了）时强制全量，避免未初始化像素。
+    /// The convolution is per-pixel, so a change at source column `x` only
+    /// affects output columns `[x-r, x+r]`; the rest keep their previous value.
+    /// A local desktop change therefore costs proportionally less GPU work.
+    /// A rebuilt target (size or radius changed) forces the full width to avoid
+    /// uninitialized pixels.
     pub fn blur_range(
         &mut self,
         bits: &[u8],
@@ -232,7 +237,8 @@ impl GpuBlur {
         Some((w, h))
     }
 
-    /// `Some(true)` = 目标刚重建（这一帧必须全量算）。
+    /// Returns `Some(true)` when the target was just rebuilt, so this frame
+    /// must run the full width.
     fn ensure(&mut self, w: u32, h: u32, radius: u32) -> Option<bool> {
         if let Some(t) = &self.target {
             if t.w == w && t.h == h && t.radius == radius {
@@ -329,7 +335,7 @@ impl GpuBlur {
         Some(true)
     }
 
-    /// Read the output texture back to CPU. Test-only.
+    /// Reads the output texture back to CPU. Test-only.
     #[cfg(test)]
     pub fn readback(&self) -> Option<Vec<u8>> {
         let t = self.target.as_ref()?;
@@ -343,7 +349,7 @@ mod tests {
     use crate::frost::{apply_round_alpha, blur_rgba};
     use crate::gpu::Gpu;
 
-    /// Deterministic synthetic image with sharp edges and gradients.
+    /// Builds a deterministic synthetic image with sharp edges and gradients.
     fn sample(w: usize, h: usize) -> Vec<u8> {
         let mut v = vec![0u8; w * h * 4];
         for y in 0..h {
@@ -358,7 +364,8 @@ mod tests {
         v
     }
 
-    /// Same 640x400 capture as the live path: CPU blur vs GPU compute.
+    /// Uses the same 640x400 capture as the live path: CPU blur vs GPU
+    /// compute.
     #[test]
     #[ignore = "throughput benchmark; run with --ignored"]
     fn blur_throughput_cpu_vs_gpu() {
@@ -406,8 +413,9 @@ mod tests {
         }
     }
 
-    /// End-to-end check: the registered compute texture must produce the same
-    /// frame as the CPU ColorImage path, including sampling and blending.
+    /// Checks end to end that the registered compute texture produces the
+    /// same frame as the CPU ColorImage path, including sampling and
+    /// blending.
     #[test]
     #[ignore = "requires a GPU and a desktop session; run with --ignored"]
     fn gpu_frost_renders_like_cpu_frost() {
@@ -442,8 +450,9 @@ mod tests {
         assert!(worst <= 1, "worst pixel delta={worst}");
     }
 
-    /// 局部重算 (dirty columns) 必须和整幅重算逐像素一致，且范围外
-    /// 的像素要原样保留上一帧 —— 这是脏列优化的正确性底线。
+    /// A partial recompute must match a full one pixel for pixel, and pixels
+    /// outside the band must keep the previous frame: the floor for the
+    /// dirty-column optimization.
     #[test]
     #[ignore = "requires a GPU; run with --ignored"]
     fn partial_blur_matches_full_blur_on_the_dirty_band() {
@@ -469,7 +478,8 @@ mod tests {
         full.blur(&b, w, h, radius, 0.0).expect("full B");
         let out_full = full.readback().expect("readback B");
 
-        // 源变化 20..40，半径 6 ⇒ 输出受影响 14..46。
+        // The source changed in 20..40 with radius 6, so output 14..46 is
+        // affected.
         partial
             .blur_range(&b, w, h, radius, 0.0, 14..46)
             .expect("partial B");
@@ -495,8 +505,9 @@ mod tests {
         }
     }
 
-    /// GPU output must match the CPU reference byte-for-byte (tolerance 1 for
-    /// f32 accumulation order). Run on a machine with a D3D12 adapter.
+    /// Checks that the GPU output matches the CPU reference byte for byte
+    /// (tolerance 1 for f32 accumulation order). Run on a machine with a
+    /// D3D12 adapter.
     #[test]
     #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_blur_matches_cpu_reference() {

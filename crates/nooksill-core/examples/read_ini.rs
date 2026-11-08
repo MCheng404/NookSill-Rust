@@ -1,22 +1,21 @@
-//! 读一份 `NookSill.ini` 并打印解析结果，用于排查"配置写了却没生效"。
+//! Read a `NookSill.ini` and print the parse result, to debug "the config was
+//! written but has no effect".
 //!
-//! # 为什么需要这个
+//! # Why this exists
 //!
-//! 排查一起「`Edge=1` 写了、Dock 却仍停在底部」的问题时，直接看 ini 文件内容
-//! 是对的，但看不到**编码是否被识别**、**键是否进了 `[Settings]` 段**、
-//! **条目解析出了几项**。这三件事任何一件出错，现象都是"配置不生效"。
+//! Looking at the ini file is not enough: it does not show whether the
+//! **encoding was recognized**, whether the **key landed in the `[Settings]`
+//! section**, or **how many items were parsed**. Any one of those failing
+//! looks the same from the outside.
 //!
-//! 实测结论：那次真正的成因是 ini 被另一个实例整份覆盖回默认值，
-//! 与解析无关。但如果没有这个工具，只能反复猜"是不是解析 bug"。
-//!
-//! # 用法
+//! # Usage
 //!
 //! ```text
 //! cargo run -q -p nooksill-core --example read_ini -- path/to/NookSill.ini
 //! ```
 //!
-//! `raw X=` 打的是**原样字符串**，与解析后的枚举值对比即可判断是"没读到"
-//! 还是"读了但没认出来"。
+//! The `raw X=` lines print the **raw string**, so comparing them with the
+//! parsed values tells "not read" apart from "read but not recognized".
 
 use nooksill_core::config::Config;
 use nooksill_core::ini::Ini;
@@ -28,7 +27,8 @@ fn main() {
         .expect("用法: cargo run -p nooksill-core --example read_ini -- <ini 路径>");
     let ini = Ini::load(std::path::Path::new(&path)).expect("读取失败");
 
-    // 固定按 144 dpi 解析：这里只看"配置项读没读到"，与 DPI 缩放无关。
+    // Parsed at a fixed 144 dpi: only "did the config get read" matters here,
+    // not the DPI scaling.
     let cfg = Config::from_ini(&ini);
 
     println!(
@@ -39,7 +39,8 @@ fn main() {
         "IconSize={} ZoomSize={} Clock={}",
         cfg.icon_size, cfg.zoom_size, cfg.clock
     );
-    // 新旧两种格式都列：一眼看出这份文件是哪一代。
+    // Both the new and the legacy formats are listed, so the generation of
+    // this file is visible at a glance.
     println!(
         "[meta] 键数={} / [Settings] 旧段键数={} / [Items] 键数={}",
         ini.len_of(nooksill_core::config::META_SECTION),
@@ -52,8 +53,9 @@ fn main() {
         nooksill_core::config::CONFIG_VERSION
     );
 
-    // 原样值：解析结果为默认值时分不清"没读到"和"认不出"，这里补上。
-    // 新旧两套键名都打，直接看出走的是哪条分支。
+    // Raw values: a parsed default cannot tell "not read" from "not
+    // recognized". Both the new and the legacy key names are printed, which
+    // shows which branch was taken.
     for key in ["layout/hide_mode", "layout/edge", "appearance/icon_size"] {
         let (sec, k) = key.split_once('/').expect("带货");
         println!("raw {sec}.{k}={:?}", ini.get(sec, k));

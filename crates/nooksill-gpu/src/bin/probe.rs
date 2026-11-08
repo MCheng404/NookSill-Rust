@@ -1,48 +1,48 @@
-//! 设备内存探针。
+//! Device memory probe.
 //!
-//! 回答一个具体问题：**只创建一个图形设备（不建窗口、不跑 egui、不画一帧），
-//! 进程要付多少内存？** 这个数字决定了 GPU 路线的"轻量"上限，也决定了
-//! 换后端到底能省多少。
-//!
-//! 用法：
+//! Answers one question: how much memory does the process pay for creating a
+//! single graphics device (no window, no egui, no frame)? That number bounds
+//! the "lightweight" claim of the GPU route and how much a backend swap saves.
 //!
 //! ```text
 //! PROBE_BACKEND=d3d11 PROBE_ALLOC=1 cargo run --release -p nooksill-gpu --bin probe
-//! PROBE_LIST=1  target/release/probe.exe     # 先看这台机器上有哪些适配器
+//! PROBE_LIST=1  target/release/probe.exe     # list the adapters on this machine
 //! ```
 //!
-//! | 环境变量 | 取值 | 说明 |
+//! | Variable | Values | Meaning |
 //! |---|---|---|
-//! | `PROBE_BACKEND` | `dx12`（默认）/ `vulkan` / `wgl` / `d3d11` / `d3d11-warp` / `gl` | 图形后端 |
-//! | `PROBE_ADAPTER` | 名字片段，如 `AMD` / `NVIDIA` | **钉住同一块显卡**；空=后端默认 |
-//! | `PROBE_ALLOC` | `1` / `0` | 是否额外分配与真实应用等量的缓冲 |
-//! | `PROBE_HOLD` | 秒数，默认 45 | 采样窗口 |
-//! | `PROBE_LIST` | `1` | 只枚举适配器后退出 |
-//! | `PROBE_NON_SAMPLER` | 整数，默认 `1000000` | `max_non_sampler_bindings`，只影响 DX12 |
-//! | `PROBE_HINTS` | `perf`（默认）/ `memory` | `MemoryHints`：分配器留不留余量 |
-//! | `PROBE_LIMITS` | `downlevel`（默认）/ `default` / `wide` / `webgl2` | 限制档位 |
+//! | `PROBE_BACKEND` | `dx12` (default) / `vulkan` / `wgl` / `d3d11` / `d3d11-warp` / `gl` | graphics backend |
+//! | `PROBE_ADAPTER` | name fragment, e.g. `AMD` / `NVIDIA` | pins one GPU; empty = backend default |
+//! | `PROBE_ALLOC` | `1` / `0` | also allocate the same buffers as the real app |
+//! | `PROBE_HOLD` | seconds, default 45 | sampling window |
+//! | `PROBE_LIST` | `1` | list the adapters and exit |
+//! | `PROBE_NON_SAMPLER` | integer, default `1000000` | `max_non_sampler_bindings`, DX12 only |
+//! | `PROBE_HINTS` | `perf` (default) / `memory` | `MemoryHints`: whether the allocator keeps headroom |
+//! | `PROBE_LIMITS` | `downlevel` (default) / `default` / `wide` / `webgl2` | limit tier |
 //!
-//! `wgl` 走 **wgpu 自带的 GL 后端**（`wgpu-hal/gles/wgl.rs`，Windows 上不需要
-//! ANGLE），用来回答"保留 egui-wgpu 只换后端能省多少"；`gl` 是手写 WGL
-//! 上下文，代表"完全不用 wgpu"的下界。
+//! `wgl` uses wgpu's own GL backend (`wgpu-hal/gles/wgl.rs`, no ANGLE needed on
+//! Windows) and answers "what would keeping egui-wgpu but swapping the backend
+//! save?". `gl` is a hand-written WGL context, the lower bound for dropping
+//! wgpu entirely.
 //!
-//! `PROBE_ALLOC=1` 分配的三块，与 `offscreen.rs` + `present.rs` 完全一致：
-//! 1320×1080 渲染目标（8.4 MB）+ 同尺寸回读缓冲（5.4 MB）+ 同尺寸 DIB（5.4 MB）。
-//! 这样"设备 + 缓冲"就是真实应用的内存底盘，可以直接和 spike 的实测值对账。
+//! `PROBE_ALLOC=1` allocates exactly what `offscreen.rs` + `present.rs` use: a
+//! 1320x1080 render target (8.4 MB), a same-size readback buffer (5.4 MB) and a
+//! same-size DIB (5.4 MB). That makes "device + buffers" the real memory floor.
 //!
-//! **必须钉住适配器再比较后端。** 混合显卡笔记本上 wgpu 与 D3D11 的默认
-//! 选择可能落在不同 GPU 上（实测：wgpu 选 iGPU、D3D11 选独显），
-//! 那样 42 MB vs 164 MB 的差距里有一半是"换了块显卡"，不是后端差异。
+//! Pin the adapter before comparing backends: on a hybrid laptop wgpu and D3D11
+//! can land on different GPUs, and part of the gap is then "a different chip"
+//! rather than a backend difference.
 //!
-//! `d3d11-warp` 是纯软件光栅器，代表"完全没有 GPU 加速时的最小开销"，
-//! 作为 D3D11 基线的下界参考。
+//! `d3d11-warp` is the pure software rasteriser: the minimum cost with no GPU
+//! acceleration, and the lower bound for the D3D11 baseline.
 
 use std::time::Duration;
 
 use nooksill_gpu::mem::{Delta, MemStats};
 use nooksill_gpu::present::LayeredPresenter;
 
-/// 渲染目标的物理尺寸。与 spike 的窗口客户区一致（880×720 逻辑 @150%）。
+/// Render target size in physical pixels, matching the spike's client area
+/// (880x720 logical at 150%).
 const TEX_W: u32 = 1320;
 const TEX_H: u32 = 1080;
 
@@ -78,12 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Delta::between(start, after_device).summary()
     );
 
-    // 必须活到进程结束：提前释放等于没测。
+    // Must stay alive until the process exits: releasing early measures nothing.
     let mut keep = Guard::default();
     if alloc {
         let before = MemStats::now();
         keep = allocate(&device)?;
-        // 驱动常常异步提交显存，等一拍再采样才不会把增量算到下一步。
+        // Drivers commit memory asynchronously; wait before sampling so the
+        // delta is not attributed to the next step.
         std::thread::sleep(Duration::from_millis(1500));
         let after = MemStats::now();
         println!("[probe] ③ 缓冲就绪   {}", after.summary());
@@ -95,7 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let steady = MemStats::now();
     println!("[probe] ④ 稳态       {}", steady.summary());
-    // 机器可读的一行，供脚本与文档引用；不要在中间插入别的字段。
+    // One machine-readable line for scripts and docs; do not insert other
+    // fields in the middle.
     println!(
         "[probe] RESULT backend={backend} alloc={} ws_mb={:.1} private_mb={:.1} peak_ws_mb={:.1}",
         u8::from(alloc),
@@ -104,8 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         steady.peak_ws_mb()
     );
 
-    // 采样窗口内每 5 秒重打一次：若数字仍在爬升，说明驱动还在提交，
-    // 单点采样会低估。结束时的峰值才是判断"会不会爆"的依据。
+    // Reprint every 5 s during the window: if the numbers keep climbing the
+    // driver is still committing and a single sample would understate it. The
+    // end-of-window peak is what decides whether it explodes.
     let mut left = hold;
     while left > 0 {
         let step = left.min(5);
@@ -130,7 +133,8 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_owned())
 }
 
-/// 枚举两套 API 看到的适配器。混合显卡机器上先看这个，再决定钉哪块。
+/// Lists the adapters both APIs see. Check this first on a hybrid GPU machine,
+/// then decide which one to pin.
 fn list_adapters() {
     let instance = wgpu_instance(egui_wgpu::wgpu::Backends::all());
     println!("[adapter] —— wgpu ——");
@@ -156,14 +160,16 @@ fn list_adapters() {
     }
 }
 
-/// 设备与队列/上下文。两种后端分开存，因为句柄类型毫无共同点。
+/// Device plus its queue or context. The backend kinds are stored separately
+/// because their handle types have nothing in common.
 enum Device {
     Wgpu(wgpu_device::Device),
     D3d11(d3d11_device::Device),
     Gl(gl_device::Device),
 }
 
-/// 保持资源存活。用 `Box<dyn Any>` 是因为这里唯一的用途就是"别被 drop"。
+/// Keeps resources alive. `Box<dyn Any>` because the only purpose is to stop
+/// them from being dropped.
 #[derive(Default)]
 struct Guard(Vec<Box<dyn std::any::Any>>);
 
@@ -194,7 +200,8 @@ fn allocate(device: &Device) -> Result<Guard, Box<dyn std::error::Error>> {
         Device::D3d11(d) => d.allocate(&mut keep)?,
         Device::Gl(d) => d.allocate(&mut keep),
     }
-    // 呈现路径的 DIB：复用真实代码，避免"探针测的和应用用的不是一个东西"。
+    // The DIB of the present path: reuses the real code so the probe does not
+    // measure something the app never allocates.
     keep.push(LayeredPresenter::new(TEX_W as i32, TEX_H as i32)?);
     Ok(keep)
 }
@@ -209,7 +216,8 @@ fn wgpu_instance(backends: egui_wgpu::wgpu::Backends) -> egui_wgpu::wgpu::Instan
     })
 }
 
-/// wgpu 侧：`dx12` 与 `vulkan` 共用同一套创建逻辑，只是后端位不同。
+/// wgpu side: `dx12` and `vulkan` share the creation logic, only the backend
+/// bit differs.
 mod wgpu_device {
     use egui_wgpu::wgpu;
 
@@ -234,7 +242,7 @@ mod wgpu_device {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // 与 `Gpu::COLOR_FORMAT` 保持一致，否则测的不是同一条管线。
+                // Kept in sync with `Gpu::COLOR_FORMAT`; the pipeline depends on it.
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
@@ -257,14 +265,16 @@ mod wgpu_device {
     ) -> Result<(super::Device, String), Box<dyn std::error::Error>> {
         let backends = match which {
             "vulkan" => wgpu::Backends::VULKAN,
-            // wgpu 自带 WGL 实现（wgpu-hal/gles/wgl.rs），Windows 上不需要 ANGLE。
+            // wgpu's own WGL implementation (wgpu-hal/gles/wgl.rs); no ANGLE
+            // needed on Windows.
             "wgl" => wgpu::Backends::GL,
             _ => wgpu::Backends::DX12,
         };
         let instance = super::wgpu_instance(backends);
 
-        // 钉适配器时不能走 `request_adapter`：它的选择权在驱动手里，
-        // 混合显卡上会挑 iGPU，和 D3D11 的默认选择根本不是同一块芯片。
+        // Pinning an adapter cannot go through `request_adapter`: the driver
+        // owns that choice and would pick the iGPU on a hybrid machine, a
+        // different chip than the D3D11 default.
         let adapter = if want.is_empty() {
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -279,7 +289,8 @@ mod wgpu_device {
             all.into_iter()
                 .find(|a| {
                     let info = a.get_info();
-                    // 按名字匹配；`driver` 兜底，因为部分后端把厂商名只写在驱动串里。
+                    // Match by name; `driver` is the fallback because some
+                    // backends only put the vendor name in the driver string.
                     info.name.to_lowercase().contains(&needle)
                         || info.driver.to_lowercase().contains(&needle)
                 })
@@ -292,10 +303,12 @@ mod wgpu_device {
         };
 
         let info = adapter.get_info();
-        // 两个开关对应 wgpu 官方文档点名的两个"能吃内存"的地方：
-        // - `max_non_sampler_bindings`：DX12 后端按它预分配全局描述符堆，
-        //   默认 1_000_000，核显上直接吃系统内存（wgpu 文档原话）。
-        // - `memory_hints`：默认 Performance 会让分配器多留块。
+        // The two knobs wgpu documents as memory hungry:
+        // - `max_non_sampler_bindings`: the DX12 backend preallocates a global
+        //   descriptor heap of that size, 1_000_000 by default, which eats
+        //   system memory on an iGPU (wgpu's own wording).
+        // - `memory_hints`: the default Performance hint makes the allocator
+        //   keep more headroom.
         let non_sampler: u32 = std::env::var("PROBE_NON_SAMPLER")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -305,17 +318,20 @@ mod wgpu_device {
         } else {
             wgpu::MemoryHints::Performance
         };
-        // PROBE_LIMITS=webgl2 用最激进的档位（纹理上限 2048 等），
-        // 用来判断"限制项本身"还能不能继续榨出内存。
+        // `PROBE_LIMITS=webgl2` is the most aggressive tier (2048 texture
+        // limit and so on), to see whether the limits themselves can still
+        // free memory.
         let which_limits = std::env::var("PROBE_LIMITS").unwrap_or_default();
         let limits = if which_limits == "default" {
-            // WebGPU 标准默认：纹理 8192，但描述符预算仍是 1M。
+            // WebGPU standard defaults: 8192 textures, but still a 1M
+            // descriptor budget.
             wgpu::Limits {
                 max_non_sampler_bindings: non_sampler,
                 ..wgpu::Limits::default()
             }
         } else if which_limits == "wide" {
-            // downlevel + 把纹理上限抬到 8192（超宽多屏 Dock 需要）。
+            // downlevel with textures raised to 8192 (needed by ultra-wide
+            // multi-monitor docks).
             wgpu::Limits {
                 max_non_sampler_bindings: non_sampler,
                 max_texture_dimension_2d: 8192,
@@ -348,7 +364,8 @@ mod wgpu_device {
     }
 }
 
-/// D3D11 侧：直接调 `D3D11CreateDevice`，不经 wgpu（wgpu 没有 D3D11 后端）。
+/// D3D11 side: calls `D3D11CreateDevice` directly, since wgpu has no D3D11
+/// backend.
 mod d3d11_device {
     use windows::core::Interface;
     use windows::Win32::Graphics::Direct3D::{
@@ -367,7 +384,7 @@ mod d3d11_device {
 
     use super::{Guard, TEX_H, TEX_W};
 
-    /// 一条 DXGI 适配器记录。
+    /// One DXGI adapter record.
     pub struct Row {
         pub index: u32,
         pub name: String,
@@ -405,7 +422,8 @@ mod d3d11_device {
             unsafe { self.device.CreateTexture2D(&rt, None, Some(&mut texture))? };
             keep.push(texture);
 
-            // 回读用的 staging 纹理：D3D11 里 Map 只能读 staging 资源。
+            // Readback staging texture: `Map` only reads staging resources in
+            // D3D11.
             let staging = D3D11_TEXTURE2D_DESC {
                 Usage: D3D11_USAGE_STAGING,
                 BindFlags: 0,
@@ -422,11 +440,11 @@ mod d3d11_device {
         }
     }
 
-    /// 枚举系统的 DXGI 适配器。
+    /// Enumerates the DXGI adapters of the system.
     pub fn adapters() -> Result<Vec<Row>, Box<dyn std::error::Error>> {
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
         let mut rows = Vec::new();
-        // 走到 `DXGI_ERROR_NOT_FOUND` 为止；枚举不提供总数。
+        // Until `DXGI_ERROR_NOT_FOUND`; enumeration has no count.
         for index in 0..16u32 {
             let Ok(adapter1) = (unsafe { factory.EnumAdapters1(index) }) else {
                 break;
@@ -455,8 +473,8 @@ mod d3d11_device {
         warp: bool,
         want: &str,
     ) -> Result<(super::Device, String), Box<dyn std::error::Error>> {
-        // 显式指定适配器时，驱动类型必须是 UNKNOWN：
-        // 传 HARDWARE 会被 D3D11 判为参数非法（E_INVALIDARG）。
+        // With an explicit adapter the driver type must be UNKNOWN: passing
+        // HARDWARE is rejected as E_INVALIDARG.
         let (driver, adapter) = if warp {
             (D3D_DRIVER_TYPE_WARP, None)
         } else if want.is_empty() {
@@ -485,7 +503,8 @@ mod d3d11_device {
             D3D11CreateDevice(
                 adapter.as_ref(),
                 driver,
-                // 不走 D3D11 的软件光栅器旁路（WARP 由 driver 参数决定）。
+                // Do not bypass to the D3D11 software rasteriser; WARP is
+                // chosen by the driver type.
                 Default::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 Some(&levels),
@@ -507,7 +526,8 @@ mod d3d11_device {
         Ok((super::Device::D3d11(Device { device, context }), desc))
     }
 
-    /// 取实际生效的适配器名字。拿不到不算错误 —— 探针的首要任务是量内存。
+    /// Name of the effective adapter. Failing is not an error: the probe's
+    /// first job is measuring memory.
     fn adapter_of(device: &ID3D11Device) -> String {
         let Ok(dxgi) = device.cast::<windows::Win32::Graphics::Dxgi::IDXGIDevice>() else {
             return "未知".to_owned();
@@ -533,14 +553,15 @@ mod d3d11_device {
     }
 }
 
-/// OpenGL 侧：用 WGL 在隐藏窗口上建一个兼容上下文。
+/// OpenGL side: builds a compatibility context on a hidden window via WGL.
 ///
-/// 为什么专门测 GL：`egui_glow` 是 egui 的**官方**后端，与 `egui-wgpu` 同级，
-/// 且不引入 D3D12。如果 GL 驱动的基线明显低于 D3D12，就能"保住 egui 与
-/// kittest，同时砍掉一百多 MB" —— 那比换框架划算得多。
+/// `egui_glow` is egui's official backend, so this measures the lower bound for
+/// dropping wgpu entirely: if the GL baseline is clearly below D3D12, that
+/// saves more than a framework swap.
 ///
-/// 只用到 GL 1.1（opengl32.dll 直接导出），不加载任何扩展，
-/// 这样测出来的就是驱动的最小上下文成本，而不是某个加载器的开销。
+/// Only GL 1.1 is used (exported directly by opengl32.dll) and no extension is
+/// loaded, so the number is the driver's minimal context cost rather than some
+/// loader's overhead.
 mod gl_device {
     use windows::core::w;
     use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -564,7 +585,7 @@ mod gl_device {
     const GL_RENDERER: u32 = 0x1F01;
     const GL_VERSION: u32 = 0x1F02;
 
-    // opengl32.dll 只直接导出 GL 1.1；这里不碰任何扩展。
+    // opengl32.dll only exports GL 1.1 directly; no extensions here.
     #[link(name = "opengl32")]
     unsafe extern "system" {
         fn glGetString(name: u32) -> *const u8;
@@ -595,7 +616,8 @@ mod gl_device {
             unsafe {
                 glGenTextures(1, &mut texture);
                 glBindTexture(GL_TEXTURE_2D, texture);
-                // 传空指针：驱动只分配存储，不做上传。真实应用也是先建后画。
+                // Null pixels: the driver allocates storage only. The real app
+                // also creates the texture before drawing into it.
                 glTexImage2D(
                     GL_TEXTURE_2D,
                     0,
@@ -609,14 +631,16 @@ mod gl_device {
                 );
             }
             keep.push(texture);
-            // 回读目标。真实路径用 PBO（需要 GL 1.5 扩展加载），
-            // 这里用等量堆内存代替 —— 对"多占多少内存"这个问题等价。
+            // Readback target. The real path uses a PBO (needs a GL 1.5
+            // extension); an equal-size heap buffer is equivalent for a
+            // memory question.
             keep.push(vec![0u8; (TEX_W as usize) * (TEX_H as usize) * 4]);
         }
     }
 
-    /// 窗口过程。`DefWindowProcW` 在 `windows` crate 里是安全的 Rust 包装，
-    /// 不能直接当 `WNDPROC` 函数指针用，必须自己套一层。
+    /// Window procedure. `DefWindowProcW` is a safe Rust wrapper in the
+    /// `windows` crate and cannot be used as a `WNDPROC` pointer directly, so
+    /// it needs this trampoline.
     unsafe extern "system" fn wndproc(
         hwnd: HWND,
         msg: u32,
@@ -630,16 +654,17 @@ mod gl_device {
         let instance = unsafe { GetModuleHandleW(None)? };
         let class = w!("NookSillProbeGL");
         let wc = WNDCLASSW {
-            // CS_OWNDC：像素格式绑定到窗口的 DC，必须独立。
+            // `CS_OWNDC`: the pixel format binds to the window DC, kept private.
             style: CS_OWNDC,
             lpfnWndProc: Some(wndproc),
             hInstance: HINSTANCE(instance.0),
             lpszClassName: class,
-            // 类光标留空会显示忙光标（ADR-045）。
+            // An empty class cursor shows the busy cursor.
             hCursor: nooksill_gpu::cursor::class_cursor(),
             ..Default::default()
         };
-        // 重复注册同类名不算致命错误（多后端连续跑时会出现）。
+        // Re-registering the same class name is not fatal; it happens when
+        // several backends run in a row.
         unsafe { RegisterClassW(&wc) };
 
         let hwnd = unsafe {
@@ -693,7 +718,8 @@ mod gl_device {
         ))
     }
 
-    /// 读 GL 的字符串常量。上下文未生效时返回 `None`。
+    /// Reads a GL string constant. Returns `None` when the context is not
+    /// current.
     fn gl_string(name: u32) -> Option<String> {
         let ptr = unsafe { glGetString(name) };
         if ptr.is_null() {

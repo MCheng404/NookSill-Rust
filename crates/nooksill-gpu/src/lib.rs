@@ -1,23 +1,14 @@
-//! GPU 呈现层：wgpu 表面 + egui 绘制 + Win32 输入/命中。
+//! GPU presentation layer: wgpu surface, egui painting, Win32 input and hit
+//! testing.
 //!
-//! 这一层**只做窗口与提交**，不含任何业务逻辑：
-//! - 画什么 → `nooksill-settings`（设置界面）/ `dock`（Dock 本体）
-//! - 系统信息 → `nooksill-platform`
-//! - 配置模型与几何 → `nooksill-core`
+//! This layer only owns windows and submission. What to draw comes from
+//! `nooksill-settings` (the settings UI) and `dock`; system information from
+//! `nooksill-platform`; config and geometry from `nooksill-core`.
 //!
-//! 模块分工：
-//! - `frame` —— 一帧的提交路径（egui → 离屏 → 回读 → 分层窗口），
-//!   Dock 窗口与设置窗口共用；
-//! - `settings_win` —— 设置窗口的建窗、输入、呈现（ADR-036，Dock 进程内）；
-//! - `dock` —— Dock 的布局状态机与 egui 绘制；
-//! - `gpu` / `offscreen` / `present` —— 设备、离屏目标、DIB 呈现；
-//! - `input` —— Win32 消息 → `egui::RawInput`；
-//! - `menu` / `settings_win` —— 右键菜单与设置窗口（各自一个分层窗口）；
-//! - `worker` —— 后台线程：取图标、扫描运行状态/遮挡、写盘、启动应用。
-//!
-//! 依赖里**没有 eframe / winit**：消息循环由我们自己持有，因为托盘、
-//! 全局热键、AppBar 预留、逐像素命中都需要在 `WndProc` 里说话。
-//! 代价是输入翻译（`input.rs`）和 IME（M1）要自己写。
+//! There is no eframe/winit dependency: the message loop is owned here because
+//! the tray, global hotkeys, AppBar reservation and per-pixel hit testing all
+//! have to talk in `WndProc`. Input translation (`input.rs`) and IME are
+//! written by hand as a result.
 
 #![deny(missing_debug_implementations)]
 
@@ -68,12 +59,13 @@ pub mod smoke;
 pub mod widgets;
 pub mod worker;
 
-/// 小组件模块的旧路径兼容层。
+/// Compatibility re-exports for the old widget module paths.
 ///
-/// 文件已物理移到 [`widgets`]，但 `bin/dock.rs` 与 `examples/*.rs` 仍按
-/// `nooksill_gpu::calendar_win::CalendarWindow` 这类名字引用。用模块重
-/// 导出保住旧路径，拆分目录就不需要同时改几十处 `use`；新代码直接用
-/// `widgets::calendar` 等新路径。
+/// The files moved to [`widgets`], but `bin/dock.rs` and `examples/*.rs` still
+/// refer to names like `nooksill_gpu::calendar_win::CalendarWindow`. The
+/// re-exports keep the old paths alive so the directory split did not have to
+/// touch dozens of `use` statements; new code should use `widgets::calendar`
+/// and friends.
 pub use widgets::calendar as calendar_win;
 pub use widgets::control as cc_win;
 pub use widgets::editor as edit_win;

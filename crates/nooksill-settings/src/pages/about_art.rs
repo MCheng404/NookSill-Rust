@@ -1,11 +1,6 @@
-//! Vector art for the About page.
-//!
-//! `MARK` is the GitHub mark (the "invertocat") pre-split into triangles.
-//! egui only fills convex paths, so a concave logo has to arrive as a mesh.
-//!
-//! Source: simple-icons `github.svg` (24x24 viewBox). Cubics flattened at 12
-//! segments, Douglas-Peucker at 0.02 units, ear-clipped, then normalized to
-//! 0..1 so the caller can scale to any pixel size. 162 triangles.
+//! Vector art for the About page: the GitHub mark pre-split into triangles,
+//! because egui only fills convex paths. Generated from simple-icons
+//! `github.svg`, flattened, ear-clipped and normalized to 0..1.
 
 /// Triangle soup, three vertices per triangle, each in 0..1.
 #[expect(

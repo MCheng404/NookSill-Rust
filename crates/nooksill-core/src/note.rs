@@ -1,36 +1,23 @@
-//! 速记：纯数据模型与 `[Notes]` 段的读写。
+//! Notes: plain data model plus `[Notes]` section IO.
 //!
-//! 上游把速记做成一个便签窗口，我们沿用语义但**不照抄它的存储**：
-//!
-//! ```ini
-//! [Notes]
-//! N=2
-//! T0=购物清单
-//! B0=牛奶\n面包\n鸡蛋
-//! T1=想法
-//! B1=...
-//! ```
-//!
-//! 正文按**转义后的单行**存。ini 的值区不能出现真实换行（会把后面所有
-//! 行吞掉、整段作废），所以 `\` → `\\`、`\n` → 字面 `\n`。往返必须完全
-//! 还原，转义函数是纯函数，有单测钉住。
-//!
-//! 这个段是 Rust 版独有的，上游不认识；`Ini` 会原样保留未知段，所以
-//! 用同一份 ini 在上游和我们之间切换不会丢数据。
+//! A note is a title plus a body stored as one escaped line. A profile API
+//! value cannot contain real newlines: they swallow every later line and
+//! void the section. So `\` becomes `\\` and a newline becomes a literal
+//! `\n`, and the round trip must be exact.
 
 use crate::ini::Ini;
 
-/// `[Notes]` 段名。
+/// `[Notes]` section name.
 pub const SECTION: &str = "Notes";
 
-/// 速记条数上限。
+/// Maximum number of notes.
 pub const MAX_NOTES: usize = 32;
-/// 标题上限（字符数，不是字节）。
+/// Title limit in chars, not bytes.
 pub const MAX_TITLE: usize = 64;
-/// 正文上限（字符数）。
+/// Body limit in chars.
 pub const MAX_BODY: usize = 4096;
 
-/// 一条速记。
+/// One note.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Note {
     pub title: String,
@@ -46,7 +33,7 @@ impl Note {
         }
     }
 
-    /// 列表里的预览：正文第一行，没有正文时给个占位。
+    /// List preview: first non-empty body line, or a placeholder.
     #[must_use]
     pub fn preview(&self) -> String {
         self.body
@@ -55,7 +42,7 @@ impl Note {
             .map_or_else(|| "（空）".to_owned(), |l| truncate_chars(l, 48))
     }
 
-    /// 显示名：没标题时退回正文首行。
+    /// Display name: falls back to the first body line when the title is empty.
     #[must_use]
     pub fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
@@ -71,14 +58,14 @@ impl Note {
     }
 }
 
-/// 一整本速记。
+/// A whole notebook.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NoteBook {
     pub notes: Vec<Note>,
 }
 
 impl NoteBook {
-    /// 从 ini 读。`N` 会被夹紧，坏行跳过而不是中止加载。
+    /// Load from the ini. `N` is clamped; bad rows are skipped, not fatal.
     #[must_use]
     pub fn load(ini: &Ini) -> Self {
         let n = ini
@@ -89,8 +76,8 @@ impl NoteBook {
         for i in 0..n {
             let title = ini.get(SECTION, &format!("T{i}")).unwrap_or_default();
             let body = ini.get(SECTION, &format!("B{i}")).unwrap_or_default();
-            // 标题和正文都空的行没有意义，跳过（也顺带挡住 Count 被手改大
-            // 之后塞进来的一堆空便签）。
+            // Rows with neither title nor body are meaningless; skip them, and
+            // also the empty notes produced by a hand-edited `N`.
             if title.is_empty() && body.is_empty() {
                 continue;
             }
@@ -102,10 +89,10 @@ impl NoteBook {
         Self { notes }
     }
 
-    /// 写回 `[Notes]`。
+    /// Write `[Notes]` back.
     ///
-    /// 先整段删掉再写：条数变少时不会留下旧的 `T{i}` / `B{i}`。
-    /// 这是 Rust 版独有的段，没有"保留未知键"的兼容义务。
+    /// The section is removed and rewritten so a shrinking list leaves no stale
+    /// `T{i}` / `B{i}` behind.
     pub fn save(&self, ini: &mut Ini) {
         ini.remove_section(SECTION);
         let n = self.notes.len().min(MAX_NOTES);
@@ -116,7 +103,7 @@ impl NoteBook {
         }
     }
 
-    /// 追加一条，返回它的下标。满了返回 `None`。
+    /// Append a note and return its index, or `None` when full.
     pub fn add(&mut self, title: &str, body: &str) -> Option<usize> {
         if self.notes.len() >= MAX_NOTES {
             return None;
@@ -125,7 +112,7 @@ impl NoteBook {
         Some(self.notes.len() - 1)
     }
 
-    /// 改一条。下标越界返回 `false`。
+    /// Replace a note. Returns `false` when the index is out of range.
     pub fn update(&mut self, index: usize, title: &str, body: &str) -> bool {
         let Some(n) = self.notes.get_mut(index) else {
             return false;
@@ -134,7 +121,7 @@ impl NoteBook {
         true
     }
 
-    /// 删一条。下标越界返回 `false`。
+    /// Remove a note. Returns `false` when the index is out of range.
     pub fn remove(&mut self, index: usize) -> bool {
         if index >= self.notes.len() {
             return false;
@@ -144,7 +131,7 @@ impl NoteBook {
     }
 }
 
-/// 正文转义：反斜杠与换行。其它控制字符换成空格。
+/// Escape a body: backslash and newline. Other control chars become spaces.
 #[must_use]
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -160,7 +147,7 @@ pub fn escape(s: &str) -> String {
     out
 }
 
-/// 反转义。遇到 `\x` 这种不认识的组合就原样保留，不吞字符。
+/// Unescape. An unknown `\x` pair is kept as-is rather than dropping the char.
 #[must_use]
 pub fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -183,7 +170,7 @@ pub fn unescape(s: &str) -> String {
     out
 }
 
-/// 标题清洗：去掉换行与控制字符，按字符数截断。
+/// Clean a title: drop newlines and control chars, truncate by chars.
 fn clean_one_line(s: &str, max: usize) -> String {
     let t: String = s
         .chars()
@@ -192,7 +179,7 @@ fn clean_one_line(s: &str, max: usize) -> String {
     truncate_chars(t.trim(), max)
 }
 
-/// 正文清洗：保留换行，去掉其它控制字符，按字符数截断。
+/// Clean a body: keep newlines, drop other control chars, truncate by chars.
 fn clean_body(s: &str) -> String {
     let t: String = s
         .chars()

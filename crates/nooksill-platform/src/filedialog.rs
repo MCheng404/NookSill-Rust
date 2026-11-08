@@ -1,11 +1,7 @@
-//! 系统文件对话框。
+//! System file dialogs via `IFileOpenDialog`.
 //!
-//! 用 `IFileOpenDialog` 而不是老式 `GetOpenFileNameW`：后者没有文件夹模式，
-//! 也不能设默认扩展名；前者是 Vista 之后的标准，视觉与资源管理器一致。
-//!
-//! 对话框是**模态**的，会阻塞调用它的线程 —— 所以只能在 UI 线程上、由用户
-//! 点击触发。我们不自己开线程：文件对话框与调用方的窗口有父子关系，跨线程
-//! 反而会变成"对话框沉在窗口后面点不到"。
+//! Modal and blocking, so the UI thread calls it on user input. It stays on that
+//! thread to keep its parent relationship, otherwise it sinks behind the window.
 
 use std::path::PathBuf;
 
@@ -19,22 +15,22 @@ use windows::Win32::UI::Shell::{
 
 use crate::win;
 
-/// 一条过滤器：`("应用", "*.exe;*.lnk")`。
+/// One filter entry: `("Apps", "*.exe;*.lnk")`.
 pub type Filter<'a> = (&'a str, &'a str);
 
-/// 选一个文件。`owner` 是父窗口，`None` 时以桌面为父。
+/// Pick one file. `owner` is the parent window; `None` parents to the desktop.
 #[must_use]
 pub fn open_file(title: &str, owner: Option<isize>, filters: &[Filter<'_>]) -> Option<PathBuf> {
     show(owner, title, filters, Mode::Open)
 }
 
-/// 选一个文件夹。
+/// Pick a folder.
 #[must_use]
 pub fn open_folder(title: &str, owner: Option<isize>) -> Option<PathBuf> {
     show(owner, title, &[], Mode::Folder)
 }
 
-/// 另存为。`default_name` 只是预填的文件名，用户仍可改。
+/// Save as. `default_name` only pre-fills the name, the user may change it.
 #[must_use]
 pub fn save_file(title: &str, owner: Option<isize>, default_name: &str) -> Option<PathBuf> {
     let dialog = build(title, &[], Mode::Save)?;
@@ -52,8 +48,8 @@ enum Mode {
 
 fn build(title: &str, filters: &[Filter<'_>], mode: Mode) -> Option<IFileOpenDialog> {
     win::ensure_com();
-    // SAFETY: `ensure_com` 保证本线程已初始化；CoCreateInstance 是标准的
-    // shell 对话框创建路径，失败只会返回 Err。
+    // SAFETY: `ensure_com` initialized this thread; the standard shell dialog
+    // creation path only fails with Err.
     let dialog: IFileOpenDialog =
         unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()? };
     unsafe {
@@ -67,9 +63,8 @@ fn build(title: &str, filters: &[Filter<'_>], mode: Mode) -> Option<IFileOpenDia
         dialog.SetTitle(&HSTRING::from(title)).ok()?;
 
         if !filters.is_empty() {
-            // 名字与模式都要活到 `SetFileTypes` 返回之后：COM 只拷贝指针
-            // 指向的内容？不，它按接口约定拷贝，但把 HSTRING 放进 Vec 再
-            // 逐项取 ptr 更省心 —— 这里两段都留在作用域内。
+            // Both HSTRING vectors must outlive `SetFileTypes`; the specs only
+            // borrow their pointers.
             let names: Vec<HSTRING> = filters.iter().map(|(n, _)| HSTRING::from(*n)).collect();
             let specs: Vec<HSTRING> = filters.iter().map(|(_, s)| HSTRING::from(*s)).collect();
             let specs_ref: Vec<COMDLG_FILTERSPEC> = names
@@ -87,28 +82,28 @@ fn build(title: &str, filters: &[Filter<'_>], mode: Mode) -> Option<IFileOpenDia
 }
 
 fn finish(dialog: IFileOpenDialog, owner: Option<isize>) -> Option<PathBuf> {
-    // SAFETY: `owner` 是调用方给的 HWND，`None` 表示无父窗口。
+    // SAFETY: `owner` is a caller-provided HWND; `None` means no parent.
     unsafe {
         let parent = owner.map(|h| windows::Win32::Foundation::HWND(h as *mut _));
         match dialog.Show(parent) {
             Ok(()) => {}
-            // 用户按取消是**最常见**的返回，不是错误，别往日志里塞。
+            // Cancel is the most common return and not an error; keep it out of
+            // the log.
             Err(e) if e.code() == windows::Win32::Foundation::ERROR_CANCELLED.to_hresult() => {
                 return None;
             }
             Err(e) => {
-                // 其它错误（COM 没初始化、shell 拒绝等）与"取消"在调用方
-                // 看来都是 None —— 至少留一行日志，否则"点了没反应"无从查起。
+                // Other failures also map to None; one log line makes a dead
+                // click traceable.
                 eprintln!("[dialog] 打开文件对话框失败：{e}");
                 return None;
             }
         }
         let item: IShellItem = dialog.GetResult().ok()?;
         let raw = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
-        // `GetDisplayName` 给的是 COM 堆上的 PWSTR，必须无条件释放。
-        // 先转字符串再 free：若写 `raw.to_string().ok()?`，转换失败时
-        // `?` 会提前返回，这一块内存就漏了（NTFS 允许未配对代理项的
-        // 文件名，能稳定触发）。
+        // `GetDisplayName` returns a COM-heap PWSTR that must be freed
+        // unconditionally. Convert first: with `raw.to_string().ok()?` a failed
+        // conversion returns early and leaks (NTFS allows unpaired surrogates).
         let text = raw.to_string();
         CoTaskMemFree(Some(raw.0.cast()));
         let text = text.ok()?;
@@ -116,16 +111,16 @@ fn finish(dialog: IFileOpenDialog, owner: Option<isize>) -> Option<PathBuf> {
     }
 }
 
-/// `show` 是上面三个入口的共同实现，只差构造时的模式。
+/// Shared implementation of the three entry points; only the mode differs.
 fn show(owner: Option<isize>, title: &str, filters: &[Filter<'_>], mode: Mode) -> Option<PathBuf> {
     let dialog = build(title, filters, mode)?;
     finish(dialog, owner)
 }
 
-/// 在 `parent` 下新建一个目录，返回创建后的完整路径。
+/// Create a directory under `parent` and return its full path.
 ///
-/// 名字要先过 [`check_dir_name`]：路径分隔符、保留字符、空名都要挡掉 ——
-/// 用户在输入框里敲 `..\..\Windows` 不该在别处建出目录来。
+/// The name goes through [`check_dir_name`] so separators, reserved characters
+/// and empty names are rejected: `..\..\Windows` must not escape `parent`.
 pub fn create_dir(parent: &std::path::Path, name: &str) -> Result<PathBuf, String> {
     let name = check_dir_name(name)?;
     let path = parent.join(&name);
@@ -133,11 +128,11 @@ pub fn create_dir(parent: &std::path::Path, name: &str) -> Result<PathBuf, Strin
     Ok(path)
 }
 
-/// 校验目录名。返回清洗后的名字。
+/// Validate a directory name and return the cleaned form.
 ///
-/// 规则：`..` 与路径分隔符一律拒绝（不能借它跳出父目录）；Windows 的
-/// 保留字符 `< > : " / \ | ? *` 与控制字符拒绝；结尾的点与空格去掉
-/// （Win32 会静默去掉，用户看到的名字与实际不符）。
+/// `..` and separators are rejected so the name cannot escape the parent;
+/// `< > : " / \ | ? *` and control characters are rejected; trailing dots and
+/// spaces are trimmed because Win32 strips them silently on create.
 pub fn check_dir_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -198,8 +193,8 @@ mod tests {
 
     #[test]
     fn trims_trailing_dots_and_spaces() {
-        // Win32 会静默去掉结尾的点与空格，不处理的话用户看到的名字
-        // 与实际建出来的目录不一样。
+        // Win32 strips trailing dots and spaces silently, so an untrimmed name
+        // would not match the directory actually created.
         assert_eq!(check_dir_name("abc. ").unwrap(), "abc");
     }
 }

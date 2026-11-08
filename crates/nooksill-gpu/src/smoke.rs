@@ -13,22 +13,22 @@ use crate::gpu::Gpu;
 use crate::shaders::puff::PuffShader;
 use crate::shaders::smoke::{SharedLayer, SmokeShader};
 
-/// 网格尺寸的分档粒度（格）。
+/// Grid size is rounded up to a multiple of this many cells.
 ///
-/// 悬停放大时 Dock 窗口自己会变宽（1496 px → 1720 px），若按实际宽高定
-/// 网格，`ensure()` 会在每次放大 / 缩回时重建一次 —— 状态清零，烟闪一下。
-/// 128 格 = 640 px，一次放大动画稳稳落在同一档里。
+/// Hover widens the window (1496 -> 1720 px); bucketing keeps one zoom animation
+/// inside a single grid, avoiding a rebuild that would clear the fluid and make
+/// the smoke flicker.
 const GRID_BUCKET: usize = 128;
 
-/// 物理像素宽高 → 网格格数，向上取整到 [`GRID_BUCKET`] 的整数倍。
+/// Physical pixel size to cell count, rounded up to a `GRID_BUCKET` multiple.
 fn bucket(px: f32) -> usize {
     let cells = (px / CELL).ceil().max(4.0) as usize;
     cells.div_ceil(GRID_BUCKET) * GRID_BUCKET
 }
 
-/// 上升的小烟团：从栏体冒出的暗色小团，外圈带一层彩色辉光。
+/// Rising puff: a dark blob off the bar, ringed by a colored glow.
 ///
-/// 配置项叫 `clouds`，这里按形状叫 `Puff`。
+/// The config calls it `clouds`; here it is named for its shape.
 #[derive(Clone, Copy, Debug)]
 struct Puff {
     x: f32,
@@ -39,10 +39,10 @@ struct Puff {
     max: f32,
 }
 
-/// 一个够用的伪随机（xorshift32）。
+/// Adequate PRNG (xorshift32).
 ///
-/// 不引 `rand`：这里只要"看起来随机"，且必须**可复现**（同一帧重绘两次
-/// 得到同一个粒子，否则无人值守截图每次都不一样）。
+/// No `rand` crate: only plausible randomness is needed, and it must be
+/// reproducible so two renders of the same frame match.
 #[derive(Debug)]
 struct Rng(u32);
 
@@ -56,7 +56,7 @@ impl Rng {
         x
     }
 
-    /// `[0, 1)`。
+    /// `[0, 1)`.
     fn unit(&mut self) -> f32 {
         (self.next_u32() >> 8) as f32 / 16_777_216.0
     }
@@ -66,20 +66,20 @@ impl Rng {
     }
 }
 
-/// 一帧里与"画在哪儿"有关的输入。
+/// Where the effect draws this frame.
 ///
-/// 打包成一个结构体而不是五个参数：`paint` 本来已经要收 `ui` / `ppp` /
-/// `tune`，再加四个坐标就超过 clippy 的 7 个参数线，而且调用点会变成一串
-/// 无名的元组，读的人分不清哪个是栏体、哪个是位移。
+/// Packed into a struct rather than four more arguments: `paint` already takes
+/// `ui`, `ppp` and `tune`, and the call sites would become anonymous tuples.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
-    /// 栏体在窗口里的物理矩形 `(x, y, w, h)`，不含隐藏位移。
+    /// The bar's physical rect `(x, y, w, h)` in the window, without the hide
+    /// offset.
     pub bar: (f32, f32, f32, f32),
-    /// 隐藏动画位移（物理像素）。
+    /// Hide-animation offset, in physical pixels.
     pub offset: (f32, f32),
-    /// 光标在窗口物理坐标里的位置；`None` = 不在 Dock 上。
+    /// Cursor in window physical coordinates; `None` when off the dock.
     pub cursor: Option<(f32, f32)>,
-    /// 单调时钟的秒数。
+    /// Monotonic clock in seconds.
     pub now_s: f64,
 }
 
@@ -92,31 +92,35 @@ struct SmokeGpu {
     noise_ready: bool,
 }
 
-/// 烟雾的运行时状态。一个 Dock 窗口一份。
+/// Smoke runtime state, one per dock window.
 pub struct SmokeFx {
-    /// 噪声表：40 ms 生成，第一次真正出烟时才做（关掉烟雾的用户不必付这个钱）。
+    /// Noise table: ~40 ms to build, so it is created on the first real frame.
+    /// Users with smoke disabled never pay for it.
     noise: Option<Noise>,
     fluid: Fluid,
     /// CPU reference path only; the GPU path registers a native texture.
     tex: Option<TextureHandle>,
     gpu: Option<SmokeGpu>,
-    /// 上一层用的时间（秒，单调）。`None` = 第一帧，不推进模拟。
+    /// Previous frame time in seconds (monotonic). `None` means the first frame
+    /// and the simulation does not advance.
     last_s: Option<f64>,
-    /// 上一帧光标位置（**窗口物理坐标**），用来算推力方向。
+    /// Previous cursor position in window physical coordinates, used for the
+    /// push direction.
     last_mouse: Option<(f32, f32)>,
-    /// 烟团粒子的贴图（一张 64×64，重复使用）。
+    /// Puff sprite: one 64x64 texture, reused.
     puff_tex: Option<TextureHandle>,
     puffs: Vec<Puff>,
-    /// 粒子生成累加器：满 1 就冒一个。
+    /// Spawn accumulator: one puff per whole unit.
     spawn_acc: f32,
     rng: Rng,
-    /// 上一帧是否在画。用来判断"刚从小隐藏里回来"，需要丢弃旧的时间基准。
+    /// Whether the last frame drew. Detects a return from hidden, which needs a
+    /// fresh time base.
     was_on: bool,
-    /// 诊断计帧（`NOOKSILL_SMOKE_TRACE=1`）。
+    /// Diagnostic frame counter (`NOOKSILL_SMOKE_TRACE=1`).
     trace_n: u32,
 }
 
-/// 诊断开关。与 `NOOKSILL_GEOM` / `NOOKSILL_TRACE` 同一套约定。
+/// Diagnostic switch, same convention as `NOOKSILL_GEOM` / `NOOKSILL_TRACE`.
 fn trace_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("NOOKSILL_SMOKE_TRACE").is_ok_and(|v| v.trim() != "0"))
@@ -178,16 +182,16 @@ impl SmokeFx {
         self.gpu.as_ref().map(|g| g.layer.clone())
     }
 
-    /// 是否还需要继续出帧（主循环据此决定等待超时）。
+    /// Whether more frames are needed; the main loop sizes its wait on this.
     ///
-    /// 与 `Tuning::enabled` 分开：这个回答的是"上一帧画了东西吗"，
-    /// 关掉烟雾之后不必再叫醒。
+    /// Distinct from `Tuning::enabled`: this answers "did the last frame draw",
+    /// so disabling smoke stops waking the loop.
     #[must_use]
     pub fn active(&self) -> bool {
         self.was_on
     }
 
-    /// 画一帧。`view` 里是这一帧的坐标与时刻。
+    /// Draw one frame. `view` carries this frame's coordinates and timestamp.
     pub fn paint(&mut self, ui: &egui::Ui, ppp: f32, tune: &Tuning, view: View) {
         let View {
             bar,
@@ -202,25 +206,24 @@ impl SmokeFx {
         }
         self.was_on = true;
         let noise = self.noise.get_or_insert_with(Noise::build);
-        // ① 帧间隔。第一帧 / 暂停后回来：dt = 0（只光栅化，不推进）。
+        // Frame interval. First frame, or back after a pause: dt = 0, which
+        // rasterizes without advancing the simulation.
         let dt = match self.last_s {
             Some(prev) => ((now_s - prev) as f32).clamp(0.0, nooksill_core::smoke::MAX_DT),
             None => 0.0,
         };
         self.last_s = Some(now_s);
-        // 纹理漂移用的时间。取模是为了让 `f32` 在跑几天之后仍有小数精度。
+        // Time for the texture drift. The modulo keeps `f32` fractional precision
+        // after days of uptime.
         let t = ((now_s * f64::from(tune.speed)) % 3600.0) as f32;
 
-        // ② 模拟区域 = **整个窗口**，不取"栏体 + 边距"。
+        // The simulation covers the whole window, not bar plus margin: the latter
+        // changes size every hover frame (icons grow), and `ensure()` rebuilds on
+        // any size change, clearing velocity and dye.
         //
-        //    后者在悬停放大时每帧都在变尺寸（图标从 S 长到 Z），`ensure()`
-        //    一改尺寸就重建网格 —— 速度场、染料全部清零，画面上就是烟在
-        //    闪。窗口尺寸只在重排（条目增删 / 图标尺寸）时变，那本来就是
-        //    该重来的时候。
-        //
-        //    但**悬停时窗口自己也会变宽**（图标放大要把窗口撑开），所以还要
-        //    按 `GRID_BUCKET` 分档：1496 px 与 1720 px 落在同一档里，一次
-        //    放大动画不会跨档。多出来的格子掩码为 0，画面上看不出来。
+        // Hover also widens the window itself, hence the `GRID_BUCKET` snap so a
+        // zoom animation stays inside one grid. Extra cells are masked to 0 and
+        // stay invisible.
         let (bx, by, bw, bh) = bar;
         let (gx0, gy0) = (0.0, 0.0);
         let win = ui.max_rect();
@@ -234,10 +237,8 @@ impl SmokeFx {
             tune.thickness,
         );
 
-        // ③ 鼠标：位置换算到网格单元，速度按"上一帧到这一帧的位移"算。
-        //
-        // 位移归一化到 1/60 秒。不归一化时帧率越低鼠标拨得越狠，看起来
-        // 像在甩烟。
+        // Cursor in grid cells; velocity is the frame-to-frame delta normalized
+        // to 1/60 s, so low frame rates do not fling the smoke around.
         let mouse = cursor.map_or((-999.0, -999.0), |(x, y)| {
             ((x - gx0) / CELL, (y - gy0) / CELL)
         });
@@ -358,16 +359,15 @@ impl SmokeFx {
             ui.painter().image(tex.id(), rect, uv, tint);
         }
 
-        // ⑤ 上升的小烟团。
         if tune.clouds {
             self.paint_puffs(ui, ppp, tune, view, base, dt);
         }
     }
 
-    /// 小烟团：从栏体上缘冒出来，缓慢上浮、左右摆、边升边变大。
+    /// Puffs: spawned at the bar's top edge, drifting up, swaying and growing.
     ///
-    /// 用一张预先做好的软边贴图叠两次（辉光 + 实体）：比画十几个圆便宜，
-    /// 也不会在圆的相切处出现白边。
+    /// Two stacked draws of one prebuilt soft sprite (glow plus core): cheaper
+    /// than a dozen circles, and no seams where circles meet.
     fn paint_puffs(
         &mut self,
         ui: &egui::Ui,
@@ -379,7 +379,7 @@ impl SmokeFx {
     ) {
         let (bx, by, bw, _bh) = view.bar;
         let offset = view.offset;
-        // 生成速率：栏体越宽冒得越多。
+        // Spawn rate: wider bar, more puffs.
         self.spawn_acc += dt * (1.2 + bw / 900.0);
         while self.spawn_acc >= 1.0 {
             self.spawn_acc -= 1.0;
@@ -397,7 +397,7 @@ impl SmokeFx {
                 max,
             });
         }
-        // 推进与回收。`y` 出画（升到区域上缘之外）或寿命到就删。
+        // Advance and retire: a puff dies when its life ends or it leaves the top.
         let top = by - tune.margin_y();
         self.puffs.retain_mut(|p| {
             p.life += dt;
@@ -418,8 +418,8 @@ impl SmokeFx {
         ];
         for p in &self.puffs {
             let u = (p.life / p.max).clamp(0.0, 1.0);
-            // 正弦包络：出生与消散两头淡，中间实。再乘一个"刚离开栏体"
-            // 的淡入，否则粒子会在栏体边缘凭空出现。
+            // Sine envelope: faint at birth and death, solid between. The extra
+            // fade near the bar edge stops particles from popping into existence.
             let a =
                 (std::f32::consts::PI * u).sin().powf(0.8) * ((p.y - top) / 18.0).clamp(0.0, 1.0);
             if a < 0.02 {
@@ -547,11 +547,12 @@ mod tests {
         assert!(lit > 100, "smoke never appeared, lit={lit}");
     }
 
-    /// 端到端跑几帧：模拟 → 光栅化 → 上传成 egui 纹理。
+    /// Runs a few frames end to end: simulate, rasterize, upload as an egui
+    /// texture.
     ///
-    /// 这条测试存在的理由：烟雾"看不见"有三层可能（没启用 / 全透明 /
-    /// 没进纹理），而截图只能看到最后一层的结果 —— 也就是"什么都没有"。
-    /// 这里直接抓住 `textures_delta`，把中间那层钉死。
+    /// "Smoke invisible" has three layers (disabled, transparent, never
+    /// uploaded) and a screenshot only shows the last one. Inspecting
+    /// `textures_delta` pins the middle layer.
     #[test]
     fn smoke_reaches_egui_as_non_empty_texture() {
         let ctx = egui::Context::default();
@@ -560,7 +561,7 @@ mod tests {
             enabled: true,
             ..Tuning::default()
         };
-        // 栏体：200×60 放在 400×200 的画布里，四周留得出光晕。
+        // Bar 200x60 inside an 800x300 canvas, leaving room for the glow.
         let bar = (100.0, 90.0, 200.0, 60.0);
 
         let mut last: Option<Vec<u8>> = None;
@@ -568,8 +569,9 @@ mod tests {
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    // 画布要够大：网格按整窗取整并分档，400×200 会得到
-                    // 一张 320×320 的方图，下面"筛选长条位图"的判据就失效了。
+                    // The canvas must be large: the grid snaps and buckets per
+                    // window, and 400x200 would give a 320x320 square that
+                    // defeats the aspect filter below.
                     egui::vec2(800.0, 300.0),
                 )),
                 ..Default::default()
@@ -586,8 +588,8 @@ mod tests {
             for (id, deltas) in &out.textures_delta.set {
                 for d in deltas {
                     let [w, h] = d.image.size();
-                    // 只认烟雾那张：它是 2:1 的长条；烟团贴图是 64×64、
-                    // 字形图集是正方形，都被这条筛掉。
+                    // Only the smoke bitmap: it is the wide one. The puff sprite
+                    // is 64x64 and the glyph atlas is square.
                     if w > 60 && h > 30 && w != h {
                         let egui::epaint::ImageData::Color(img) = &d.image;
                         last = Some(img.pixels.iter().map(|c| c.a()).collect());
@@ -600,10 +602,10 @@ mod tests {
         let alpha = last.expect("烟雾位图从未进入 textures_delta");
         let max = alpha.iter().copied().max().unwrap_or(0);
         assert!(max > 20, "上传的位图几乎全透明，max={max}");
-        // 发射区是一条**轮廓窄带**：它的面积只由栏体周长决定，与画布大小
-        // 无关。网格按整窗取整并分档之后（见 `paint` 的 ②），"亮像素占比"
-        // 会随画布尺寸漂，所以这里改判**绝对数量** —— 一千出头是稳态值，
-        // 要求 400 足够证明"烟真的画出来了"，又不会被流量涨落打翻。
+        // The emitter is a thin outline band whose area depends only on the bar
+        // perimeter, so the lit count is absolute, not a ratio: bucketing makes
+        // the ratio drift with canvas size. ~1000 is steady state; 400 proves
+        // smoke was drawn without being sensitive to flow variation.
         let lit = alpha.iter().filter(|a| **a > 8).count();
         assert!(lit > 400, "只有 {lit}/{} 个像素有内容", alpha.len());
     }

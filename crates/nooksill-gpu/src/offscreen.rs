@@ -1,41 +1,24 @@
-//! 离屏渲染目标与同步回读。
+//! Offscreen render target with synchronous readback.
 //!
-//! 为什么需要它：wgpu 在 Windows 上**没有带 alpha 的交换链**
-//! （DX12/Vulkan 都只报 `Opaque`，见 M0 实测与 ADR-008）。
-//! 所以 Dock 的透明走这条链路：
-//!
-//! ```text
-//! wgpu → MSAA 纹理（4 采样，RENDER_ATTACHMENT）
-//!      → resolve → 纹理（RENDER_ATTACHMENT | COPY_SRC）
-//!      → buffer（COPY_DST | MAP_READ）
-//!      → CPU 回读（同步）
-//!      → DIB → UpdateLayeredWindow
-//! ```
-//!
-//! 代价是每帧一次回读。以 Dock 常见尺寸 1320×220 计约 1.1 MB，
-//! 桌面级内存带宽完全吃得下；真正需要零拷贝时再上 DirectComposition（M3）。
-//!
-//! MSAA：egui 自带的抗锯齿是"羽化"——把每条边画成 1px 的透明渐变，
-//! 直边效果很好，但**圆角弧段**在低 DPI 下仍看得出折线感（弧被展平成
-//! 直线段，每段只有一次覆盖）。4 重采样对几何边缘做 4 份覆盖加权，
-//! 弧段的过渡级数翻倍。格式不支持时回落到 1 采样（无 MSAA）。
+//! Windows has no alpha swapchain, so frames render into a texture and are read
+//! back for `UpdateLayeredWindow`. 4x MSAA smooths arc segments that egui's 1px
+//! feathered edges leave visibly faceted at low DPI.
 
 use egui_wgpu::wgpu;
 
-/// 一块离屏颜色目标 + 对应的回读缓冲。
+/// An offscreen color target plus its readback buffer.
 #[derive(Debug)]
 pub struct Offscreen {
-    /// 解析后的颜色纹理（1 采样）。MSAA 开启时它是 resolve 目标，
-    /// 回读永远从这里走。
+    /// Resolved 1-sample texture: always the readback source, and the MSAA
+    /// resolve target when enabled.
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
-    /// MSAA 颜色附件（`samples > 1` 时才存在）。只做渲染_attachment，
-    /// 内容不需要读回。
+    /// MSAA color attachment, present only when `samples > 1`. Write-only.
     msaa: Option<(wgpu::Texture, wgpu::TextureView)>,
     buffer: wgpu::Buffer,
     width: u32,
     height: u32,
-    /// 每行字节数按 256 对齐（`copy_texture_to_buffer` 的硬要求）。
+    /// Bytes per row padded to 256, as `copy_texture_to_buffer` requires.
     padded_row: u32,
     samples: u32,
 }
@@ -48,7 +31,8 @@ impl Offscreen {
         format: wgpu::TextureFormat,
         samples: u32,
     ) -> Self {
-        // 解析目标：渲染通道要拿它当 resolve_target，所以也要 RENDER_ATTACHMENT。
+        // Resolve target: the render pass uses it as `resolve_target`, so it
+        // needs `RENDER_ATTACHMENT` as well as `COPY_SRC`.
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("nooksill-offscreen"),
             size: wgpu::Extent3d {
@@ -105,11 +89,11 @@ impl Offscreen {
         }
     }
 
-    /// 渲染通道的颜色附件：`(view, resolve_target)`。
+    /// Color attachment pair `(view, resolve_target)`.
     ///
-    /// MSAA 开启时颜色画进多采样纹理、硬件自动解析到 `self.texture`；
-    /// 关闭时两个值指向同一块纹理、无 resolve。渲染通道的
-    /// `msaa_samples` 必须与这里的采样数一致（管线由调用方配）。
+    /// With MSAA the pass draws into the multisampled texture and the hardware
+    /// resolves into `self.texture`; without it both point at the same texture
+    /// and there is no resolve. The pipeline's `msaa_samples` must match.
     #[must_use]
     pub fn color_target(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
         match &self.msaa {
@@ -133,9 +117,11 @@ impl Offscreen {
         self.height
     }
 
-    /// 把纹理拷进回读缓冲。必须在提交命令前调用。
+    /// Copy the texture into the readback buffer. Must run before the command
+    /// buffer is submitted.
     ///
-    /// 读的是**解析后**的 `self.texture` —— resolve 在渲染通道里已经完成。
+    /// Reads the resolved `self.texture`: the resolve already happened in the
+    /// render pass.
     pub fn copy_to_buffer(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {

@@ -1,17 +1,8 @@
-//! 系统音量：Core Audio 的 `IAudioEndpointVolume`。
+//! System volume through Core Audio's `IAudioEndpointVolume`.
 //!
-//! **不用模拟 `VK_VOLUME_*` 按键**：那会改动系统
-//! 的"应用程序音量"分组、会在音量 OSD 上闪一下，而且拿不到真实数值。
-//!
-//! 三件事要注意：
-//!
-//! - **COM 必须在调用线程初始化**。这个结构体只在 UI 线程用，所以由
-//!   [`Audio::new`] 顺手 `CoInitializeEx`。已初始化过（比如宿主程序先做过）
-//!   会返回 `RPC_E_CHANGED_MODE`，那不是错误，忽略即可。
-//! - **接口指针不能跨线程**（默认是 apartment 模型），所以 `Audio` 不是
-//!   `Send`/`Sync` —— 编译器会替我们守住这条。
-//! - **失败要能降级**：没有音频设备的机器（服务器、禁用了音频服务）上
-//!   构造会失败，调用方应当把滑块画成禁用态而不是崩掉。
+//! COM binds to the calling thread, so `Audio` is neither `Send` nor `Sync`;
+//! simulated `VK_VOLUME_*` presses are avoided because they never report the
+//! real level. Construction fails when there is no audio endpoint.
 
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
@@ -19,7 +10,7 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
 };
 
-/// 默认播放设备的音量控制。
+/// Volume control for the default playback device.
 pub struct Audio {
     epv: IAudioEndpointVolume,
 }
@@ -31,12 +22,13 @@ impl std::fmt::Debug for Audio {
 }
 
 impl Audio {
-    /// 打开默认播放设备。没有设备 / 音频服务没起来时返回 `None`。
+    /// Open the default playback device. Returns `None` when no device exists
+    /// or the audio service is not running.
     #[must_use]
     pub fn new() -> Option<Self> {
         unsafe {
-            // 已经初始化过会返回 RPC_E_CHANGED_MODE（多线程 apartment），
-            // 那不影响我们用默认设备的接口，忽略。
+            // A second init on this thread returns RPC_E_CHANGED_MODE; the
+            // default endpoint still works, so the error is ignored.
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
             let enumerator: IMMDeviceEnumerator =
@@ -47,14 +39,14 @@ impl Audio {
         }
     }
 
-    /// 当前主音量，0..=100。取不到时返回 `None`。
+    /// Current master volume, 0..=100. `None` when it cannot be read.
     #[must_use]
     pub fn volume(&self) -> Option<u32> {
         let v = unsafe { self.epv.GetMasterVolumeLevelScalar() }.ok()?;
         Some((v * 100.0 + 0.5).clamp(0.0, 100.0) as u32)
     }
 
-    /// 设主音量。`v` 会被夹到 0..=100。
+    /// Set the master volume; `v` is clamped to 0..=100.
     pub fn set_volume(&self, v: u32) {
         let v = v.min(100) as f32 / 100.0;
         unsafe {
@@ -62,7 +54,7 @@ impl Audio {
         }
     }
 
-    /// 当前是否静音。
+    /// Whether the endpoint is muted.
     #[must_use]
     pub fn muted(&self) -> bool {
         unsafe { self.epv.GetMute() }
@@ -70,14 +62,14 @@ impl Audio {
             .unwrap_or(false)
     }
 
-    /// 设置静音。
+    /// Set the mute state.
     pub fn set_muted(&self, muted: bool) {
         unsafe {
             let _ = self.epv.SetMute(muted, std::ptr::null());
         }
     }
 
-    /// 反过来。
+    /// Flip mute and return the new state.
     pub fn toggle_mute(&self) -> bool {
         let next = !self.muted();
         self.set_muted(next);
@@ -85,17 +77,17 @@ impl Audio {
     }
 }
 
-/// 电池状态（控制中心底部那行字）。
+/// Battery state for the control center status line.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub struct Battery {
-    /// 电量百分比；`None` 表示没有电池（台式机）。
+    /// Charge percentage; `None` when there is no battery (desktop).
     pub percent: Option<u8>,
-    /// 是否接着交流电。
+    /// Whether the machine is on AC power.
     pub ac: bool,
 }
 
 impl Battery {
-    /// 读一次。用的是 `GetSystemPowerStatus`。
+    /// Read the state once via `GetSystemPowerStatus`.
     #[must_use]
     pub fn read() -> Self {
         use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
@@ -104,13 +96,13 @@ impl Battery {
             return Self::default();
         }
         Self {
-            // 255 = 未知（台式机没有电池时就是这个值）。
+            // 255 means unknown, which is what desktops report.
             percent: (st.BatteryLifePercent != 255).then_some(st.BatteryLifePercent),
             ac: st.ACLineStatus == 1,
         }
     }
 
-    /// 底部那行文案。
+    /// Status line text.
     #[must_use]
     pub fn text(self) -> String {
         match self.percent {
@@ -125,7 +117,7 @@ impl Battery {
 mod tests {
     use super::*;
 
-    /// 电池文案：三种情况都要有话说，不能空白。
+    /// The status line must cover all three cases and never be empty.
     #[test]
     fn battery_text_covers_all_cases() {
         assert_eq!(

@@ -22,7 +22,7 @@ glass-backdrop.workspace = true
 # 但显式列出后"这个 crate 产出哪几个 exe"一眼可见。
 [[bin]]
 name = "nooksill-dock"
-path = "src/bin/dock.rs"
+path = "src/bin/dock/mod.rs"
 
 [[bin]]
 name = "probe"

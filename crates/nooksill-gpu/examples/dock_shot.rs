@@ -1,16 +1,17 @@
-//! 把 Dock 栏离屏渲染成 BMP，用来验收倒影/边框这类"只有真跑才看得见"的效果。
+//! Renders the dock offscreen to a BMP, for effects only visible when running:
+//! reflection, border, gradient.
 //!
 //! ```text
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp
-//! cargo run -p nooksill-gpu --example dock_shot -- out.bmp dark
+//! cargo run -p nooksill-gpu --example dock_shot -- out.bmp light
 //! ```
 //!
-//! 走的是和主程序**同一条**渲染路径（`FrameRenderer` + `Dock::paint`），
-//! 只是最后一步不 `UpdateLayeredWindow`，改成写文件。
+//! Same render path as the app (`FrameRenderer` + `Dock::paint`), minus
+//! `UpdateLayeredWindow`.
 //!
-//! 倒影在真实窗口里是呈现层做的（`present::mirror_rows` 直接改 DIB），
-//! 离屏没有 DIB，所以这里对回读缓冲做同一件事 —— 用的是同一个函数，
-//! 只是每像素 RGBA 而不是 BGRA；四通道同乘衰减，通道顺序不影响结果。
+//! In the real window the presenter applies the reflection straight to the DIB.
+//! Offscreen there is no DIB, so the same `mirror_rows` runs on the readback
+//! buffer: RGBA instead of BGRA, but every channel is scaled equally.
 
 #[path = "common/bmp.rs"]
 mod bmp;
@@ -26,9 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "dock.bmp".to_owned());
     let dark = args.next().as_deref() != Some("light");
-    // `grad`：开三色斜向渐变（`BgColor3` + `GradAngle`），用来肉眼验这两个键。
+    // `grad` enables the third background colour and the angle, to eyeball
+    // those two keys.
     let demo_grad = args.next().as_deref() == Some("grad");
-    // `insert`：模拟外部文件拖到第 2、3 个图标之间，验收动态让位与插入标记。
+    // `insert` simulates an external file dropped between cells 2 and 3.
     let show_insert = args.next().as_deref() == Some("insert");
     let ppp = 1.25_f32;
 
@@ -39,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cfg.apply_i32(Key::REFL_OPACITY, 55);
     cfg.apply_i32(Key::BORDER_WIDTH, 3);
     if demo_grad {
-        cfg.apply_i32(Key::BG_COLOR3, 0x3A7BD5); // 中段：蓝
+        cfg.apply_i32(Key::BG_COLOR3, 0x3A7BD5); // middle stop: blue
         cfg.apply_i32(Key::GRAD_ANGLE, 30);
         cfg.apply_i32(Key::GRAD_A1, 100);
         cfg.apply_i32(Key::GRAD_A2, 55);
@@ -50,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cfg.theme = nooksill_core::config::DockTheme::Dark;
     cfg.mode = nooksill_core::config::DockMode::Always;
 
-    // 用真实条目构造：名字决定首字占位图标，路径指向 system32 里的常见程序。
+    // Names drive the first-letter icons; the paths only need to look real.
     let items: Vec<DockItem> = [
         ("资源管理器", r"C:\Windows\explorer.exe"),
         ("记事本", r"C:\Windows\System32\notepad.exe"),
@@ -69,8 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let work = LRect::new(0, 0, 1280, 900);
     let mut dock = Dock::new(cfg.clone(), items, work);
-    // 入场动画要收敛：`DockItem::from_item` 给的 `cur` 是 0，只跑一帧的话
-    // 图标还停在"刚从零长出来"的样子，截图看不出真实比例。
+    // Let the entrance animation settle: `from_item` starts `cur` at 0, so the
+    // first frame would show icons still growing out of nothing.
     for _ in 0..120 {
         dock.update(120, nooksill_core::layout::REF_FRAME_MS);
     }
@@ -81,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let u = (dock.geom.act_c[1] + dock.geom.act_c[2]) * 0.5;
         let v = dock.geom.bar_top + 10.0;
         dock.set_external_drop(u, v);
-        // 再跑一帧，让 place_slots_insert 的空槽与 slide 补偿生效。
+        // One more frame so the reserved slot and the slide compensation apply.
         dock.update(120, nooksill_core::layout::REF_FRAME_MS);
         println!(
             "动态插入位：第 {} 项之前，标记 x={:.1}",
@@ -91,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let gpu = Gpu::new("")?;
     let mut frame = FrameRenderer::new(&gpu, w, h, ppp)?;
-    // 打开时钟：`paint_clock_card` 是崩溃报告里点名的那条路径。
+    // The clock card has its own paint path, so it is worth covering here.
     cfg.clock = true;
     let now = nooksill_core::clock::ClockParts {
         year: 2026,
@@ -108,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dock.paint(ui, ppp, dark, clock);
     })?;
 
-    // 与真实窗口完全一致的倒影：同一条 `mirror_rows`。
+    // Exactly what the presenter does in the real window.
     let mut pixels = rgba.clone();
     if let Some(spec) = dock.reflection_spec() {
         let stride = w as usize;

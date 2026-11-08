@@ -1,4 +1,4 @@
-//! 外观页：尺寸、背景、配色、边框。
+//! Appearance page: size, background, colours, borders.
 
 use egui::Ui;
 use nooksill_core::config::Key;
@@ -76,7 +76,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         combo(ctx, ui, Key::MENU_THEME, "右键菜单主题", MENU_THEME_OPTS);
     });
 
-    // 小组件外观：全部复用共享的 card + slider，与上面的配色卡片同一套版式。
+    // Widget look reuses the shared card and slider layout.
     card(
         ctx,
         ui,

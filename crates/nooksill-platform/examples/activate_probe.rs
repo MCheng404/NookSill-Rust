@@ -1,12 +1,11 @@
-//! 激活探针：对同一个 exe 连续调 `activate(exe, toggle=true)`，把每一步的
-//! 判定与结果打出来。
+//! Activation probe: call `activate(exe, toggle=true)` on one exe three times
+//! and print each decision and result.
 //!
-//! 为什么需要它：`activate` 的行为取决于**当前前台是谁**，而这个状态在
-//! 自动化点击里根本不可控（鼠标位置、悬浮窗、虚拟桌面都会影响）。把它
-//! 做成一个独立进程，argv 给个正在跑的 exe，两次调用就能看出
-//! "显示 → 最小化" 是否成对。
+//! Needed because `activate` depends on who is in the foreground, which is not
+//! controllable from automated clicks. Run it in its own process to see whether
+//! "show, minimize" really alternates.
 //!
-//! 用法：
+//! Usage:
 //! ```text
 //! cargo run -q -p nooksill-platform --example activate_probe -- notepad.exe
 //! ```
@@ -21,7 +20,7 @@ fn main() {
         std::process::exit(2);
     };
 
-    // 允许传短名（notepad.exe）：在所有窗口里按文件名找。
+    // A bare file name is accepted (notepad.exe); match it against all windows.
     let exe = if name.contains('\\') {
         name.clone()
     } else {

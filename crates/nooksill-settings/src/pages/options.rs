@@ -1,21 +1,15 @@
-//! 控件用的枚举选项表（值 = ini 里的整数码）。
+//! Option tables for widgets; the integers are the codes stored in the INI.
 //!
-//! 放在这里而不是各页面文件里：同一个下拉框在两个页面出现时
-//! （比如「图标倒影」在附件页与性能页都有）必须用**同一张表**，
-//! 否则两处的取值含义会悄悄分叉。
+//! Shared here rather than per page so a combo box that appears twice (the
+//! icon reflection shows up on two pages) cannot drift in meaning.
 
-/// Dock 主题。
 pub(crate) const THEME_OPTS: &[(i32, &str)] = &[(0, "深色"), (1, "浅色"), (2, "跟随系统")];
 
-/// 设置窗口主题。
-///
-/// 注意：`UiTheme` 的 0/1 与 `DockTheme` **相反**（历史遗留，见 core 文档）。
+/// Note: `UiTheme` uses the opposite 0/1 order from `DockTheme`.
 pub(crate) const UI_THEME_OPTS: &[(i32, &str)] = &[(0, "浅色"), (1, "深色"), (2, "跟随系统")];
 
-/// 背景材质。
 pub(crate) const BG_OPTS: &[(i32, &str)] = &[(0, "纯色"), (1, "渐变"), (2, "磨砂玻璃")];
 
-/// 停靠边。
 pub(crate) const EDGE_OPTS: &[(i32, &str)] = &[
     (0, "屏幕底部"),
     (1, "屏幕顶部"),
@@ -23,41 +17,31 @@ pub(crate) const EDGE_OPTS: &[(i32, &str)] = &[
     (3, "屏幕右侧"),
 ];
 
-/// 显示模式。
 pub(crate) const MODE_OPTS: &[(i32, &str)] = &[(0, "常驻显示"), (1, "自动隐藏"), (2, "智能隐藏")];
 
-/// 底盘类型。上游 v1.4.0 把旧的 `PlateDark`/`PlateLight` 两键换成了
-/// 「类型 + 配色 + 不透明度」三键。
 pub(crate) const PLATE_OPTS: &[(i32, &str)] = &[(0, "无底盘"), (1, "纯色底盘"), (2, "半透明底盘")];
 
-/// 底盘配色。
 pub(crate) const PLATE_THEME_OPTS: &[(i32, &str)] =
     &[(0, "浅色"), (1, "深色"), (2, "跟随 Dock 主题")];
 
-/// 运行指示样式。
 pub(crate) const DOT_OPTS: &[(i32, &str)] = &[(0, "横条"), (1, "圆点")];
 
-/// 右键菜单主题。
 pub(crate) const MENU_THEME_OPTS: &[(i32, &str)] = &[(0, "浅色"), (1, "深色"), (2, "跟随系统")];
 
-/// 最小化动画风格。
 pub(crate) const MIN_STYLE_OPTS: &[(i32, &str)] = &[
     (0, "压缩飞入（类似 macOS）"),
     (1, "弹性飞入（类似手机，非线性）"),
 ];
 
-/// 时钟显示内容。
 pub(crate) const CLOCK_SHOW_OPTS: &[(i32, &str)] = &[
     (0, "时间 + 日期（上下分栏）"),
     (1, "仅显示时间"),
     (2, "仅显示日期"),
 ];
 
-/// 日期格式。
 pub(crate) const DATE_FMT_OPTS: &[(i32, &str)] =
     &[(0, "2026年10月22日"), (1, "2026/10/22"), (2, "2026-10-22")];
 
-/// 网页浏览器。
 pub(crate) const BROWSER_OPTS: &[(i32, &str)] = &[
     (0, "自动（Edge 优先）"),
     (1, "Microsoft Edge"),
@@ -66,9 +50,8 @@ pub(crate) const BROWSER_OPTS: &[(i32, &str)] = &[
     (4, "系统默认浏览器"),
 ];
 
-/// 环境烟雾的主色。**下标必须与 `core::smoke::PALETTE` 一致** ——
-/// 那个数组的顺序是上游 `kRauchRgb` 的顺序（紫、橙、红、粉、浅蓝、冰蓝、
-/// 绿、金），不是设置项下拉框的顺序，改名时别照抄说明书。
+/// Indices must match `core::smoke::PALETTE`, whose order is the upstream
+/// `kRauchRgb` order and not the order of this list's last two entries.
 pub(crate) const SMOKE_COLOR_OPTS: &[(i32, &str)] = &[
     (0, "紫"),
     (1, "橙"),
@@ -82,7 +65,7 @@ pub(crate) const SMOKE_COLOR_OPTS: &[(i32, &str)] = &[
     (9, "彩虹（90 秒一圈）"),
 ];
 
-/// 第二色：沿栏体从左到右过渡。`-1` = 不开。
+/// Second colour, blended left to right along the bar; `-1` disables it.
 pub(crate) const SMOKE_COLOR2_OPTS: &[(i32, &str)] = &[
     (-1, "无"),
     (0, "紫"),
@@ -95,7 +78,7 @@ pub(crate) const SMOKE_COLOR2_OPTS: &[(i32, &str)] = &[
     (7, "金"),
 ];
 
-/// 不透明度七档。超过 100% 的两档靠 alpha 增益实现，不是重新调色。
+/// The two steps above 100% are alpha gain, not a different colour ramp.
 pub(crate) const SMOKE_OPACITY_OPTS: &[(i32, &str)] = &[
     (0, "17%"),
     (1, "30%"),
@@ -106,20 +89,17 @@ pub(crate) const SMOKE_OPACITY_OPTS: &[(i32, &str)] = &[
     (6, "150%"),
 ];
 
-/// 浓度。
 pub(crate) const SMOKE_DENSITY_OPTS: &[(i32, &str)] = &[(0, "稀疏"), (1, "正常"), (2, "浓密")];
 
-/// 时间缩放。
 pub(crate) const SMOKE_SPEED_OPTS: &[(i32, &str)] = &[(0, "平缓"), (1, "正常"), (2, "活泼")];
 
-/// 光晕厚度（同时决定模拟外边距）。
+/// Glow thickness, which also sets the simulated outer margin.
 pub(crate) const SMOKE_THICK_OPTS: &[(i32, &str)] =
     &[(0, "细"), (1, "正常"), (2, "厚"), (3, "极厚")];
 
-/// 鼠标作用半径。
 pub(crate) const SMOKE_REACH_OPTS: &[(i32, &str)] = &[(0, "小"), (1, "正常"), (2, "大")];
 
-/// MSAA 档位。0 = 按窗口面积自动，大窗口降采样省显存。
+/// 0 picks the level from window area, using 2x for large windows to save VRAM.
 pub(crate) const MSAA_OPTS: &[(i32, &str)] = &[
     (0, "自动（大窗口 2x）"),
     (1, "关闭"),

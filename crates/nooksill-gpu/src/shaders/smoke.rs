@@ -1,6 +1,8 @@
-//! GPU smoke raster + post. The fluid simulation stays on the CPU; every
-//! per-pixel operation (bilinear upscale, three noise taps, shading,
-//! premultiply, second colour, gain) runs in one compute pass.
+//! GPU smoke raster + post.
+//!
+//! The fluid simulation stays on the CPU; every per-pixel operation (bilinear
+//! upscale, three noise taps, shading, premultiply, second colour, gain) runs
+//! in one compute pass. The output is premultiplied RGBA.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,8 +13,8 @@ use super::ShaderRuntime;
 const WGSL: &str = include_str!("smoke.wgsl");
 const PARAM_FLOATS: usize = 20;
 
-/// Bridge between `SmokeFx` (owns the simulation) and `FrameRenderer` (owns
-/// the egui-wgpu renderer that can register native textures).
+/// Bridges `SmokeFx` (owns the simulation) and `FrameRenderer` (owns the
+/// egui-wgpu renderer that can register native textures).
 #[derive(Debug, Default)]
 pub struct SmokeLayer {
     pub view: Option<wgpu::TextureView>,
@@ -68,13 +70,14 @@ impl SmokeShader {
         self.layer.clone()
     }
 
-    /// Noise tables are built once and shared with the CPU simulation.
+    /// Sets the noise tables, which are built once and shared with the CPU
+    /// simulation.
     pub fn set_noise(&mut self, noise: &[f32]) {
         let bytes = f32_bytes(noise);
         self.noise = Some(self.rt.upload("smoke-noise", bytes));
     }
 
-    /// Shade one frame. `fields` is `al | ox | oy`, each `gw*gh` floats.
+    /// Shades one frame. `fields` is `al | ox | oy`, each `gw*gh` floats.
     pub fn raster(&mut self, fields: &[f32], params: &[f32; PARAM_FLOATS]) -> Option<(u32, u32)> {
         let noise = self.noise.as_ref()?;
         let (pw, ph) = (params[2] as u32, params[3] as u32);
@@ -138,7 +141,7 @@ impl SmokeShader {
         Some((pw, ph))
     }
 
-    /// Test-only: read the shaded texture back for pixel comparison.
+    /// Test-only: reads the shaded texture back for pixel comparison.
     #[cfg(test)]
     #[must_use]
     pub fn readback(&self) -> Option<Vec<u8>> {
@@ -193,7 +196,8 @@ mod tests {
         p
     }
 
-    /// GPU raster + post must match the CPU reference within one byte.
+    /// Checks that the GPU raster + post matches the CPU reference within one
+    /// byte.
     #[test]
     #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_raster_matches_cpu_reference() {

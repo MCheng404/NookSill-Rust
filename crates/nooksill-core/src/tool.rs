@@ -1,30 +1,29 @@
-//! 计时器 / 秒表 / 待办：纯逻辑与 `[Tool]` 段的读写。
+//! Timer / stopwatch / todo list: pure logic plus `[Tool]` section IO.
 //!
-//! **时间基准由调用方传入**（毫秒整数），不在这里调 `Instant::now`：
-//! 这样所有时间相关行为都能用固定数字写单测，不必 sleep 等真实时间流逝。
-//! 与 `core::layout` 的纯函数风格一致。
+//! Time arrives as a millisecond integer from the caller; `Instant::now` is
+//! never called here, so every timing path is unit-testable with fixed numbers.
 
 use crate::ini::Ini;
 
-/// `[Tool]` 段名。
+/// Name of the `[Tool]` section.
 pub const SECTION: &str = "Tool";
 
-/// 待办上限。写死 `todo[16]`（v1.6.0:6327）。
+/// Maximum number of todos; upstream stores them in `todo[16]`.
 pub const MAX_TODOS: usize = 16;
 
-/// 单条待办的文本上限。是 `WCHAR todo[16][96]`。
+/// Text limit per todo, mirroring `WCHAR todo[16][96]`.
 pub const MAX_TODO_LEN: usize = 96;
 
-/// 倒计时默认总时长（毫秒）。`TOOL_TOTAL_DEF = 5 * 60 * 1000`。
+/// Default countdown duration in milliseconds (`TOOL_TOTAL_DEF`).
 pub const DEFAULT_TOTAL_MS: i64 = 5 * 60 * 1000;
 
-/// 计时器的两种模式。
+/// Timer mode.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ToolMode {
-    /// 倒计时：从总时长往下数。
+    /// Counts down from the total.
     #[default]
     Countdown,
-    /// 秒表：从 0 往上数。
+    /// Counts up from zero.
     Stopwatch,
 }
 
@@ -46,7 +45,7 @@ impl ToolMode {
         }
     }
 
-    /// 面板上的切换按钮标题。
+    /// Label of the panel toggle button.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
@@ -56,7 +55,7 @@ impl ToolMode {
     }
 }
 
-/// 一条待办。
+/// One todo entry.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Todo {
     pub text: String,
@@ -74,29 +73,20 @@ impl Todo {
         }
     }
 
-    /// 序列化成 `[Tool]` 的一行：`{done}|{text}`。
+    /// Serialize to one `[Tool]` line: `{done}|{text}`.
     #[must_use]
     pub fn to_line(&self) -> String {
         format!("{}|{}", i32::from(self.done), self.text)
     }
 
-    /// 解析一行。
+    /// Parse one `[Tool]` line.
     ///
-    /// **修掉bug**：v1.6.0:6345 只在 `v[0] == '1'` 时跳过 `1|`
-    /// 前缀，`0|` 时把前缀留在文本里。于是"存 → 读 → 存"每轮都会多叠
-    /// 一层前缀（`0|买菜` → `0|0|买菜` → …），而每次打勾都会触发
-    /// 一次存盘。
-    ///
-    /// 这里**只剥一层** `d|` 前缀，不循环剥。理由：
-    ///
-    /// - 循环剥会误伤合法文本 —— 用户写 "1|foo" 存盘后是 `0|1|foo`，
-    ///   循环下去就变成 `foo`，把用户的内容吃掉了；
-    /// - 只剥一层已经**根治累积**：被写坏的文件会残留一层 `0|`，
-    ///   但从此不再继续恶化。
+    /// Strips exactly one `0|` / `1|` prefix. A loop would eat user text
+    /// that legitimately starts with a digit and a pipe.
     #[must_use]
     pub fn parse_line(line: &str) -> Self {
         let rest = line.trim_end_matches(['\r', '\n']);
-        // 第一段必须是 0 或 1 才算前缀（否则可能是文本里正好有 `x|`）。
+        // Only a leading 0 or 1 is the flag; any other head is user text.
         let (done, text) = match rest.split_once('|') {
             Some((head, tail)) => match head.trim() {
                 "0" => (false, tail),
@@ -114,20 +104,20 @@ impl Todo {
     }
 }
 
-/// 计时器 / 秒表 / 待办的全部状态。
+/// Full timer / stopwatch / todo state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolState {
     pub mode: ToolMode,
     pub todos: Vec<Todo>,
-    /// 倒计时的总时长（毫秒）。秒表模式不用。
+    /// Countdown total in milliseconds. Unused by the stopwatch.
     pub total_ms: i64,
-    /// 倒计时**暂停时**的剩余（毫秒）。运行中的剩余要减去已跑时间。
+    /// Remaining milliseconds while paused; a running countdown subtracts elapsed time.
     remain_ms: i64,
-    /// 秒表**暂停时**的累计（毫秒）。
+    /// Accumulated milliseconds while the stopwatch is paused.
     elapsed_ms: i64,
-    /// 是否在跑。
+    /// Whether the timer is running.
     pub running: bool,
-    /// 本段运行的起点（毫秒，调用方的时间基准）。
+    /// Start of the current run, in the caller's clock.
     start_ms: i64,
 }
 
@@ -151,10 +141,10 @@ impl ToolState {
         Self::default()
     }
 
-    /// 当前该显示的毫秒数。
+    /// Milliseconds to display right now.
     ///
-    /// 跑着的时候减去/加上已跑时间。
-    /// 倒计时不会返回负数。
+    /// A running timer adds or subtracts the elapsed time. A countdown never
+    /// returns a negative value.
     #[must_use]
     pub fn display_ms(&self, now_ms: i64) -> i64 {
         let run = if self.running {
@@ -168,17 +158,16 @@ impl ToolState {
         }
     }
 
-    /// 倒计时是否已经归零（且原本在跑）。
+    /// Whether a running countdown has already reached zero.
     #[must_use]
     pub fn is_finished(&self, now_ms: i64) -> bool {
         self.mode == ToolMode::Countdown && self.running && self.display_ms(now_ms) == 0
     }
 
-    /// 推进一帧：倒计时归零时停表。
+    /// Advance one frame; stop the timer when the countdown hits zero.
     ///
-    /// 是在绘制里顺手停表（`ToolDraw` 里 `if (u->mode == 0 && u->running
-    /// && t == 0) { running = 0; remainMs = 0; }`）。做成显式方法，
-    /// 免得"画面没画就不停表"这种隐式依赖。
+    /// Stopping is explicit here rather than a side effect of drawing, so a
+    /// countdown ends even when nothing is painted.
     pub fn tick(&mut self, now_ms: i64) {
         if self.is_finished(now_ms) {
             self.running = false;
@@ -186,12 +175,12 @@ impl ToolState {
         }
     }
 
-    /// 开始 / 继续。
+    /// Start or resume.
     pub fn start(&mut self, now_ms: i64) {
         if self.running {
             return;
         }
-        // 倒计时已经跑完时不重启 —— 否则点一下"开始"会立刻又归零。
+        // A finished countdown does not restart; it would hit zero again at once.
         if self.mode == ToolMode::Countdown && self.remain_ms <= 0 {
             return;
         }
@@ -199,7 +188,7 @@ impl ToolState {
         self.start_ms = now_ms;
     }
 
-    /// 暂停：把当前显示值固化下来。
+    /// Pause and freeze the current display value.
     pub fn pause(&mut self, now_ms: i64) {
         if !self.running {
             return;
@@ -212,7 +201,7 @@ impl ToolState {
         self.running = false;
     }
 
-    /// 开始 / 暂停切换（面板上的那个按钮）。
+    /// Toggle between running and paused (the panel button).
     pub fn toggle_run(&mut self, now_ms: i64) {
         if self.running {
             self.pause(now_ms);
@@ -221,7 +210,7 @@ impl ToolState {
         }
     }
 
-    /// 重置：倒计时回到总时长，秒表归零。都会停表。
+    /// Reset: the countdown returns to its total, the stopwatch to zero. Stops.
     pub fn reset(&mut self) {
         self.running = false;
         match self.mode {
@@ -230,8 +219,7 @@ impl ToolState {
         }
     }
 
-    /// 切换模式。停表但**保留**各自的数值 。
-    /// （`mode` 与 `remainMs` / `stopMs` 是分开的字段，切回来值还在）。
+    /// Switch mode. Stops the timer but keeps each mode's own value.
     pub fn set_mode(&mut self, mode: ToolMode) {
         if self.mode == mode {
             return;
@@ -240,7 +228,7 @@ impl ToolState {
         self.mode = mode;
     }
 
-    /// 加一条待办。满了返回 `false`。空文本也返回 `false`。
+    /// Append a todo. Returns `false` when the list is full or the text is empty.
     pub fn add_todo(&mut self, text: &str) -> bool {
         let todo = Todo::new(text);
         if todo.text.is_empty() || self.todos.len() >= MAX_TODOS {
@@ -250,7 +238,7 @@ impl ToolState {
         true
     }
 
-    /// 勾选 / 取消勾选。下标越界返回 `false`。
+    /// Toggle the done flag. Returns `false` for an out-of-range index.
     pub fn toggle_todo(&mut self, i: usize) -> bool {
         match self.todos.get_mut(i) {
             Some(t) => {
@@ -261,7 +249,7 @@ impl ToolState {
         }
     }
 
-    /// 删除一条。下标越界返回 `false`。
+    /// Remove one todo. Returns `false` for an out-of-range index.
     pub fn remove_todo(&mut self, i: usize) -> bool {
         if i >= self.todos.len() {
             return false;
@@ -270,13 +258,13 @@ impl ToolState {
         true
     }
 
-    /// 未完成条数（条带卡片上显示的小圆点用）。
+    /// Number of unfinished todos (the dots on the strip card).
     #[must_use]
     pub fn pending_count(&self) -> usize {
         self.todos.iter().filter(|t| !t.done).count()
     }
 
-    /// 从 `[Tool]` 段读出。缺键按默认值。
+    /// Read from the `[Tool]` section. Missing keys fall back to the defaults.
     #[must_use]
     pub fn load(ini: &Ini) -> Self {
         let mut out = Self::default();
@@ -291,7 +279,7 @@ impl ToolState {
             }
             out.todos.push(Todo::parse_line(line));
         }
-        // 把秒写进 ini（`Total` / `Remain`），读出来再乘回毫秒。
+        // The ini stores seconds in `Total` / `Remain`; scale back to milliseconds.
         if let Some(secs) = ini.get_i32(SECTION, "Total") {
             out.total_ms = i64::from(secs.max(1)) * 1000;
         }
@@ -303,10 +291,10 @@ impl ToolState {
         out
     }
 
-    /// 写回 `[Tool]` 段。
+    /// Write back to the `[Tool]` section.
     ///
-    /// 条数变少时**要把多余的 `T{i}` 删掉**，否则文件里会留下旧条目，
-    /// 下次读出条数虽然按 `N` 截断，但人看文件会以为数据没删干净。
+    /// Surplus `T{i}` keys are removed, otherwise the file keeps entries the
+    /// `N` count no longer covers.
     pub fn save(&self, ini: &mut Ini, now_ms: i64) {
         let old_n = ini.get_i32(SECTION, "N").unwrap_or(0).max(0);
         ini.set_i32(SECTION, "N", self.todos.len() as i32);
@@ -321,9 +309,9 @@ impl ToolState {
     }
 }
 
-/// 把毫秒格式化成面板中央的大字。
+/// Format milliseconds for the large panel text.
 ///
-/// 秒表带两位小数，倒计时只到秒。
+/// The stopwatch carries two decimals, the countdown stops at seconds.
 #[must_use]
 pub fn format_ms(ms: i64, mode: ToolMode) -> String {
     let ms = ms.max(0);
@@ -359,20 +347,21 @@ mod tests {
         assert_eq!(Todo::parse_line("0|写代码"), t);
     }
 
-    /// bug 的回归测试：`0|` 前缀必须被剥掉，否则每轮存读都多叠一层。
+    /// Regression: the `0|` prefix must be stripped or every save/load cycle
+    /// adds another layer.
     #[test]
     fn todo_parse_strips_zero_prefix() {
         assert!(!Todo::parse_line("0|买菜").done);
         assert_eq!(Todo::parse_line("0|买菜").text, "买菜");
-        // 被写坏的文件（双重前缀）：剥一层后残留一层，但不再累积。
+        // A file with a doubled prefix keeps one layer but stops growing.
         assert!(!Todo::parse_line("0|0|买菜").done);
         assert_eq!(Todo::parse_line("0|0|买菜").text, "0|买菜");
-        // 关键：再存一次不会再叠。
+        // Saving again must not add another layer.
         let once = Todo::parse_line("0|0|买菜");
         assert_eq!(once.to_line(), "0|0|买菜", "存量不再增长");
     }
 
-    /// 循环剥前缀会误伤合法文本 —— 用户写 "1|foo" 必须原样保留。
+    /// A stripping loop would eat user text: "1|foo" must survive verbatim.
     #[test]
     fn todo_parse_does_not_eat_user_text() {
         let t = Todo {
@@ -385,7 +374,7 @@ mod tests {
         assert_eq!(back.text, "1|foo", "用户文本不能被当成前缀");
     }
 
-    /// 文本里正好有 `x|` 时不能误吃。
+    /// A pipe inside the text must not be eaten.
     #[test]
     fn todo_parse_keeps_pipes_in_text() {
         assert_eq!(Todo::parse_line("a|b").text, "a|b");
@@ -419,7 +408,7 @@ mod tests {
         assert!(s.is_finished(5_000));
         s.tick(5_000);
         assert!(!s.running, "归零后应当停表");
-        // 跑完再点开始不应当重新启动。
+        // Starting again after the end must not restart the timer.
         s.start(6_000);
         assert!(!s.running);
     }
@@ -438,7 +427,7 @@ mod tests {
         assert_eq!(s.display_ms(10_000), 3_500);
     }
 
-    /// 切模式要停表，但两边的数值各自保留。
+    /// Switching mode stops the timer but keeps each side's value.
     #[test]
     fn mode_switch_keeps_each_value() {
         let mut s = ToolState::new();
@@ -454,7 +443,7 @@ mod tests {
         s.pause(7_000);
         assert_eq!(s.display_ms(7_000), 3_000);
 
-        // 切回倒计时，之前剩的 6 秒还在。
+        // Switching back keeps the 6 seconds that were left.
         s.set_mode(ToolMode::Countdown);
         assert_eq!(s.display_ms(7_000), 6_000);
     }
@@ -523,11 +512,11 @@ mod tests {
         assert_eq!(back.todos, s.todos);
         assert_eq!(back.total_ms, 90_000);
         assert_eq!(back.display_ms(0), 60_000);
-        // 运行状态不落盘：重启后一律是停的。
+        // The running state is not persisted: a restart always starts stopped.
         assert!(!back.running);
     }
 
-    /// 删条目后必须把多余的 `T{i}` 从文件里清掉。
+    /// Removing a todo must drop the surplus `T{i}` keys from the file.
     #[test]
     fn save_drops_stale_todo_keys() {
         let mut s = ToolState::new();

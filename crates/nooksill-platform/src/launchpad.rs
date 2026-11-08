@@ -1,45 +1,44 @@
-//! 起动台的扫描：开始菜单里的 `.lnk`。
-//!
-//! 递归两个「程序」目录
-//! （全局 + 当前用户），收集快捷方式，按名字排序去重。
-//!
-//! 只读文件系统，不起 COM，也不加载图标 —— 图标由 `gpu` 层按需取。
+//! Launchpad scan: `.lnk` files in the Start Menu.
+//! Walks both Programs directories (machine and user), then sorts and dedups by
+//! name. Read-only and COM-free; icons are fetched on demand by the `gpu` layer.
 
 use std::path::Path;
 
-// 条目类型定义在 core：模型层要用它做"吸收扫描结果"，两边共用同一个类型，
-// 省掉一次没有意义的转换。
+// The entry type lives in core so the model layer can absorb scan results
+// without a conversion step.
 pub use nooksill_core::launchpad::AppEntry;
 
-/// 名字里带这些词的是卸载器 / 说明文档，不该出现在起动台里。
+/// Names containing these words are uninstallers or docs and are skipped.
 ///
-/// 用 `StrStrIW` 做子串匹配，大小写不敏感。
+/// The match is a case-insensitive substring, like `StrStrIW`.
 const BLOCK_WORDS: [&str; 5] = ["uninstall", "卸载", "readme", "帮助", "help"];
 
-/// 递归深度上限。是 4（`depth < 4`）。
+/// Recursion depth cap, checked as `depth < 4`.
 const MAX_DEPTH: usize = 4;
 
-/// 扫开始菜单。
+/// Scan the Start Menu.
 ///
-/// 顺序：先全局目录、再用户目录，各自递归；最后按名字排序并去重。
+/// Machine directory first, then the user one; each recursed, then sorted by
+/// name and deduplicated.
 #[must_use]
 pub fn scan() -> Vec<AppEntry> {
     let mut out = Vec::new();
     for dir in start_menu_dirs() {
         walk(&dir, 0, &mut out);
     }
-    // 是先 qsort 再逐个 `lstrcmpiW` 去重。
+    // Sort first, then drop neighbours with equal case-folded names.
     out.sort_by(|a, b| cmp_ci(&a.name, &b.name));
     out.dedup_by(|a, b| cmp_ci(&a.name, &b.name) == std::cmp::Ordering::Equal);
     out
 }
 
-/// 大小写不敏感比较。`lstrcmpiW` 的近似 —— 我们要的只是"稳定且近似字典序"。
+/// Case-insensitive compare, approximating `lstrcmpiW`: stable and roughly
+/// alphabetical is enough.
 fn cmp_ci(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
-/// 名字是否该被跳过。
+/// Whether a name should be skipped.
 #[must_use]
 pub fn is_blocked(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -64,7 +63,7 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
             }
             continue;
         }
-        // 只要 .lnk（`PathMatchSpecW(fd.cFileName, L"*.lnk")`）。
+        // `.lnk` only (the old code used `PathMatchSpecW(fd.cFileName, L"*.lnk")`).
         if !name.to_lowercase().ends_with(".lnk") {
             continue;
         }
@@ -79,7 +78,8 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
     }
 }
 
-/// 两个开始菜单目录（全局 `CSIDL_COMMON_PROGRAMS`、用户 `CSIDL_PROGRAMS`）。
+/// The two Start Menu directories: machine (`CSIDL_COMMON_PROGRAMS`) and user
+/// (`CSIDL_PROGRAMS`), located through their environment roots.
 fn start_menu_dirs() -> Vec<std::path::PathBuf> {
     let mut v = Vec::new();
     if let Ok(p) = std::env::var("ProgramData") {
@@ -95,7 +95,7 @@ fn start_menu_dirs() -> Vec<std::path::PathBuf> {
 mod tests {
     use super::*;
 
-    /// 卸载器与说明文档要被过滤，正常应用不能误伤。
+    /// Uninstallers and docs are filtered out, real apps are not.
     #[test]
     fn blocked_words_filter_installers() {
         assert!(is_blocked("Uninstall Steam"));
@@ -104,11 +104,11 @@ mod tests {
         assert!(is_blocked("帮助文档"));
         assert!(!is_blocked("微信"));
         assert!(!is_blocked("Visual Studio Code"));
-        // "helped" 里没有 "help" 吗？有 —— 也是子串匹配，这里保持一致。
+        // Substring matching catches "helped" too; that is intended.
         assert!(is_blocked("Helper"));
     }
 
-    /// 扫描结果必须按名字有序，且没有重名。
+    /// Results must be name-ordered and free of duplicates.
     #[test]
     fn scan_is_sorted_and_deduped() {
         let apps = scan();
@@ -120,7 +120,8 @@ mod tests {
                 w[1].name
             );
         }
-        // 本机装了东西，通常不会是空；空也不失败（CI 环境可能没有开始菜单）。
+        // A normal machine has apps installed, but empty is fine (CI may have no
+        // Start Menu).
         for a in &apps {
             assert!(!a.name.is_empty());
             assert!(a.path.to_lowercase().ends_with(".lnk"), "{}", a.path);

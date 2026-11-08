@@ -1,19 +1,19 @@
-//! ARGB 颜色与色彩空间转换。
+//! ARGB colors and color space conversion.
 //!
-//! 约定与 GDI+ 完全一致：`0xAARRGGBB`，**非预乘** alpha。
-//! DIB section 用 `PixelFormat32bppPARGB`，预乘由 GDI+ 在写入时完成，
-//! 调用方始终传非预乘值 —— 这一点与 `ARGBC` 宏相同。
+//! Matches GDI+ exactly: `0xAARRGGBB`, not premultiplied alpha. The DIB
+//! section uses `PixelFormat32bppPARGB`; GDI+ premultiplies on write, so
+//! callers always pass straight alpha. Same contract as the `ARGBC` macro.
 
-/// `0xAARRGGBB`。
+/// Packed `0xAARRGGBB`.
 pub type Argb = u32;
 
-/// 构造不透明颜色。
+/// Build an opaque color.
 #[must_use]
 pub const fn rgb(r: u8, g: u8, b: u8) -> Argb {
     argb(255, r, g, b)
 }
 
-/// 构造带 alpha 的颜色。对应 `ARGBC(a, r, g, b)`。
+/// Build a color with alpha. Mirrors `ARGBC(a, r, g, b)`.
 #[must_use]
 pub const fn argb(a: u8, r: u8, g: u8, b: u8) -> Argb {
     ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
@@ -36,17 +36,16 @@ pub const fn blue(c: Argb) -> u8 {
     c as u8
 }
 
-/// 只替换 alpha，保留 RGB。
+/// Replace alpha only, keeping RGB.
 #[must_use]
 pub const fn with_alpha(c: Argb, a: u8) -> Argb {
     (c & 0x00FF_FFFF) | ((a as u32) << 24)
 }
 
-/// 按 alpha 比例缩放（用于"整体变淡"，例如隐藏动画中的淡出）。
+/// Scale alpha by `scale` (used for whole-element fading).
 ///
-/// `scale` 取 `0.0..=1.0`；越界会夹紧而不是回绕 —— `ARGBC` 直接
-/// 把 `op * 255` 塞进 `int`，`Opacity=1000` 时 alpha 溢出进颜色通道，
-/// 是 issue 里记录过的真实缺陷。
+/// `scale` is clamped to `0.0..=1.0`. `ARGBC` instead stuffs `op * 255` into an
+/// `int`, so `Opacity=1000` overflows into the color channels.
 #[must_use]
 pub fn scale_alpha(c: Argb, scale: f32) -> Argb {
     let s = scale.clamp(0.0, 1.0);
@@ -54,7 +53,7 @@ pub fn scale_alpha(c: Argb, scale: f32) -> Argb {
     with_alpha(c, a)
 }
 
-/// 线性插值（用于渐变端点、强调色混色）。
+/// Linear interpolation, used for gradient endpoints and accent blends.
 #[must_use]
 pub fn mix(a: Argb, b: Argb, t: f32) -> Argb {
     let t = t.clamp(0.0, 1.0);
@@ -67,10 +66,11 @@ pub fn mix(a: Argb, b: Argb, t: f32) -> Argb {
     )
 }
 
-/// HSV → RGB，`h` 单位为度（任意实数，内部取模），`s`/`v` 取 `0.0..=1.0`。
+/// HSV to RGB. `h` is in degrees (any real, wrapped internally), `s`/`v` in
+/// `0.0..=1.0`.
 ///
-/// 对应 `HsvRgb`：`AccentTone` 开启时用系统强调色的**色相**生成
-/// Material You 风格的两种色调，饱和度/明度由深/浅色主题决定。
+/// Mirrors `HsvRgb`: with `AccentTone` on, the system accent hue generates two
+/// Material You tones whose saturation and value come from the theme.
 #[must_use]
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let h = h.rem_euclid(360.0) / 60.0;
@@ -93,9 +93,9 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     (to(r), to(g), to(b))
 }
 
-/// RGB → 色相（度，`0.0..360.0`）。对应 `RefreshAccent` 里的那段反算。
+/// RGB to hue in degrees, `0.0..360.0`.
 ///
-/// 灰阶（`d <= 0.001`）返回 0.0，。
+/// Grays (`d <= 0.001`) return 0.0.
 #[must_use]
 pub fn hue_of(c: Argb) -> f32 {
     let r = red(c) as f32 / 255.0;
@@ -121,7 +121,8 @@ pub fn hue_of(c: Argb) -> f32 {
     h
 }
 
-/// Win32 `COLORREF`（`0x00BBGGRR`）→ ARGB。注册表/系统 API 的颜色都是这个字节序。
+/// Win32 `COLORREF` (`0x00BBGGRR`) to ARGB. Registry and system APIs use this
+/// byte order.
 #[must_use]
 pub const fn from_colorref(c: u32) -> Argb {
     argb(
@@ -132,7 +133,7 @@ pub const fn from_colorref(c: u32) -> Argb {
     )
 }
 
-/// ARGB → `COLORREF`。`BgColor1/2` 在 ini 里存的是 `COLORREF` 十进制值。
+/// ARGB to `COLORREF`. `BgColor1/2` are stored as decimal `COLORREF` in the ini.
 #[must_use]
 pub const fn to_colorref(c: Argb) -> u32 {
     ((blue(c) as u32) << 16) | ((green(c) as u32) << 8) | (red(c) as u32)
@@ -144,7 +145,7 @@ mod tests {
 
     #[test]
     fn argb_layout_matches_gdiplus() {
-        // 0xAARRGGBB：alpha 在高字节，与 GDI+ / Windows 一致。
+        // 0xAARRGGBB: alpha in the high byte, as in GDI+ and Windows.
         assert_eq!(argb(0x12, 0x34, 0x56, 0x78), 0x1234_5678);
         assert_eq!(alpha(0x1234_5678), 0x12);
         assert_eq!(red(0x1234_5678), 0x34);
@@ -154,7 +155,7 @@ mod tests {
 
     #[test]
     fn scale_alpha_clamps_instead_of_overflowing() {
-        // 缺陷复现点：alpha 溢出绝不能污染颜色通道。
+        // Alpha overflow must never bleed into the color channels.
         let c = argb(200, 10, 20, 30);
         assert_eq!(scale_alpha(c, 1.5), c);
         assert_eq!(red(scale_alpha(c, 1.5)), 10);
@@ -185,7 +186,7 @@ mod tests {
         for hue in [0.0_f32, 30.0, 90.0, 180.0, 270.0, 350.0] {
             let (r, g, b) = hsv_to_rgb(hue, 1.0, 1.0);
             let back = hue_of(rgb(r, g, b));
-            // HSV→RGB 的 8 位量化会引入最多 ~1° 的误差。
+            // 8-bit quantization in HSV->RGB costs up to ~1 degree.
             assert!((back - hue).abs() < 1.5, "hue {hue} -> {back}");
         }
     }

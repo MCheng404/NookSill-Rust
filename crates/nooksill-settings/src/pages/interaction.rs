@@ -1,4 +1,4 @@
-//! 交互页：悬停放大、文件夹展开、动画。
+//! Interaction page: hover zoom, folder fan, animation, reveal delays.
 
 use egui::Ui;
 use nooksill_core::config::Key;
@@ -38,8 +38,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         toggle(ctx, ui, Key::Preview, "悬停运行中应用显示窗口预览", "");
     });
 
-    // 两张卡片全部复用共享的 `card` + `slider`，不另造一套延迟控件。
-    // 说明放在 card 的 note 里，与全站其它卡片同一套版式。
     card(
         ctx,
         ui,

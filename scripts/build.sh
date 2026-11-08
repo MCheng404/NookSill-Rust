@@ -14,7 +14,7 @@
 #   ./scripts/build.sh --check        # cargo check（最快反馈）
 #   ./scripts/build.sh --clippy       # clippy（-D warnings）
 #   ./scripts/build.sh --fmt          # 格式化
-#   ./scripts/build.sh --gate         # 完整门禁：fmt + clippy + test（提交前跑这个）
+#   ./scripts/build.sh --gate         # 完整门禁：注释语言 + fmt + clippy + test（提交前跑这个）
 #   ./scripts/build.sh --exe          # 打印产物路径
 #   ./scripts/build.sh --version      # 打印本次构建钉住的版本号
 #   ./scripts/package.sh [--release]  # 构建 + 按版本号打包到 dist/
@@ -80,11 +80,13 @@ case "$ACTION" in
         # 完整门禁。三步**都跑完再汇总**，而不是第一步失败就退出 ——
         # 一次看清全部问题，比"修一个跑一次"快得多。
         status=0
-        echo "== 1/3 fmt =="
+        echo "== 1/4 comments =="
+        ./scripts/check-comments.sh || status=1
+        echo "== 2/4 fmt =="
         cargo fmt --all -- --check || status=1
-        echo "== 2/3 clippy =="
+        echo "== 3/4 clippy =="
         cargo clippy --target "$TARGET" --workspace --all-targets -- -D warnings ${EXTRA[@]+"${EXTRA[@]}"} || status=1
-        echo "== 3/3 test =="
+        echo "== 4/4 test =="
         cargo test --target "$TARGET" --workspace --lib --tests ${EXTRA[@]+"${EXTRA[@]}"} || status=1
         echo
         if [ "$status" -eq 0 ]; then

@@ -1,10 +1,7 @@
 //! A very small JSON reader.
 //!
-//! The updater parses exactly one document shape (the GitHub release API) plus
-//! one DoH answer. Pulling `serde_json` in would cost ~300 KB of code and a
-//! second derive stack for two structs, so this module only does what those
-//! two need: objects, arrays, strings, numbers, booleans, null. No writer, no
-//! error positions, no 64-bit integers beyond `f64`.
+//! Covers only what the updater parses: objects, arrays, strings, numbers,
+//! booleans and null. No writer, no error positions, no integers beyond `f64`.
 
 use std::fmt;
 

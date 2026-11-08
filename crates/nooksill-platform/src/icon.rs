@@ -1,10 +1,6 @@
-//! HICON to RGBA, in three fallbacks:
-//! 1. `GetIconInfo` + `GetDIBits(hbmColor)` for 32-bit icons with alpha.
-//! 2. Rebuild alpha from `hbmMask` for legacy 24-bit icons.
-//! 3. `DrawIconEx` into a 32-bit DIB (see `draw_into_dib`).
-//!
-//! GDI+ is skipped: `GdipCreateBitmapFromHICON` leaves a black background.
-//! JUMBO (256) is tried before EXTRALARGE (48) for 150% DPI.
+//! HICON to RGBA: `GetDIBits` color bitmap, mask-derived alpha for 24-bit
+//! icons, then `DrawIconEx` into a DIB. JUMBO (256) precedes EXTRALARGE (48).
+//! GDI+ is avoided: `GdipCreateBitmapFromHICON` leaves a black background.
 
 use windows::core::PCWSTR;
 use windows::Win32::Graphics::Gdi::{
@@ -21,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, DrawIconEx, GetIconInfo, DI_NORMAL, HICON, ICONINFO,
 };
 
-/// 一块直通 alpha 的位图，`rgba` 为行优先、每像素 4 字节。
+/// Straight-alpha bitmap; `rgba` is row-major with 4 bytes per pixel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IconBitmap {
     pub width: u32,
@@ -30,7 +26,7 @@ pub struct IconBitmap {
 }
 
 impl IconBitmap {
-    /// 逐像素读 alpha 用的便捷方法（诊断与测试）。
+    /// Convenience accessor for one alpha value (diagnostics and tests).
     #[must_use]
     pub fn alpha_at(&self, x: u32, y: u32) -> u8 {
         if x >= self.width || y >= self.height {
@@ -39,25 +35,24 @@ impl IconBitmap {
         self.rgba[((y * self.width + x) * 4 + 3) as usize]
     }
 
-    /// 是否有任何非透明像素。整块全透明的图等于没取到图标。
+    /// Whether any pixel is non-transparent. A fully transparent image means no
+    /// icon was obtained.
     #[must_use]
     pub fn has_visible_pixels(&self) -> bool {
         self.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 0)
     }
 }
 
-/// 文件在资源管理器里显示的名字（`SHGFI_DISPLAYNAME`）。
+/// Explorer display name of a file (`SHGFI_DISPLAYNAME`), used to name running
+/// apps that were never pinned: `chrome.exe` reports "Google Chrome", which
+/// beats the bare file name and needs no version-resource parsing.
 ///
-/// 用来给"未固定的运行中应用"起名：`chrome.exe` 的显示名是
-/// "Google Chrome"，`code.exe` 是 "Visual Studio Code" —— 比去掉扩展名的
-/// 文件名好读得多，而且这份描述本来就随程序一起装好了，不用解析版本资源。
-///
-/// 取不到就返回 `None`，调用方退回文件名。
+/// `None` when unavailable; callers fall back to the file name.
 #[must_use]
 pub fn display_name(path: &str) -> Option<String> {
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let mut sfi = SHFILEINFOW::default();
-    // SAFETY: 输出结构是本栈帧上的 `SHFILEINFOW`，尺寸取自它自己。
+    // SAFETY: the output struct lives on this frame and the size comes from it.
     let ok = unsafe {
         SHGetFileInfoW(
             PCWSTR(wide.as_ptr()),
@@ -81,9 +76,9 @@ pub fn display_name(path: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&sfi.szDisplayName[..len]))
 }
 
-/// 取 shell 图标：先 JUMBO（256 px），失败再 EXTRALARGE（48 px）。
+/// Shell icon, trying JUMBO (256 px) first and EXTRALARGE (48 px) after.
 ///
-/// `path` 可以是 exe、文件夹、`.lnk`、网址 —— 只要是 Explorer 能给图标的都行。
+/// `path` may be an exe, folder, `.lnk` or URL: anything Explorer has an icon for.
 #[must_use]
 pub fn shell_icon(path: &str) -> Option<IconBitmap> {
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -109,7 +104,8 @@ pub fn shell_icon(path: &str) -> Option<IconBitmap> {
         eprintln!("  [icon] iIcon={} attrs={:#x}", sfi.iIcon, sfi.dwAttributes);
     }
 
-    // 两档都试：JUMBO 在部分老系统上会失败，EXTRALARGE 几乎总在。
+    // Both sizes are tried: JUMBO fails on some older systems, EXTRALARGE
+    // almost always works.
     for list in [SHIL_JUMBO, SHIL_EXTRALARGE] {
         let il: windows::core::Result<IImageList> =
             unsafe { SHGetImageList(i32::try_from(list).ok()?) };
@@ -158,10 +154,10 @@ pub fn shell_icon(path: &str) -> Option<IconBitmap> {
     None
 }
 
-/// 从可执行文件 / DLL / `.ico` 的资源里取第 `index` 个图标。
+/// Extract icon `index` from the resources of an exe, DLL or `.ico`.
 ///
-/// 快捷方式里存的 `iconLoc` + `iconIdx` 常指向 exe 内的资源，shell 的图像
-/// 列表覆盖不到这类位置。
+/// Shortcuts store `iconLoc` + `iconIdx` that often point into an exe's
+/// resources, which the shell image list does not cover.
 #[must_use]
 pub fn resource_icon(file: &str, index: i32) -> Option<IconBitmap> {
     use windows::Win32::UI::WindowsAndMessaging::PrivateExtractIconsW;
@@ -171,11 +167,11 @@ pub fn resource_icon(file: &str, index: i32) -> Option<IconBitmap> {
     let n = wide.len().min(buf.len());
     buf[..n].copy_from_slice(&wide[..n]);
     if n == buf.len() {
-        // 路径被截断，宁可不取也不猜。
+        // A truncated path is a guess; return nothing instead.
         return None;
     }
 
-    // 从大到小试：256 是 jumbo 的等价尺寸，取不到再退。
+    // Largest size first; 256 matches jumbo, smaller ones follow.
     for size in [256, 128, 64, 48] {
         let mut hicon = HICON::default();
         let got = unsafe {
@@ -194,9 +190,7 @@ pub fn resource_icon(file: &str, index: i32) -> Option<IconBitmap> {
         }
         let bmp = hicon_to_bitmap(hicon);
         let _ = unsafe { DestroyIcon(hicon) };
-        // 尺寸档位已经由 `PrivateExtractIconsW` 指定，拿不到就是文件的
-        // 第 `index` 个图标不存在，换下一档没用 —— 但多试几档能兜住
-        // 只提供 48 px 的老 exe。
+        // Smaller sizes still rescue old exes that ship only 48 px icons.
         if let Some(b) = bmp {
             if b.has_visible_pixels() {
                 return Some(b);
@@ -206,7 +200,7 @@ pub fn resource_icon(file: &str, index: i32) -> Option<IconBitmap> {
     None
 }
 
-/// HICON → RGBA。三层兜底顺序见模块文档。
+/// Convert a HICON to RGBA; the fallback order is described in the module docs.
 #[must_use]
 pub fn hicon_to_bitmap(hicon: HICON) -> Option<IconBitmap> {
     if hicon.is_invalid() {
@@ -223,7 +217,7 @@ pub fn hicon_to_bitmap(hicon: HICON) -> Option<IconBitmap> {
         None
     };
 
-    // 释放 GetIconInfo 复制出来的两个位图。
+    // Free the two bitmaps that GetIconInfo duplicated.
     unsafe {
         if !ii.hbmColor.is_invalid() {
             let _ = DeleteObject(HGDIOBJ(ii.hbmColor.0));
@@ -236,7 +230,7 @@ pub fn hicon_to_bitmap(hicon: HICON) -> Option<IconBitmap> {
     color.or_else(|| draw_into_dib(hicon))
 }
 
-/// 第一层：彩色位图 + （必要时）掩码造 alpha。
+/// Layer one: color bitmap plus, when needed, alpha rebuilt from the mask.
 fn from_color_bitmap(hbm_color: HBITMAP, hbm_mask: HBITMAP) -> Option<IconBitmap> {
     let mut bm = BITMAP::default();
     let got = unsafe {
@@ -255,8 +249,8 @@ fn from_color_bitmap(hbm_color: HBITMAP, hbm_mask: HBITMAP) -> Option<IconBitmap
 
     let mut bgra = read_dib(hbm_color, w, h)?;
 
-    // alpha 全 0 = 老式 24 位图标（或掩码式 alpha）。用掩码补：
-    // 掩码里 0 表示"要画"，非 0 表示透明。
+    // All-zero alpha means a legacy 24-bit icon (or mask-based alpha). Fill it
+    // from the mask: 0 means draw, non-zero means transparent.
     if !bgra.as_chunks::<4>().0.iter().any(|p| p[3] != 0) && !hbm_mask.is_invalid() {
         let mask = read_dib(hbm_mask, w, h)?;
         for i in 0..pixels {
@@ -293,7 +287,7 @@ fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
     rgba
 }
 
-/// 读一张 32 位位图的像素，返回 **BGRA**（GDI 的原生顺序）。
+/// Read a 32-bit bitmap's pixels as BGRA (GDI's native order).
 fn read_dib(hbm: HBITMAP, w: u32, h: u32) -> Option<Vec<u8>> {
     let pixels = usize::try_from(w).ok()? * usize::try_from(h).ok()?;
     let mut buf = vec![0u8; pixels * 4];
@@ -301,7 +295,7 @@ fn read_dib(hbm: HBITMAP, w: u32, h: u32) -> Option<Vec<u8>> {
     let mut bi = BITMAPINFO::default();
     bi.bmiHeader.biSize = u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).ok()?;
     bi.bmiHeader.biWidth = i32::try_from(w).ok()?;
-    // 负高度 = 自上而下，省掉一次翻转。
+    // A negative height means top-down, saving one flip.
     bi.bmiHeader.biHeight = -i32::try_from(h).ok()?;
     bi.bmiHeader.biPlanes = 1;
     bi.bmiHeader.biBitCount = 32;
@@ -394,7 +388,7 @@ fn draw_into_dib(hicon: HICON) -> Option<IconBitmap> {
     bmp.has_visible_pixels().then_some(bmp)
 }
 
-/// 图标自身尺寸。`GetIconInfo` 的彩色位图尺寸就是它。
+/// The icon's own size, which is the size of `GetIconInfo`'s color bitmap.
 fn icon_size(hicon: HICON) -> Option<u32> {
     let mut ii = ICONINFO::default();
     unsafe { GetIconInfo(hicon, &raw mut ii) }.ok()?;

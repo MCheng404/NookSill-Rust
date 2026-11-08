@@ -1,8 +1,7 @@
-//! Win32 消息 → `egui::RawInput`。
+//! Win32 messages to `egui::RawInput`.
 //!
-//! 这是"不用 eframe"的代价所在：winit 帮你做的输入翻译，这里要自己写。
-//! M0 只覆盖 Dock/设置界面真正用得到的部分：鼠标移动、左右键、滚轮、
-//! Esc/Enter/Tab 这几个键。IME 留到 M1（见 PORTING.md 的风险项）。
+//! Without eframe/winit this translation is manual. Only what the dock and the
+//! settings window use is covered: pointer, buttons, wheel and a few keys.
 
 use std::time::Instant;
 
@@ -36,8 +35,8 @@ impl Input {
         self.events.push(Event::PointerMoved(self.pointer));
     }
 
-    /// 光标离开窗口。egui 需要 `PointerGone` 才会清掉悬停态，
-    /// 否则按钮会一直停在 hover 高亮。
+    /// Cursor left the window. egui only clears hover on `PointerGone`,
+    /// otherwise buttons stay highlighted.
     pub fn pointer_gone(&mut self) {
         self.hovering = false;
         self.events.push(Event::PointerGone);
@@ -57,12 +56,12 @@ impl Input {
         });
     }
 
-    /// `delta_y` 单位是"行"（Win32 的 `WHEEL_DELTA` 120 = 1 行）。
+    /// `delta_y` is in lines (Win32 `WHEEL_DELTA` 120 equals one line).
     pub fn wheel(&mut self, delta_y: f32) {
         self.events.push(Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: Vec2::new(0.0, delta_y),
-            // 鼠标滚轮没有触控板那样的 phase/source 语义。
+            // A mouse wheel has no touchpad-style phase or source.
             phase: egui::TouchPhase::Move,
             source: egui::MouseWheelSource::Unknown,
             modifiers: self.modifiers,
@@ -79,11 +78,11 @@ impl Input {
         });
     }
 
-    /// 插入一段文字（`WM_CHAR`，或输入法上屏的那串）。
+    /// Insert text (`WM_CHAR`, or an IME commit).
     ///
-    /// egui 的 `TextEdit` **只认 `Event::Text`**：`Event::Key` 只用来移动
-    /// 光标与删除，敲键盘不会插入字符。所以整条文本输入链路必须走这里，
-    /// 否则输入框能拿到焦点却打不进字（设置窗口此前就是这个状态）。
+    /// `TextEdit` inserts only through `Event::Text`; `Event::Key` just moves the
+    /// caret and deletes. Anything else gives a focused field that ignores
+    /// typing.
     pub fn text(&mut self, s: &str) {
         if s.is_empty() {
             return;
@@ -91,28 +90,24 @@ impl Input {
         self.events.push(Event::Text(s.to_owned()));
     }
 
-    /// IME 组合中的文字（拼音 / 候选）。
+    /// IME composition text (pinyin or candidates).
     ///
-    /// egui 的 `TextEdit` 会自己把 preedit 插进 buffer、画下划线、把光标
-    /// 标成 `ImeComposition`；下一次 Preedit / Commit 会先删掉它。这是
-    /// "组合串回显"的正确做法 —— 在窗口里另画一层文字既会在多行框里
-    /// 错位，也不会跟着光标滚动。
-    ///
-    /// 传空串表示组合结束，egui 会清掉预编辑文本。
+    /// `TextEdit` inserts the preedit into its buffer, underlines it and marks the
+    /// cursor `ImeComposition`; the next Preedit or Commit removes it, which also
+    /// keeps it scrolling with the caret. An empty string ends the composition.
     pub fn ime_preedit(&mut self, text: &str) {
         self.events.push(Event::Ime(ImeEvent::Preedit {
             text: text.to_owned(),
-            // Win32 的 `GCS_COMPATTR` / `GCS_CURSORPOS` 能给出选区，
-            // 但整串候选高亮已经够用，不必为了它再取一次 IME 上下文。
+            // `GCS_COMPATTR` / `GCS_CURSORPOS` could give a selection, but
+            // highlighting the whole string is enough.
             active_range_chars: None,
         }));
     }
 
-    /// IME 上屏的文字。
+    /// Text committed by the IME.
     ///
-    /// **必须走 `ImeEvent::Commit` 而不是 `Event::Text`**：Commit 会先
-    /// 清掉上一帧的 preedit 再插入结果；用 `Event::Text` 会把拼音留在
-    /// 正文里（"nihao你好"）。
+    /// Must be `ImeEvent::Commit`, not `Event::Text`: Commit drops the previous
+    /// preedit first, otherwise the pinyin stays in the buffer.
     pub fn ime_commit(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -125,7 +120,7 @@ impl Input {
         self.modifiers = modifiers;
     }
 
-    /// 取出本帧的 `RawInput`。事件队列在此清空。
+    /// Build this frame's `RawInput`; the event queue is drained.
     pub fn take(&mut self, size_px: (u32, u32), pixels_per_point: f32) -> RawInput {
         let logical = Vec2::new(
             size_px.0 as f32 / pixels_per_point,
@@ -137,9 +132,10 @@ impl Input {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
-        // egui 0.37 用 `ViewportInfo::native_pixels_per_point` 告知原生缩放。
-        // **不设的话 egui 按 1.0 缩放**：界面只占表面的 1/ppp，
-        // 文字被放大后发虚（M0 的设置界面就有这个问题）。
+        // egui 0.37 reads the native scale from
+        // `ViewportInfo::native_pixels_per_point`. Leaving it unset makes egui
+        // assume 1.0, so the UI covers only 1/ppp of the surface and text
+        // turns blurry.
         raw.viewports.insert(
             egui::ViewportId::ROOT,
             egui::ViewportInfo {
@@ -151,7 +147,7 @@ impl Input {
     }
 }
 
-/// VK 码 → egui 键。只映射设置界面需要的那些，其余返回 `None`。
+/// VK code to egui key. Only the keys the settings window needs are mapped.
 #[must_use]
 pub fn map_vk(vk: u32) -> Option<egui::Key> {
     use egui::Key;
@@ -176,8 +172,8 @@ pub fn map_vk(vk: u32) -> Option<egui::Key> {
 mod tests {
     use super::*;
 
-    /// 组合串与上屏串必须是**两类**事件：TextEdit 靠 Preedit 画下划线、
-    /// 靠 Commit 清理 preedit。混成 `Event::Text` 会把拼音留在正文里。
+    /// Preedit and commit must stay distinct events: `TextEdit` draws the
+    /// underline from Preedit and clears it on Commit.
     #[test]
     fn ime_preedit_and_commit_are_distinct_events() {
         let mut input = Input::default();
@@ -195,8 +191,8 @@ mod tests {
         ));
     }
 
-    /// 组合取消要发一条空的 Preedit（清掉预编辑文本），但空的 Commit
-    /// 不该产生事件 —— egui 对空 Commit 有"无组合时忽略"的分支。
+    /// Cancelling sends an empty Preedit to clear the text, but an empty commit
+    /// emits nothing.
     #[test]
     fn empty_preedit_is_sent_but_empty_commit_is_not() {
         let mut input = Input::default();
@@ -210,7 +206,7 @@ mod tests {
         ));
     }
 
-    /// 事件队列取出后清空，否则同一串拼音会每帧重复插入。
+    /// The queue drains on take, otherwise the same pinyin repeats every frame.
     #[test]
     fn take_drains_events() {
         let mut input = Input::default();
@@ -219,14 +215,10 @@ mod tests {
         assert!(input.take((10, 10), 1.0).events.is_empty());
     }
 
-    /// 用 egui 真跑一帧，证明 `Preedit → Commit` 能清掉预编辑文本。
+    /// Runs egui for real to prove `Preedit -> Commit` clears the preedit text.
     ///
-    /// 这一条比"事件队列里有两个事件"扎实得多：`TextEdit` 的
-    /// `filtered_events(&event_filter)` 可能把 IME 事件过滤掉，
-    /// `owns_ime_events` 又要求 widget 有焦点 —— 任何一个不成立，
-    /// 组合串回显都是空谈。
-    ///
-    /// 用 ASCII 是刻意的：没装 CJK 字体时 egui 0.37 缺字形直接 panic。
+    /// `filtered_events` may drop IME events and `owns_ime_events` requires focus,
+    /// so both must hold. ASCII only: egui 0.37 panics on missing CJK glyphs.
     #[test]
     fn preedit_then_commit_leaves_only_the_final_text() {
         let ctx = egui::Context::default();
@@ -234,9 +226,9 @@ mod tests {
         let mut text = "ab".to_owned();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 120.0));
 
-        // 第 1 帧：先建 widget 并给它焦点（`owns_ime_events` == has_focus）。
-        // 测试没有真正的纹理后端，`FullOutput` 被丢弃时 `TexturesDelta`
-        // 会以"有未应用的 delta"panic —— 这里显式消费掉。
+        // Frame 1: create the widget and focus it (`owns_ime_events` is
+        // has_focus). There is no texture backend here, so discard the delta or
+        // dropping `FullOutput` panics.
         let mut out1 = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),
@@ -249,7 +241,8 @@ mod tests {
         );
         out1.textures_delta.clear();
 
-        // 第 2 帧：一条 Win32 消息里同时带上屏结果与新组合串。
+        // Frame 2: one Win32 message carrying both the commit and a new
+        // composition.
         let events = vec![
             Event::Ime(ImeEvent::Preedit {
                 text: "pinyin".to_owned(),

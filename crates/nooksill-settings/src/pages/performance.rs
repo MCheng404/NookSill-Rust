@@ -1,4 +1,4 @@
-//! 性能页：显卡、实时占用、高耗能功能、系统与兼容、预设。
+//! Performance page: GPU, live usage, costly features, compatibility, presets.
 
 use egui::{RichText, Ui};
 use nooksill_core::config::{BgMode, Config, Key};
@@ -50,7 +50,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         "高耗能功能",
         "每项都标了开销，可以单独关掉。",
         |ctx, ui| {
-            // 磨砂是 BgMode 的派生状态，不是独立布尔键。
+            // Frost is derived from `BgMode`, not a separate boolean key.
             toggle_derived(
                 ctx,
                 ui,
@@ -60,7 +60,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 |cfg, on| cfg.apply_i32(Key::BgMode, if on { 2 } else { 1 }),
             );
 
-            // 一个开关同时决定两个键：指示点与"运行中应用"列表。
+            // One switch drives two keys: running dots and the running list.
             toggle_derived(
                 ctx,
                 ui,
@@ -135,8 +135,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     });
 }
 
-/// 显卡选择。与 `combo` 的区别：值是**字符串**，且不走 `Key` 表
-/// （`[Graphics]` 段是 Rust 版独有的，见 ADR-012）。
+/// GPU selection. Unlike `combo` the value is a string and not a `Key`: the
+/// `[Graphics]` section is Rust-only.
 fn adapter_combo(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     let mut cur = ctx.cfg.adapter.clone();
     let adapters = ctx.state.adapters.clone();
@@ -164,8 +164,8 @@ fn adapter_combo(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         ctx.out.changed = true;
     }
 
-    // 实际生效的那块卡与配置可能不同（名字对不上会回退），必须显示真值，
-    // 否则用户会以为"选了就生效了"。
+    // Show the adapter actually in use: a name mismatch falls back silently,
+    // so the configured value alone would be misleading.
     if ctx.state.active_adapter.is_empty() {
         ui.small("当前实际使用：尚未初始化");
     } else {

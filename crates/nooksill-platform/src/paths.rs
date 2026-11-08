@@ -1,13 +1,6 @@
-//! 路径解析：便携模式、配置目录、图标缓存目录。
-//!
-//! 规则与`InitPaths` 完全一致（顺序也一致，因为"先建目录还是先判便携"
-//! 会影响迁移结果）：
-//!
-//! 1. 默认配置目录 = `%APPDATA%\NookSill`，配置文件 `NookSill.ini`。
-//! 2. exe 同目录存在 `NookSill.portable`（空文件即可）→ 整个目录改用 exe 所在目录。
-//! 3. 否则若 `%APPDATA%` 下还没有 ini、但 exe 旁边有旧 ini → 迁移一次
-//!    （连同 `icons\` 一起复制），之后就以 `%APPDATA%` 为准。
-//! 4. 最后确保 ini 与 `icons\` 存在。
+//! Path resolution: portable mode, config directory, icon cache.
+//! Order matters: the portable marker is checked before creating directories.
+//! Defaults to `%APPDATA%\NookSill`; a marker next to the exe switches the root.
 
 use std::fmt;
 use std::fs;
@@ -18,8 +11,8 @@ use windows::Win32::UI::Shell::SHGetFolderPathW;
 
 use crate::win::{from_wide, to_wide};
 
-/// `CSIDL_APPDATA` = `FOLDERID_RoamingAppData`。手写常量是为了不引入
-/// `Win32_UI_Shell_Common` 里那一整组 CSIDL 常量（它们全是 u32，容易混用）。
+/// `CSIDL_APPDATA` is `FOLDERID_RoamingAppData`. Hand-written to avoid pulling in
+/// the whole CSIDL block, where every constant is a bare u32.
 const CSIDL_APPDATA: i32 = 0x001A;
 
 const MAX_PATH: usize = 260;
@@ -49,23 +42,23 @@ impl From<io::Error> for PathsError {
     }
 }
 
-/// 解析后的运行期路径。
+/// Resolved runtime paths.
 #[derive(Clone, Debug)]
 pub struct Paths {
-    /// 配置根目录（`%APPDATA%\NookSill` 或 exe 目录）。
+    /// Config root (`%APPDATA%\NookSill` or the exe directory).
     pub dir: PathBuf,
-    /// `NookSill.ini` 完整路径。
+    /// Full path of `NookSill.ini`.
     pub ini: PathBuf,
-    /// 图标缓存目录。
+    /// Icon cache directory.
     pub icon_dir: PathBuf,
-    /// 当前 exe 路径。
+    /// Path of the running exe.
     pub exe: PathBuf,
-    /// 是否处于便携模式。
+    /// Whether portable mode is active.
     pub portable: bool,
 }
 
 impl Paths {
-    /// 解析并创建必要目录。
+    /// Resolve the paths and create the required directories.
     pub fn resolve() -> Result<Self, PathsError> {
         let exe = exe_path()?;
         let exe_dir = exe.parent().ok_or(PathsError::ExePath)?.to_path_buf();
@@ -82,7 +75,7 @@ impl Paths {
             dir = exe_dir.clone();
             ini = local_ini.clone();
         } else if !ini.exists() && local_ini.exists() {
-            // 迁移一次：配置 + 图标缓存。
+            // One-time migration of the ini and the icon cache.
             fs::create_dir_all(&dir)?;
             let _ = fs::copy(&local_ini, &ini);
             let src_icons = exe_dir.join("icons");
@@ -115,17 +108,17 @@ impl Paths {
         })
     }
 
-    /// 归档已用过的图标缓存文件（供设置界面"清理图标缓存"用，暂未接入）。
+    /// Path of a cached icon file inside the icon directory.
     #[must_use]
     pub fn icon_for(&self, file_name: &str) -> PathBuf {
         self.icon_dir.join(file_name)
     }
 }
 
-/// 若 ini 不存在则创建一个只含 UTF-16 BOM 的空文件。
+/// Create an empty ini holding only a UTF-16 BOM when none exists.
 ///
-/// 直接 `fs::write(path, b"")` 会得到 0 字节文件，随后 `WritePrivateProfileStringW`
-/// 会按 ANSI 写回，中文名立刻变问号。BOM 是编码契约的一部分。
+/// A zero-byte file makes `WritePrivateProfileStringW` fall back to ANSI, which
+/// turns non-ASCII names into question marks. The BOM is part of the contract.
 fn ensure_empty_ini(path: &Path) -> io::Result<()> {
     if path.exists() {
         return Ok(());
@@ -153,7 +146,7 @@ fn appdata_path() -> Result<PathBuf, PathsError> {
     Ok(PathBuf::from(s))
 }
 
-/// 给 `SetAutostart` 用：把 exe 路径包成带引号的命令行。
+/// Quote the exe path into a command line for the autostart entry.
 #[must_use]
 pub fn quoted_exe(exe: &Path) -> Vec<u16> {
     let s = format!("\"{}\"", exe.display());

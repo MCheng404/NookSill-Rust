@@ -1,39 +1,42 @@
-//! 控制中心的磁贴模型。
+//! Control center tile model.
 //!
-//! 只有"有哪些磁贴、按什么顺序排、每行几个"这几件事 —— 全部可单测。
-//! 真正的系统调用在 `platform::sysact` / `platform::audio`，绘制在 `gpu::cc_win`。
+//! Only "which tiles exist, in what order, how many per row" is modelled, so
+//! it stays unit-testable. The system calls live in `platform::sysact` /
+//! `platform::audio`, the drawing in `gpu::cc_win`.
 //!
-//! 默认顺序是固定的，末尾两个（节能 / 热点）按配置开关追加；用户在面板上
-//! 拖动过之后，顺序存在 `[widgets] Order`（见 [`parse_order`] / [`order_text`]）。
-//! 存的是**磁贴 id**而不是位置：开关一个磁贴不该把其它磁贴的顺序挤乱。
+//! The default order is fixed, with the last two (energy / hotspot) appended
+//! per config flag. After the user drags a tile, the order is stored in
+//! `[widgets] Order` (see [`parse_order`] / [`order_text`]). The stored value
+//! is a tile id, not a position: toggling one tile must not shuffle the rest.
 
-/// 一个磁贴。
+/// One tile.
 ///
-/// 下标即`u->id[k]`，取位顺序不能改 —— 用 `id` 去查名字表和图标表。
+/// The discriminant is `u->id[k]`; the bit order must not change, the id
+/// indexes the name and icon tables.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tile {
-    /// 无线网络。
+    /// Wireless network.
     Wifi,
-    /// 蓝牙。
+    /// Bluetooth.
     Bluetooth,
-    /// 深色模式。
+    /// Dark mode.
     DarkMode,
-    /// 定位。
+    /// Location.
     Location,
-    /// 静音。
+    /// Mute.
     Mute,
-    /// 打开 Windows 设置。
+    /// Open Windows Settings.
     Settings,
-    /// 节能模式。
+    /// Energy saver.
     Energy,
-    /// 移动热点。
+    /// Mobile hotspot.
     Hotspot,
-    /// 有线网络（检测到有线网卡时替换掉 [`Tile::Wifi`]）。
+    /// Wired network (replaces [`Tile::Wifi`] when a wired NIC is present).
     Ethernet,
 }
 
 impl Tile {
-    /// 磁贴上的文字。
+    /// Text shown on the tile.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -49,11 +52,12 @@ impl Tile {
         }
     }
 
-    /// 磁贴的稳定 id。
+    /// Stable tile id.
     ///
-    /// 数值与上游 ini 里 `[Cc] Order` 的写法一致（0..=7，有线网卡用 8），
-    /// 这样从 C 版迁移过来的配置不用翻译。**不能跟着枚举顺序改** ——
-    /// 存进 ini 的是这些数字。
+    /// The numbers match the upstream `[Cc] Order` ini values (0..=7, wired
+    /// uses 8) so a config migrated from the C build needs no translation.
+    /// They must not follow the enum order; these numbers are what lands in
+    /// the ini.
     #[must_use]
     pub const fn id(self) -> u8 {
         match self {
@@ -69,7 +73,8 @@ impl Tile {
         }
     }
 
-    /// 从 id 反查。未知 id 返回 `None`（老版本写下的、或手改错的）。
+    /// Look up a tile by id. Unknown ids return `None` (written by an older
+    /// build or hand-edited).
     #[must_use]
     pub const fn from_id(id: u8) -> Option<Self> {
         match id {
@@ -86,32 +91,34 @@ impl Tile {
         }
     }
 
-    /// 是不是"网络"那一格。
+    /// Whether this is the network tile.
     ///
-    /// 有线与无线**共用同一格**：顺序里存的是这一格的位置，具体显示哪个
-    /// 由当前网卡状态决定。否则插上网线时那一格会跳到别处去。
+    /// Wired and wireless share one slot: the order stores the slot position,
+    /// the active NIC decides which one is shown, so plugging in a cable does
+    /// not move the tile.
     #[must_use]
     pub const fn is_net(self) -> bool {
         matches!(self, Self::Wifi | Self::Ethernet)
     }
 
-    /// 这个磁贴是否"当前是开着的"（决定底色用主题色还是灰）。
+    /// Whether the tile is currently on (decides the accent vs. grey plate).
     ///
-    /// 只有三个磁贴有开关语义：深色模式、静音、节能。其余都是"点一下跳转"
-    /// 或者"点一下弹系统面板"，没有开/关状态。
+    /// Only three tiles have on/off semantics: dark mode, mute, energy. The
+    /// rest jump to a system panel or a settings page and have no state.
     #[must_use]
     pub const fn is_switch(self) -> bool {
         matches!(self, Self::DarkMode | Self::Mute | Self::Energy)
     }
 }
 
-/// 磁贴每行几个。
+/// Tiles per row.
 pub const COLS: usize = 3;
 
-/// 按配置与网卡状态排出磁贴顺序。
+/// Build the default tile order.
 ///
-/// 顺序沿用：`[无线/有线] 蓝牙 深色 定位 静音 设置 [节能] [热点]`。
-/// 末尾两个是可选的，`CcEnergy` / `CcHotspot` 关了就不出现。
+/// The order is `[wired/wireless] bluetooth dark location mute settings
+/// [energy] [hotspot]`. The last two are optional and disappear when
+/// `CcEnergy` / `CcHotspot` are off.
 #[must_use]
 pub fn tiles(energy: bool, hotspot: bool, wired: bool) -> Vec<Tile> {
     let mut v = vec![
@@ -131,10 +138,11 @@ pub fn tiles(energy: bool, hotspot: bool, wired: bool) -> Vec<Tile> {
     v
 }
 
-/// 解析 `[widgets] Order`：逗号分隔的 id。
+/// Parse `[widgets] Order`: comma-separated ids.
 ///
-/// 容忍空格、未知 id、重复项 —— 这个键用户会手改（想调个顺序），
-/// 一个写错就让整个面板乱掉不值得。空串解析成空表（= 用默认顺序）。
+/// Whitespace, unknown ids and duplicates are tolerated; users hand-edit this
+/// key and one typo must not break the whole panel. An empty string yields an
+/// empty list (meaning the default order).
 #[must_use]
 pub fn parse_order(text: &str) -> Vec<Tile> {
     let mut out: Vec<Tile> = Vec::new();
@@ -152,7 +160,7 @@ pub fn parse_order(text: &str) -> Vec<Tile> {
     out
 }
 
-/// 存回 ini 的写法。与 [`parse_order`] 互逆。
+/// Write the order back to the ini. Inverse of [`parse_order`].
 #[must_use]
 pub fn order_text(tiles: &[Tile]) -> String {
     tiles
@@ -162,15 +170,16 @@ pub fn order_text(tiles: &[Tile]) -> String {
         .join(",")
 }
 
-/// 按保存的顺序 + 当前开关状态排出磁贴。
+/// Build the tile order from the saved order plus the current flags.
 ///
-/// 三条规则：
+/// Three rules:
 ///
-/// 1. **被关掉的磁贴不出现**（`CcEnergy` / `CcHotspot`）。它的位置留在
-///    `order` 里，重新打开时还回到原处。
-/// 2. **网络那一格按当前网卡决定**是无线还是有线，位置跟着 `order` 走。
-/// 3. **`order` 里没提到的磁贴追加在末尾**。新版本加了磁贴、或者用户手改
-///    配置只写了一部分，都靠这条兜住 —— 少一个磁贴比多一个更难查。
+/// 1. A disabled tile (`CcEnergy` / `CcHotspot`) is dropped but keeps its
+///    slot in `order`, so it returns to the same place when re-enabled.
+/// 2. The network slot shows wired or wireless per the active NIC, and
+///    follows the position stored in `order`.
+/// 3. Tiles missing from `order` are appended at the end, which covers both
+///    newly added tiles and a hand-edited order that lists only some of them.
 #[must_use]
 pub fn tiles_ordered(order: &[Tile], energy: bool, hotspot: bool, wired: bool) -> Vec<Tile> {
     let net = if wired { Tile::Ethernet } else { Tile::Wifi };
@@ -186,7 +195,7 @@ pub fn tiles_ordered(order: &[Tile], energy: bool, hotspot: bool, wired: bool) -
             out.push(t);
         }
     }
-    // 追加 order 里没提到的（含从未拖过的全新磁贴）。
+    // Append the tiles `order` never mentioned (including brand new ones).
     for t in tiles(energy, hotspot, wired) {
         if !out.contains(&t) {
             out.push(t);
@@ -195,8 +204,10 @@ pub fn tiles_ordered(order: &[Tile], energy: bool, hotspot: bool, wired: bool) -
     out
 }
 
-/// 磁贴占几行。把这里写死成 2（`2 * (th + 10)`），于是开关两个可选磁贴
-/// （默认就是开的）时第三行会被音量滑块压住 —— 顺手修掉。
+/// Number of tile rows.
+///
+/// Kept at 2 (`2 * (th + 10)`), so a third row would be covered by the
+/// volume slider when both optional tiles are enabled.
 #[must_use]
 pub const fn rows(n: usize) -> usize {
     n.div_ceil(COLS)
@@ -206,7 +217,7 @@ pub const fn rows(n: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// 默认配置（节能 + 热点都开）是 8 个磁贴。
+    /// The default config (energy + hotspot on) has 8 tiles.
     #[test]
     fn default_tiles_are_eight() {
         let t = tiles(true, true, false);
@@ -217,7 +228,7 @@ mod tests {
         assert_eq!(t[7], Tile::Hotspot);
     }
 
-    /// 关掉两个可选磁贴就只剩 6 个。
+    /// Turning off both optional tiles leaves 6.
     #[test]
     fn optional_tiles_can_be_disabled() {
         let t = tiles(false, false, false);
@@ -226,7 +237,7 @@ mod tests {
         assert!(!t.contains(&Tile::Hotspot));
     }
 
-    /// 有线网卡时第一个磁贴换掉。
+    /// A wired NIC replaces the first tile.
     #[test]
     fn wired_replaces_the_wifi_tile() {
         let t = tiles(false, false, true);
@@ -234,7 +245,7 @@ mod tests {
         assert!(!t.contains(&Tile::Wifi));
     }
 
-    /// 行数按实际磁贴数算。
+    /// The row count follows the actual tile count.
     #[test]
     fn rows_follow_the_tile_count() {
         assert_eq!(rows(6), 2);
@@ -243,7 +254,7 @@ mod tests {
         assert_eq!(rows(9), 3);
     }
 
-    /// 只有三个磁贴有开/关语义。
+    /// Only three tiles have on/off semantics.
     #[test]
     fn only_three_tiles_are_switches() {
         let switches: Vec<&str> = [
@@ -264,7 +275,7 @@ mod tests {
         assert_eq!(switches, ["深色模式", "静音", "节能模式"]);
     }
 
-    /// 每个磁贴都有文案，不能漏。
+    /// Every tile has a label.
     #[test]
     fn every_tile_has_a_label() {
         for t in [
@@ -282,9 +293,8 @@ mod tests {
         }
     }
 
-    // ---- 顺序：id / 解析 / 排列 ----
-
-    /// id 是 ini 里的数字，必须与枚举顺序解耦且互不重复。
+    /// The id is the number in the ini; it must be unique and decoupled from
+    /// the enum order.
     #[test]
     fn tile_ids_are_unique_and_roundtrip() {
         let all = [
@@ -307,7 +317,8 @@ mod tests {
         assert_eq!(Tile::from_id(9), None);
     }
 
-    /// 手改的配置里出现空格、未知 id、重复项都不能把整个顺序带崩。
+    /// Whitespace, unknown ids and duplicates in a hand-edited order must not
+    /// break the layout.
     #[test]
     fn parse_order_skips_junk() {
         let got = parse_order(" 1, 9, x, 2,2 ,,5");
@@ -321,7 +332,7 @@ mod tests {
         assert!(parse_order("abc").is_empty());
     }
 
-    /// 存回去再读回来要一模一样（ini 是用户会手改的东西）。
+    /// Saving and reloading must be identical (the ini is hand-edited).
     #[test]
     fn order_text_roundtrips() {
         let order = [Tile::Settings, Tile::Wifi, Tile::Mute, Tile::Energy];
@@ -329,7 +340,7 @@ mod tests {
         assert_eq!(parse_order(&order_text(&order)), order);
     }
 
-    /// 保存的顺序决定磁贴位置。
+    /// The saved order decides the tile positions.
     #[test]
     fn tiles_ordered_follows_saved_order() {
         let order = parse_order("5,0,4,1,2,3,6,7");
@@ -349,8 +360,8 @@ mod tests {
         );
     }
 
-    /// 关掉的磁贴不出现，但它的位置留着 —— 重新打开时回到原处，
-    /// 而不是被踢到末尾。
+    /// A disabled tile disappears but keeps its slot, so re-enabling returns
+    /// it to the same place instead of the end.
     #[test]
     fn disabled_tile_keeps_its_slot() {
         let order = parse_order("0,6,1,2,3,4,5,7");
@@ -362,7 +373,8 @@ mod tests {
         assert_eq!(on[7], Tile::Hotspot);
     }
 
-    /// 有线 / 无线共用一格：换网卡不改变位置，也不会两个都在。
+    /// Wired and wireless share one slot: swapping the NIC changes neither
+    /// the position nor the count.
     #[test]
     fn net_slot_switches_in_place() {
         let order = parse_order("1,0,2,3,4,5");
@@ -374,7 +386,8 @@ mod tests {
         assert_eq!(wired.len(), wifi.len(), "只是换了一个，不是多一个");
     }
 
-    /// 顺序里没提到的磁贴追加在末尾：新版本加了磁贴、或用户手改只写了一部分。
+    /// Tiles missing from the order are appended: a new tile, or a hand-edited
+    /// order that lists only some of them.
     #[test]
     fn unlisted_tiles_are_appended() {
         let got = tiles_ordered(&[Tile::Settings], false, false, false);
@@ -383,7 +396,7 @@ mod tests {
         assert_eq!(got[1], Tile::Wifi, "补上的按默认顺序");
     }
 
-    /// 空顺序 = 默认顺序（没拖过的用户）。
+    /// An empty order equals the default order (a user who never dragged).
     #[test]
     fn empty_order_equals_default() {
         assert_eq!(

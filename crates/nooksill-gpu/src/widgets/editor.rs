@@ -1,22 +1,21 @@
-//! 编辑弹窗：改名、新建分组、改目标与启动参数。
+//! Modal edit dialog: rename, new group, retarget and launch arguments.
 //!
-//! # 为什么是独立窗口
+//! It is a separate window because the layered Dock window clips anything
+//! painted outside the bar; the context menu escapes it only by owning a
+//! window of its own.
 //!
-//! Dock 窗口只有栏体那么大，画出去的部分会被分层窗口裁掉；菜单能弹到
-//! 栏外是因为它有自己的窗口。这个弹窗同理。
+//! Modal: it runs its own message loop and blocks until the user accepts or
+//! cancels (same approach as the context menu, see `show_menu` in
+//! `bin/dock.rs`).
 //!
-//! 它是**模态**的：自己跑消息循环，阻塞到用户确定或取消（与右键菜单
-//! 同一套做法，见 `bin/dock.rs` 的 `show_menu`）。
+//! Text input goes through `WM_CHAR` + `WM_IME_COMPOSITION`:
 //!
-//! # 输入
+//! - `WM_CHAR` -> `Input::text` -> egui's `Event::Text` (egui text fields
+//!   only accept that event, `Event::Key` inserts nothing);
+//! - the committed string of `WM_IME_COMPOSITION` takes the same path, and
+//!   the system draws the candidate window.
 //!
-//! 文字输入走 `WM_CHAR` + `WM_IME_COMPOSITION`：
-//!
-//! - `WM_CHAR` → `Input::text` → egui 的 `Event::Text`（egui 的输入框
-//!   只认这个事件，`Event::Key` 不会插入字符）；
-//! - `WM_IME_COMPOSITION` 的上屏串同样走 `Input::text`，候选窗由系统画。
-//!
-//! 退格 / Esc / 回车走 `WM_KEYDOWN` → `Input::key`。
+//! Backspace, Esc and Enter go through `WM_KEYDOWN` -> `Input::key`.
 
 use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect as EguiRect, Sense, Stroke};
@@ -42,675 +41,78 @@ use crate::gpu::Gpu;
 use crate::ime::Ime;
 use crate::input::Input;
 
-/// 窗口类名。
+/// Window class name.
 const CLASS_NAME: &str = "NookSillEditWindow";
 
-/// 弹窗宽度（逻辑像素）。
+/// Dialog width in logical px.
 const W: f32 = 380.0;
-/// 四周留白。
+/// Padding on all sides.
 const PAD: f32 = 20.0;
-/// 标题高度。
+/// Title height.
 const TITLE_H: f32 = 30.0;
-/// 字段标签高度。
+/// Field label height.
 const LABEL_H: f32 = 18.0;
-/// 字段之间的留白。
+/// Gap between fields.
 const FIELD_GAP: f32 = 14.0;
-/// 按钮高度。
+/// Button height.
 const BTN_H: f32 = 30.0;
-/// 多行字段的高度。
+/// Height of a multiline field.
 const MULTI_H: f32 = 170.0;
 
-/// 一个待编辑的字段。
+/// One field to edit.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditField {
-    /// 字段名（画在输入框上方）。
+    /// Field name, drawn above the input.
     pub label: String,
-    /// 字段的当前值。
+    /// Current value.
     pub value: String,
-    /// 空值时的占位提示。
+    /// Placeholder shown when the value is empty.
     pub hint: String,
-    /// 多行编辑。此时回车插入换行而不是提交，窗口也更长。
+    /// Multiline editing: Enter inserts a newline instead of submitting, and
+    /// the window grows taller.
     pub multiline: bool,
 }
 
-/// 一次编辑请求。
+/// One edit request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditRequest {
-    /// 弹窗标题。
+    /// Dialog title.
     pub title: String,
-    /// 字段（按顺序画）。
+    /// Fields, drawn in order.
     pub fields: Vec<EditField>,
-    /// 确定按钮上的字。
+    /// Label on the accept button.
     pub ok_label: String,
 }
 
-/// 编辑结果。
+/// Result of an edit.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditOutcome {
-    /// 用户点了确定（`false` = 取消）。
+    /// The user accepted (`false` means cancelled).
     pub accepted: bool,
-    /// 各字段的新值，与请求里的字段一一对应。
+    /// New value of each field, matching the request order.
     pub values: Vec<String>,
 }
 
 impl EditOutcome {
-    /// 取第 `i` 个字段的值。越界返回空串。
+    /// Returns field `i`; out of range yields an empty string.
     #[must_use]
     pub fn value(&self, i: usize) -> &str {
         self.values.get(i).map_or("", String::as_str)
     }
 }
 
-/// 弹窗窗口的复用槽：窗口句柄 + 专属渲染器。
-///
-/// 渲染器要独立：Dock 的 `FrameRenderer` 尺寸固定为栏体大小，而弹窗
-/// 尺寸完全不同。`resize` 只重建离屏目标与 DIB，egui 上下文与 wgpu
-/// 管线（最贵的两步）都保留。
-pub type EditSlot = Option<(HWND, FrameRenderer)>;
+mod layout;
+mod paint;
+mod show;
+mod win;
 
-/// 当前按着的修饰键（`egui::Modifiers`）。Ctrl+A / Ctrl+V 之类要靠它。
-fn current_modifiers() -> egui::Modifiers {
-    // SAFETY: `GetKeyState` 只读全局状态。
-    let down = |vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| unsafe {
-        GetKeyState(i32::from(vk.0)) < 0
-    };
-    let ctrl = down(VK_CONTROL);
-    egui::Modifiers {
-        alt: down(VK_MENU),
-        ctrl,
-        shift: down(VK_SHIFT),
-        mac_cmd: false,
-        command: ctrl,
-    }
-}
-
-/// 单个字段占的高度。
-fn field_height(field: &EditField) -> f32 {
-    LABEL_H + if field.multiline { MULTI_H } else { FIELD_H } + FIELD_GAP
-}
-
-/// 弹窗的逻辑高度。
-fn logical_height(fields: &[EditField]) -> f32 {
-    PAD * 2.0 + TITLE_H + fields.iter().map(field_height).sum::<f32>() + BTN_H
-}
-
-/// 弹窗的逻辑尺寸。
-#[must_use]
-pub fn logical_size(fields: &[EditField]) -> (f32, f32) {
-    (W, logical_height(fields))
-}
-
-/// 弹窗放在哪：贴着光标，且整体落在 `bounds`（屏幕工作区）内。
-#[must_use]
-pub fn place(cursor: (f32, f32), size: (f32, f32), bounds: (f32, f32, f32, f32)) -> (f32, f32) {
-    let (cx, cy) = cursor;
-    let (w, h) = size;
-    let (left, top, right, bottom) = bounds;
-    let mut x = cx;
-    let mut y = cy;
-    if x + w > right {
-        x = right - w;
-    }
-    if x < left {
-        x = left;
-    }
-    if y + h > bottom {
-        y = cy - h;
-    }
-    if y < top {
-        y = top;
-    }
-    (x, y)
-}
-
-/// 弹窗的内部状态。挂在 `GWLP_USERDATA` 上，窗口过程靠它回传。
-struct EditState {
-    req: EditRequest,
-    values: Vec<String>,
-    /// 模态循环的退出标志。
-    done: bool,
-    /// 用户点了确定。
-    accepted: bool,
-    /// DPI 缩放。物理尺寸按它算，命中也要用它换算回逻辑坐标。
-    ppp: f32,
-    dark: bool,
-    /// 底层是否已有毛玻璃背景，决定面板底色用半透明 tint 还是实底。
-    frosted: bool,
-    input: Input,
-    ime: Ime,
-    /// 弹窗里有没有多行字段。决定回车是"提交"还是"换行"。
-    multiline: bool,
-    /// 已经把焦点给过第一个输入框了。
-    focused: bool,
-    /// 当前焦点输入框里文字起点的逻辑坐标（给 `ImmSetCompositionWindow`）。
-    caret: (f32, f32),
-}
-
-fn state_ptr(hwnd: HWND) -> *mut EditState {
-    unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut EditState }
-}
-
-/// 客户区物理坐标 → 逻辑坐标。
-fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {
-    let x = (lparam.0 & 0xFFFF) as i16 as f32;
-    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
-    (x / ppp, y / ppp)
-}
-
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    const VK_RETURN: usize = 0x0D;
-    const VK_ESCAPE: usize = 0x1B;
-
-    let ptr = state_ptr(hwnd);
-    if ptr.is_null() {
-        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-    }
-    // SAFETY: 指针由 `show_edit` 挂在栈上的 `Box` 上，整个模态循环期间有效。
-    let win = unsafe { &mut *ptr };
-    match msg {
-        WM_MOUSEMOVE => {
-            let (x, y) = client_pos(lparam, win.ppp);
-            win.input.pointer_moved(x, y);
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            let (x, y) = client_pos(lparam, win.ppp);
-            win.input.pointer_moved(x, y);
-            win.input.pointer_button(true, egui::PointerButton::Primary);
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            let (x, y) = client_pos(lparam, win.ppp);
-            win.input.pointer_moved(x, y);
-            win.input
-                .pointer_button(false, egui::PointerButton::Primary);
-            LRESULT(0)
-        }
-        WM_CHAR => {
-            // 换行**不在这里**：egui 0.37 的 `Event::Text` 明确忽略
-            // "\n" / "\r"（builder.rs 注释：Newlines are handled by
-            // `Key::Enter`）。真正的换行来自 `WM_KEYDOWN` 喂的
-            // `Event::Key { Enter }`。这里只管可打印字符，控制字符
-            // （含 `\r`、退格）一律由 `Event::Key` 那条路径处理。
-            if let Some(c) = char::from_u32(wparam.0 as u32) {
-                if !c.is_control() {
-                    win.input.text(&c.to_string());
-                }
-            }
-            LRESULT(0)
-        }
-        WM_IME_COMPOSITION
-        | WM_IME_STARTCOMPOSITION
-        | WM_IME_ENDCOMPOSITION
-        | WM_IME_SETCONTEXT => {
-            let mut committed = String::new();
-            let before = win.ime.composing().to_owned();
-            let handled = win.ime.handle(hwnd, msg, wparam, lparam, &mut committed);
-            // **先上屏、后组合串**。Commit 会清掉上一帧的 preedit 再插入
-            // 结果；同一条 `WM_IME_COMPOSITION` 可能既带 RESULTSTR 又带
-            // COMPSTR（上屏的同时开始下一轮组合），顺序反了会把新组合
-            // 串当成旧 preedit 一起删掉。
-            if !committed.is_empty() {
-                win.input.ime_commit(&committed);
-            }
-            let after = win.ime.composing().to_owned();
-            if after != before {
-                // 让 egui 自己画带下划线的预编辑文本。此前只有系统候选
-                // 框在动，输入框里看不到正在打的拼音。
-                win.input.ime_preedit(&after);
-            }
-            if handled {
-                LRESULT(0)
-            } else {
-                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-            }
-        }
-        WM_KEYDOWN | WM_KEYUP => {
-            let down = msg == WM_KEYDOWN;
-            // egui 的 `TextEdit` 只从 `Event::Key` 读退格、方向键、Ctrl+A
-            // 这些控制键 —— `WM_CHAR` 只给可打印字符，而且我们本来就
-            // 把控制字符过滤掉了。少了这一段，输入框能打字却删不掉。
-            let mods = current_modifiers();
-            win.input.set_modifiers(mods);
-            let is_return = wparam.0 == VK_RETURN;
-            if down {
-                match wparam.0 {
-                    // 组合中的回车是"选词"，不能提交也不能喂给输入框。
-                    // 多行正文里回车是换行，所以只有单行、或多行时按
-                    // Ctrl+Enter，才把弹窗提交掉。
-                    VK_RETURN if !win.ime.is_composing() && (!win.multiline || mods.ctrl) => {
-                        win.accepted = true;
-                        win.done = true;
-                    }
-                    VK_ESCAPE if !win.ime.is_composing() => {
-                        win.accepted = false;
-                        win.done = true;
-                    }
-                    _ => {}
-                }
-            }
-            // Enter / Esc 已经把弹窗关了，不必再喂给 egui。
-            if !win.done {
-                // 组合中的回车是输入法选词；喂 `Event::Key{Enter}` 会在
-                // 拼音中间插一个换行，把整段组合毁掉。
-                let composing_return = is_return && win.ime.is_composing();
-                if !composing_return {
-                    if let Some(key) = crate::input::map_vk(wparam.0 as u32) {
-                        win.input.key(key, down);
-                    }
-                }
-            }
-            LRESULT(0)
-        }
-        WM_SETCURSOR => {
-            // 输入框里是 I 型光标，别处是箭头。类光标留空时系统会退回
-            // 忙光标（ADR-045），所以这里必须自己回。
-            crate::cursor::set(crate::cursor::arrow());
-            LRESULT(1)
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
-}
-
-/// 注册窗口类。重复调用是安全的（`RegisterClassW` 失败就忽略）。
-fn register_class() -> Result<(), Box<dyn std::error::Error>> {
-    let hinst = unsafe { GetModuleHandleW(None)? };
-    let wc = WNDCLASSW {
-        lpfnWndProc: Some(wndproc),
-        hInstance: HINSTANCE(hinst.0),
-        lpszClassName: class_pcwstr(),
-        hCursor: crate::cursor::class_cursor(),
-        hIcon: crate::app_icon().unwrap_or_default(),
-        ..Default::default()
-    };
-    unsafe {
-        RegisterClassW(&raw const wc);
-    }
-    Ok(())
-}
-
-fn class_pcwstr() -> windows::core::PCWSTR {
-    static BUF: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
-    let buf = BUF.get_or_init(|| {
-        CLASS_NAME
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect()
-    });
-    windows::core::PCWSTR(buf.as_ptr())
-}
-
-/// 打开编辑弹窗，阻塞到用户确定或取消。
-///
-/// # Panics
-///
-/// 不会 panic：`slot` 未初始化时返回错误。
-pub fn show_edit(
-    gpu: &Gpu,
-    slot: &mut EditSlot,
-    req: EditRequest,
-    cursor: (f32, f32),
-    bounds: (f32, f32, f32, f32),
-    dark: bool,
-    ppp: f32,
-) -> Result<EditOutcome, Box<dyn std::error::Error>> {
-    let (lw, lh) = logical_size(&req.fields);
-    let pw = (lw * ppp).ceil() as i32;
-    let ph = (lh * ppp).ceil() as i32;
-    let (lx, ly) = place(cursor, (lw, lh), bounds);
-    let (px, py) = ((lx * ppp).round() as i32, (ly * ppp).round() as i32);
-
-    // 懒建：第一次开弹窗时建窗口与渲染器，之后复用。
-    if slot.is_none() {
-        register_class()?;
-        let hinst = unsafe { GetModuleHandleW(None)? };
-        unsafe {
-            let hwnd = CreateWindowExW(
-                // **不要** WS_EX_NOACTIVATE：输入框需要键盘焦点。
-                // WS_EX_APPWINDOW 让它能被激活（Dock 自己是 NOACTIVATE，
-                // 从来不是前台窗口，不带这一位时 SetForegroundWindow
-                // 更容易被前台锁挡掉）。
-                WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
-                w!("NookSillEditWindow"),
-                w!("NookSill 编辑"),
-                WS_POPUP,
-                px,
-                py,
-                pw,
-                ph,
-                None,
-                None,
-                Some(HINSTANCE(hinst.0)),
-                None,
-            )?;
-            let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
-            *slot = Some((hwnd, renderer));
-        }
-    }
-
-    let Some((hwnd, renderer)) = slot.as_mut() else {
-        return Err("编辑弹窗未初始化".into());
-    };
-    renderer.resize(gpu, pw as u32, ph as u32)?;
-
-    unsafe {
-        let _ = SetWindowPos(*hwnd, Some(HWND_TOPMOST), px, py, pw, ph, SWP_NOZORDER);
-    }
-
-    let mut state = Box::new(EditState {
-        values: req.fields.iter().map(|f| f.value.clone()).collect(),
-        multiline: req.fields.iter().any(|f| f.multiline),
-        req,
-        done: false,
-        accepted: false,
-        ppp,
-        dark,
-        frosted: renderer.frost_on(),
-        input: Input::default(),
-        ime: Ime::new(),
-        focused: false,
-        caret: (PAD + 10.0, PAD + TITLE_H + LABEL_H + FIELD_H / 2.0),
-    });
-    unsafe {
-        SetWindowLongPtrW(*hwnd, GWLP_USERDATA, (&raw mut *state) as isize);
-        let _ = ShowWindow(*hwnd, SW_SHOW);
-        // 输入框要有键盘焦点，窗口必须在前台。
-        if GetForegroundWindow() != *hwnd {
-            let _ = SetForegroundWindow(*hwnd);
-        }
-        // `SetForegroundWindow` 不保证成功（前台锁）；`SetFocus` 是拿到
-        // 键盘消息的最后一道。少了它，`WM_CHAR` 会发到别的窗口，
-        // 表现为"弹窗能点、打不进字"。
-        let _ = SetFocus(Some(*hwnd));
-        SetCapture(*hwnd);
-    }
-    crate::ime::Ime::enable(*hwnd);
-
-    let mut msg = MSG::default();
-    let mut painted = false;
-    loop {
-        // 只取本窗口的消息：模态期间 Dock 的输入要压住。
-        let mut got = false;
-        while unsafe { PeekMessageW(&raw mut msg, Some(*hwnd), 0, 0, PM_REMOVE) }.as_bool() {
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            got = true;
-        }
-        if state.done {
-            break;
-        }
-        // 只在**有输入**或首帧出帧。模态循环每 60 ms 醒一次，若无条件
-        // 提交，弹窗开着不动也会常驻 16 fps 的 GPU 开销 —— 与产品
-        // "空闲不提交"的承诺冲突。
-        if got || !painted {
-            painted = true;
-            let raw = state.input.take(renderer.size(), ppp);
-            let st = &mut *state;
-            renderer.render(gpu, raw, *hwnd, (px, py), |ui| {
-                paint(ui, st);
-            })?;
-            // 把系统候选窗摆到**当前焦点输入框**的文字起点。
-            // `paint` 刚把焦点字段的位置写进 `caret`；少了这一步，
-            // 候选窗会落在窗口左上角，用户不知道自己在哪打字。
-            state
-                .ime
-                .set_caret(*hwnd, state.caret.0, state.caret.1, ppp);
-        }
-        if !got {
-            unsafe {
-                MsgWaitForMultipleObjectsEx(None, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            }
-        }
-    }
-
-    let values = std::mem::take(&mut state.values);
-    let accepted = state.accepted;
-    unsafe {
-        if GetCapture() == *hwnd {
-            let _ = ReleaseCapture();
-        }
-        SetWindowLongPtrW(*hwnd, GWLP_USERDATA, 0);
-        let _ = ShowWindow(*hwnd, SW_HIDE);
-    }
-    Ok(EditOutcome { accepted, values })
-}
-
-/// 离屏验收入口（`examples/panels_shot.rs`）。
-///
-/// 与 `settings_win::shell` 同一个理由：截图必须走**真实窗口那一帧**的
-/// 绘制代码。这里不建 Win32 窗口、不进模态循环，`focused` 直接置 true
-/// 以免离屏渲染往 egui 的焦点表里塞东西。
-pub fn paint_preview(
-    ui: &mut egui::Ui,
-    req: &EditRequest,
-    values: &[String],
-    dark: bool,
-    frosted: bool,
-) {
-    let mut st = EditState {
-        multiline: req.fields.iter().any(|f| f.multiline),
-        req: req.clone(),
-        values: values.to_vec(),
-        done: false,
-        accepted: false,
-        ppp: 1.0,
-        dark,
-        frosted,
-        input: Input::default(),
-        ime: Ime::new(),
-        focused: true,
-        caret: (0.0, 0.0),
-    };
-    paint(ui, &mut st);
-}
-
-/// 画弹窗：标题 + 若干输入框 + 确定/取消。
-fn paint(ui: &mut egui::Ui, st: &mut EditState) {
-    let rect = ui.max_rect();
-    let dark = st.dark;
-    // 与其余弹出面板共用同一套底色 / 磨砂叠加层 / 文字层级。
-    let style = PanelStyle::current(dark, st.frosted);
-    let (bg, border, ink, faint) = (style.bg(), style.border(), style.ink(), style.ink_sub());
-
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(PanelStyle::R_PANEL),
-        style.overlay(),
-    );
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(PanelStyle::R_PANEL),
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
-
-    // 标题
-    painter.text(
-        egui::pos2(rect.left() + PAD, rect.top() + PAD),
-        Align2::LEFT_TOP,
-        &st.req.title,
-        FontId::proportional(16.0),
-        ink,
-    );
-
-    // 字段
-    //
-    // `painter` 是 `ui` 的不可变借用，而 `text_field` 要 `&mut Ui`。
-    // 借用检查器按最后一个使用点算生命周期，所以这里必须**先画完标题**
-    // 再进入字段循环（字段里的标签改用 `ui.painter()` 现场取）。
-    let mut y = rect.top() + PAD + TITLE_H;
-    for (i, field) in st.req.fields.iter().enumerate() {
-        ui.painter().text(
-            egui::pos2(rect.left() + PAD, y),
-            Align2::LEFT_TOP,
-            &field.label,
-            FontId::proportional(12.0),
-            faint,
-        );
-        let h = if field.multiline { MULTI_H } else { FIELD_H };
-        let fr = EguiRect::from_min_size(
-            egui::pos2(rect.left() + PAD, y + LABEL_H),
-            egui::vec2(rect.width() - PAD * 2.0, h),
-        );
-        let id = Id::unique(("edit-field", i));
-        // 第一个字段自动获得焦点：用户打开就能直接打字。
-        if !st.focused {
-            ui.memory_mut(|m| m.request_focus(id));
-            st.focused = true;
-        }
-        if ui.memory(|m| m.has_focus(id)) {
-            // 候选窗要跟着**当前焦点**的输入框走，不能固定成窗口左上角。
-            // 多行框取第一行的垂直中心，不是整个 170px 框的中心。
-            st.caret = (fr.left() + 10.0, fr.top() + FIELD_H / 2.0);
-        }
-        let mut value = st.values[i].clone();
-        if field.multiline {
-            paint_multiline(ui, fr, id, &field.hint, &mut value, st.dark);
-        } else {
-            text_field(
-                ui,
-                fr,
-                id,
-                &mut value,
-                &FieldOpts {
-                    hint: &field.hint,
-                    ..FieldOpts::default()
-                },
-            );
-        }
-        st.values[i] = value;
-        y += field_height(field);
-    }
-
-    // 按钮
-    let ok_w = 92.0;
-    let cancel_w = 76.0;
-    let by = rect.bottom() - PAD - BTN_H;
-    let ok_rect = EguiRect::from_min_size(
-        egui::pos2(rect.right() - PAD - ok_w, by),
-        egui::vec2(ok_w, BTN_H),
-    );
-    let cancel_rect = EguiRect::from_min_size(
-        egui::pos2(ok_rect.left() - 10.0 - cancel_w, by),
-        egui::vec2(cancel_w, BTN_H),
-    );
-
-    if button(ui, cancel_rect, "取消", false, ink, faint) {
-        st.accepted = false;
-        st.done = true;
-    }
-    if button(ui, ok_rect, &st.req.ok_label, true, ink, faint) {
-        st.accepted = true;
-        st.done = true;
-    }
-}
-
-/// 画一个多行输入框。
-///
-/// 不复用 `text_field`：那个控件固定是 `TextEdit::singleline`，外壳和
-/// 高度都是按一行算的。这里只借它的配色约定（焦点态底色 + 圆角），
-/// 内容是 `TextEdit::multiline`。
-fn paint_multiline(
-    ui: &mut egui::Ui,
-    rect: EguiRect,
-    id: Id,
-    hint: &str,
-    value: &mut String,
-    dark: bool,
-) {
-    let focused = ui.ctx().memory(|m| m.has_focus(id));
-    let (field, focus_bg, border) = if dark {
-        (
-            Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-            Color32::from_rgb(38, 39, 47),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 34),
-        )
-    } else {
-        (
-            Color32::from_rgba_unmultiplied(23, 26, 35, 14),
-            Color32::WHITE,
-            Color32::from_rgba_unmultiplied(0, 0, 0, 26),
-        )
-    };
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(nooksill_settings::text_field::FIELD_R as u8),
-        if focused { focus_bg } else { field },
-    );
-    ui.painter().rect_stroke(
-        rect,
-        CornerRadius::same(nooksill_settings::text_field::FIELD_R as u8),
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
-    let inner = rect.shrink(10.0);
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    child.add_sized(
-        inner.size(),
-        egui::TextEdit::multiline(value)
-            .id(id)
-            .hint_text(hint)
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin::ZERO))
-            .desired_width(inner.width()),
-    );
-}
-
-/// 一个按钮。返回是否被点了。
-fn button(
-    ui: &mut egui::Ui,
-    rect: EguiRect,
-    label: &str,
-    primary: bool,
-    ink: Color32,
-    faint: Color32,
-) -> bool {
-    let id = Id::unique(("edit-btn", label));
-    let resp = ui.interact(rect, id, Sense::click());
-    let accent = ui.visuals().selection.bg_fill;
-    let (bg, fg) = if primary {
-        (accent, Color32::WHITE)
-    } else {
-        (
-            if ui.visuals().dark_mode {
-                Color32::from_rgba_unmultiplied(255, 255, 255, 18)
-            } else {
-                Color32::from_rgba_unmultiplied(23, 26, 35, 14)
-            },
-            ink,
-        )
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(9), bg);
-    if resp.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(9),
-            if primary {
-                accent.linear_multiply(1.12)
-            } else {
-                faint.linear_multiply(0.18)
-            },
-        );
-    }
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(13.0),
-        fg,
-    );
-    resp.clicked()
-}
+pub use self::layout::{logical_size, place, EditSlot};
+pub use self::paint::paint_preview;
+pub use self::show::show_edit;
 
 #[cfg(test)]
 mod tests {
+    use super::layout::{logical_height, logical_size, place};
     use super::*;
 
     #[test]
@@ -721,7 +123,8 @@ mod tests {
         assert!((two - one - (LABEL_H + FIELD_H + FIELD_GAP)).abs() < 0.01);
     }
 
-    /// 多行字段要真的撑高窗口，否则正文会被裁掉。
+    /// A multiline field must actually grow the window, else the body is
+    /// clipped.
     #[test]
     fn a_multiline_field_makes_the_window_taller() {
         let single = logical_height(&[EditField::default()]);

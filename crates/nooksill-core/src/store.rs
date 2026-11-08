@@ -1,16 +1,18 @@
-//! `[Items]` / `[Groups]` 的读写。对应 `LoadItems` / `SaveNow`。
+//! `[Items]` / `[Groups]` IO, mirroring `LoadItems` / `SaveNow`.
 //!
-//! 编号规则：
-//! `I{n}` 的 `n` 是"可持久化条目"的下标，临时条目（运行中但未固定）
-//! 不占号；组内的 `N{n}` / `G{n}_{k}` 用同一个 `n`。
+//! Numbering rule: the `n` in `I{n}` counts persistable items only, so a
+//! temporary item (running but unpinned) takes no number. The group keys
+//! `N{n}` / `G{n}_{k}` reuse the same `n`.
 
 use crate::ini::Ini;
 use crate::item::{Item, ItemKind};
 use crate::MAX_ITEMS;
 use crate::MAX_KIDS;
 
-/// 从 ini 读出全部条目。解析失败的行被**跳过**，而不是中止加载 ——
-/// 一个坏条目不应该让整条 Dock 消失。
+/// Load every item from the ini.
+///
+/// Lines that fail to parse are skipped rather than aborting the load: one
+/// bad item must not wipe the whole dock.
 #[must_use]
 pub fn load_items(ini: &Ini) -> Vec<Item> {
     let count = ini
@@ -41,7 +43,8 @@ pub fn load_items(ini: &Ini) -> Vec<Item> {
     out
 }
 
-/// 写回全部条目。会先清空两个段，避免旧编号残留。
+/// Write every item back. Both sections are cleared first so no stale
+/// numbering survives.
 pub fn save_items(items: &[Item], ini: &mut Ini) {
     ini.remove_section("Items");
     ini.remove_section("Groups");
@@ -130,7 +133,7 @@ mod tests {
     #[test]
     fn count_is_clamped_to_max_items() {
         let mut ini = Ini::new();
-        // 手改 ini 把 Count 写成天文数字，不能让加载循环爆掉。
+        // A hand-edited Count of astronomic size must not blow up the loop.
         ini.set("Items", "Count", "999999");
         let items = load_items(&ini);
         assert!(items.len() <= MAX_ITEMS);

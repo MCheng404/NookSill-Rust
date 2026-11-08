@@ -1,13 +1,14 @@
-//! 起动台的诊断探针：打印标签组与每个应用落在哪一组。
+//! Launchpad diagnostic probe: prints the tag groups and each app's group.
 //!
-//! 用法：
+//! Usage:
 //!
 //! ```bash
 //! cargo run -q -p nooksill-core --example lp_dump -- <launchpad.dat>
 //! ```
 //!
-//! 排查"分类不对"时先跑它：能看到标签组读出来是什么、每个应用被归到第几组，
-//! 省得靠界面一个个数（190 个应用根本数不过来）。
+//! Run this first when the grouping looks wrong: it shows what the tags
+//! parsed to and which group each app landed in, so no counting through the
+//! UI is needed.
 
 use nooksill_core::launchpad::Launchpad;
 

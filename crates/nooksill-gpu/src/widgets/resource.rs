@@ -1,10 +1,11 @@
-//! 资源监视器详情面板：点条带上的「CPU xx%」卡片弹出来。
+//! Resource monitor panel, opened from the "CPU xx%" card on the bar.
 //!
-//! 画三条进度条：处理器 / 内存 / 磁盘（C:）。
+//! Draws three progress bars: processor, memory and disk (C:).
 //!
-//! 与设置窗口（ADR-036）同一套做法：进程内第二个分层窗口，共用 GPU 设备，
-//! 自己的 `FrameRenderer`。但这个面板是**即时刷新**的 —— 数据每秒变一次，
-//! 所以它自己按 1 秒排帧，不依赖 egui 的 repaint 提示。
+//! Like the settings window it is a second layered window inside the same
+//! process, sharing the GPU device and owning its own `FrameRenderer`. This
+//! panel refreshes on its own: the data changes every second, so it schedules
+//! frames every second instead of relying on egui repaint hints.
 
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -25,16 +26,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::frame::FrameRenderer;
 use crate::gpu::{Gpu, GpuError};
 
-/// 窗口类名。
+/// Window class name.
 pub const CLASS_NAME: &str = "NookSillResMon";
 
-/// `VK_ESCAPE`。`windows` crate 里有常量，这里只用一个键，不值得为它开一条导入。
+/// `VK_ESCAPE`. The `windows` crate has the constant, but one key is not
+/// worth an extra import.
 const VK_ESCAPE: usize = 0x1B;
 
-/// 面板逻辑尺寸（本地坐标）。是 340 宽，这里放宽一点让进度条有地方画。
+/// Panel logical size (local coords). 340 wide, widened a little so the
+/// progress bars have room.
 const LOGICAL_SIZE: (f32, f32) = (340.0, 210.0);
 
-/// 资源监视器详情面板。
+/// Resource monitor panel.
 pub struct ResMonWindow {
     hwnd: HWND,
     renderer: FrameRenderer,
@@ -61,7 +64,7 @@ impl std::fmt::Debug for ResMonWindow {
 }
 
 impl ResMonWindow {
-    /// 建窗（默认隐藏）。
+    /// Creates the window (hidden).
     pub fn new(gpu: &Gpu, ppp: f32, dark: bool) -> Result<Pin<Box<Self>>, GpuError> {
         let hinst =
             unsafe { GetModuleHandleW(None) }.map_err(|_| GpuError::Win32("GetModuleHandleW"))?;
@@ -69,7 +72,7 @@ impl ResMonWindow {
             lpfnWndProc: Some(wndproc),
             hInstance: windows::Win32::Foundation::HINSTANCE(hinst.0),
             lpszClassName: class_pcwstr(),
-            // 类光标留空 = 进入窗口时显示忙光标（ADR-045）。
+            // An empty class cursor shows the busy cursor on enter.
             hCursor: crate::cursor::class_cursor(),
             ..Default::default()
         };
@@ -114,10 +117,11 @@ impl ResMonWindow {
         Ok(win)
     }
 
-    /// 把自身指针挂到 `GWLP_USERDATA`。
+    /// Stores the self pointer on `GWLP_USERDATA`.
     ///
-    /// 公开是因为主循环要能单独调（设置窗口那边是 `new` 内部自调，
-    /// 这里为了统一"懒建 + 挂载"的顺序，交给调用方）。
+    /// Public so the main loop can call it separately; the settings window
+    /// calls it inside `new`, here the caller owns the lazy-create-then-attach
+    /// order.
     pub fn attach_public(&mut self) {
         self.attach();
     }
@@ -132,7 +136,8 @@ impl ResMonWindow {
         }
     }
 
-    /// 窗口句柄。主循环判"点是否落在面板里"要用。
+    /// Window handle. The main loop uses it to test whether a click landed
+    /// inside the panel.
     #[must_use]
     pub const fn hwnd(&self) -> HWND {
         self.hwnd
@@ -143,7 +148,7 @@ impl ResMonWindow {
         self.visible
     }
 
-    /// 显示面板并刷新一次数据。
+    /// Shows the panel and samples the data once.
     pub fn show(&mut self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
@@ -163,18 +168,18 @@ impl ResMonWindow {
         }
     }
 
-    /// 是否到了该刷新的时刻。
+    /// Whether the refresh deadline has passed.
     #[must_use]
     pub fn due(&self) -> bool {
         self.visible && self.next_refresh <= Instant::now()
     }
 
-    /// 重新采样一次。
+    /// Samples the data once more.
     pub fn refresh(&mut self) {
         self.info = nooksill_platform::sysinfo::sample(&mut self.cpu);
     }
 
-    /// 画一帧。
+    /// Paints one frame.
     pub fn render(&mut self, gpu: &Gpu) -> Result<(), GpuError> {
         self.refresh();
         self.next_refresh = Instant::now() + Duration::from_secs(1);
@@ -193,14 +198,16 @@ impl ResMonWindow {
 
     fn on_message(&mut self, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
         match msg {
-            // 面板只读，光标恒为箭头。但**必须自己回**：类光标留空时
-            // 系统会退回忙光标（ADR-045）。
+            // The panel is read-only, so the cursor is always an arrow, but
+            // it must be set here: an empty class cursor falls back to the
+            // busy cursor.
             WM_SETCURSOR => {
                 crate::cursor::set(crate::cursor::arrow());
                 Some(LRESULT(1))
             }
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP | WM_MOUSEMOVE => None,
-            // Esc 永远能收起：这是关掉"点外面关闭"之后唯一的出口。
+            // Esc always hides the panel: it is the only way out once
+            // click-outside dismissal is off.
             WM_KEYDOWN => {
                 if wparam.0 == VK_ESCAPE {
                     self.hide();
@@ -221,16 +228,17 @@ impl ResMonWindow {
     }
 }
 
-/// 画面板：标题 + 三条进度条（处理器 / 内存 / 磁盘）。
+/// Paints the panel: title plus three progress bars (processor, memory, disk).
 ///
-/// `ResDraw`。是显式定位（`DrawTextBox` 传矩形），
-/// 这里也用 painter 显式画 —— 用 egui 的布局做左右对齐时，
-/// 右边的数值会被挤没（实测过：`with_layout(right_to_left)` 在
-/// `horizontal` 里拿不到剩余宽度）。
+/// Positions are explicit, like the original `ResDraw` (`DrawTextBox` takes
+/// rects): egui's layout squeezes the right-aligned value out of existence,
+/// since `with_layout(right_to_left)` in a `horizontal` gets no remaining
+/// width.
 fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     let rect = ui.max_rect();
     let painter = ui.painter();
-    // 与 tool_win 同源的配色 bug（argbc 顺序），一并走共享样式。
+    // Shared style, which also avoids the `argbc` argument order bug the
+    // timer panel used to have.
     let style = PanelStyle::current(dark, frosted);
     style.paint_frame(painter, rect);
     let (tc, sub) = (style.ink(), style.ink_sub());
@@ -239,7 +247,7 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     let pad = 16.0;
     let mut y = rect.top() + pad;
 
-    // 标题
+    // Title
     painter.text(
         egui::pos2(rect.left() + pad, y + 10.0),
         Align2::LEFT_TOP,
@@ -272,7 +280,8 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     ];
 
     for (label, pct, detail) in rows {
-        // 左边标签，右边数值（显式定位，不用布局）。
+        // Label on the left, value on the right (explicit positions, no
+        // layout).
         painter.text(
             egui::pos2(rect.left() + pad, y + 8.0),
             Align2::LEFT_TOP,
@@ -288,7 +297,7 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
             sub,
         );
         y += 22.0;
-        // 进度条
+        // Progress bar
         let bar_h = 6.0;
         let track = EguiRect::from_min_size(
             egui::pos2(rect.left() + pad, y),
@@ -310,7 +319,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     if ptr.is_null() {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
-    // SAFETY: 指针由 `attach` 挂在 `Pin<Box<Self>>` 的最终地址上。
+    // SAFETY: the pointer is stored by `attach` on the final address of the
+    // pinned `Box<Self>`.
     let win = unsafe { &mut *ptr };
     if let Some(result) = win.on_message(msg, wparam, lparam) {
         return result;
@@ -326,7 +336,7 @@ impl Drop for ResMonWindow {
     }
 }
 
-/// 窗口类名必须是 UTF-16 宽串，且缓冲要在进程整个存活期内有效。
+/// The class name must be a UTF-16 wide string that outlives the process.
 fn class_pcwstr() -> windows::core::PCWSTR {
     static BUF: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
     let buf = BUF.get_or_init(|| {
@@ -345,7 +355,7 @@ fn physical_size(ppp: f32) -> (i32, i32) {
     )
 }
 
-/// 面板居中于工作区。
+/// Centers the panel in the work area.
 fn centered_origin(pw: i32, ph: i32) -> (i32, i32) {
     let work = nooksill_platform::display::work_area(0);
     let cx = (work.left + work.right) / 2;
@@ -353,7 +363,7 @@ fn centered_origin(pw: i32, ph: i32) -> (i32, i32) {
     (cx - pw / 2, cy - ph / 2)
 }
 
-/// 供调用方判断这个窗口是不是资源监视器面板。
+/// Tells whether this window is the resource monitor panel.
 #[must_use]
 pub fn is_resmon_window(hwnd: HWND) -> bool {
     let mut buf = [0_u16; 64];
@@ -361,7 +371,7 @@ pub fn is_resmon_window(hwnd: HWND) -> bool {
     n > 0 && String::from_utf16_lossy(&buf[..n as usize]) == CLASS_NAME
 }
 
-/// 面板上要画的文字（测试用）。
+/// Text shown on the panel (used by tests).
 #[must_use]
 pub fn summary(info: &SysInfo) -> String {
     format!(

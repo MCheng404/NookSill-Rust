@@ -1,26 +1,6 @@
-//! 桌面工作区预留（AppBar 协议）。
-//!
-//! 对应 `SetupAppBar`。作用是把屏幕边缘一条区域登记为"系统级工具栏"，
-//! 让最大化的窗口避开 Dock —— 也就是 `Reserve` 这个配置项。
-//!
-//! # 为什么必须 RAII
-//!
-//! AppBar 的登记是**系统级**的：登记之后 `rcWork` 会永久少一块，
-//! 直到进程调用 `ABM_REMOVE` 或者被系统回收。如果进程异常退出（panic、
-//! 被强杀），残留的登记会让用户桌面永远缺一条 —— 而且这个问题在重启前
-//! 不会自愈，用户根本无法自己修好。
-//!
-//! 所以这里做成 `Drop` 自动注销，并且在 `remove` 上加了幂等保护。
-//! **不要**把这个结构体放进 `std::mem::forget` 或裸指针里逃逸生命周期。
-//!
-//! # 为什么用 `ABM_QUERYPOS` 而不是缓存 key
-//!
-//! 用一个 hash key（边 + 厚度 + 显示器矩形）判断"要不要重新提交"。
-//! 问题在于 key 之外的因素也会改变结果：别的 AppBar 退出、任务栏换边、
-//! 显示器分辨率变化 —— 这些都不在 key 里，于是 Dock 会卡在旧位置。
-//!
-//! 这里改成每次都走 `ABM_QUERYPOS`（纯查询，无副作用），只有结果真的变了
-//! 才 `ABM_SETPOS`。多一次调用换来的是"上层窗口变化时也能跟上"。
+//! Desktop work-area reservation through the AppBar protocol.
+//! Registration is system wide and survives a killed process, so `Drop` removes
+//! it. Position is re-queried with `ABM_QUERYPOS` instead of caching a key.
 
 use nooksill_core::config::Edge;
 use nooksill_core::layout::Rect;
@@ -30,28 +10,29 @@ use windows::Win32::UI::Shell::{
     ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, ABS_AUTOHIDE, APPBARDATA,
 };
 
-/// AppBar 回调消息。收到的是 `ABN_*` 通知。
+/// AppBar callback message, carrying `ABN_*` notifications.
 ///
-/// 当前不处理具体通知（几何变化时我们本来就会重查），但**必须**给一个值：
-/// `ABM_NEW` 要靠它区分不同 AppBar。取 `WM_APP` 之后一个不常用的偏移，
-/// 避免和 Dock 自己的消息撞车。
+/// The notifications are ignored (geometry is re-checked anyway), but the value
+/// is required: `ABM_NEW` uses it to tell AppBars apart. The high offset avoids
+/// the dock's own `WM_APP` messages.
 pub const WM_APP_AB: u32 = 0x8000 + 0x4142;
 
-/// 任务栏当前状态：占据哪条边、是否自动隐藏。
+/// Current taskbar edge and autohide state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Taskbar {
     pub edge: Edge,
     pub autohide: bool,
 }
 
-/// 读任务栏的边与自动隐藏状态。读不到返回 `None`（explorer 没跑 / 被替换）。
+/// Read the taskbar edge and autohide state; `None` when unavailable (explorer
+/// down or replaced).
 #[must_use]
 pub fn taskbar() -> Option<Taskbar> {
     let mut pos = APPBARDATA {
         cbSize: std::mem::size_of::<APPBARDATA>() as u32,
         ..Default::default()
     };
-    // SAFETY: `pos` 是设了 cbSize 的 APPBARDATA。
+    // SAFETY: `pos` is an APPBARDATA with cbSize set.
     if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &raw mut pos) } == 0 {
         return None;
     }
@@ -65,22 +46,23 @@ pub fn taskbar() -> Option<Taskbar> {
         cbSize: std::mem::size_of::<APPBARDATA>() as u32,
         ..Default::default()
     };
-    // `ABM_GETSTATE` 把标志放在 lParam 里，返回值只表示成功与否。
+    // `ABM_GETSTATE` puts the flags in lParam; the return value only signals
+    // success.
     let ok = unsafe { SHAppBarMessage(ABM_GETSTATE, &raw mut state) } != 0;
     let autohide = ok && (state.lParam.0 as u32 & ABS_AUTOHIDE) != 0;
     Some(Taskbar { edge, autohide })
 }
 
-/// 任务栏是否在同一侧、且自动隐藏。
+/// Whether the taskbar sits on the same edge and is set to auto-hide.
 ///
-/// 这时 Shell 仍会为**隐藏的**任务栏留出一条带子：工作区少一条，我们
-/// 再登记 AppBar 就把 Dock 顶离屏幕边缘，露出一段空隙。
+/// Shell still reserves a strip for the hidden taskbar, so registering an AppBar
+/// there pushes the dock off the screen edge and leaves a visible gap.
 #[must_use]
 pub fn taskbar_steals_edge(edge: Edge, taskbar: Option<Taskbar>) -> bool {
     matches!(taskbar, Some(t) if t.autohide && t.edge == edge)
 }
 
-/// 是否该登记 AppBar 预留。
+/// Whether an AppBar reservation should be registered at all.
 #[must_use]
 pub fn should_reserve(
     cfg_reserve: bool,
@@ -91,18 +73,18 @@ pub fn should_reserve(
     cfg_reserve && always && !taskbar_steals_edge(edge, taskbar)
 }
 
-/// 一个已登记的 AppBar。
+/// A registered AppBar.
 #[derive(Debug)]
 pub struct AppBar {
     hwnd: HWND,
-    /// 是否已 `ABM_NEW`。
+    /// Whether `ABM_NEW` succeeded.
     registered: bool,
-    /// 上一次成功提交的边与矩形。相同就不再 `ABM_SETPOS`。
+    /// Last submitted edge and rect; identical values skip `ABM_SETPOS`.
     applied: Option<(Edge, Rect)>,
 }
 
 impl AppBar {
-    /// 绑定窗口，但**不**立刻登记（要等第一次 `apply`）。
+    /// Bind a window without registering; the first `apply` does that.
     #[must_use]
     pub fn new(hwnd: HWND) -> Self {
         Self {
@@ -112,19 +94,19 @@ impl AppBar {
         }
     }
 
-    /// 请求预留 `thickness` 宽的边条，返回实际拿到的矩形。
+    /// Reserve a `thickness`-wide strip on `edge` and return the rect granted.
     ///
-    /// 调用方要把返回的矩形传给 [`nooksill_core::layout::window_origin`]，
-    /// 因为 `ABM_QUERYPOS` 可能把请求位置调整到"实际能给"的地方。
+    /// The caller must place the window on the returned rect, because
+    /// `ABM_QUERYPOS` can move the request to where space is really available.
     ///
-    /// `monitor` 是目标显示器的**整块**矩形（`rcMonitor`，不是 `rcWork`）：
-    /// AppBar 是在整个屏幕上切，不是在工作区里切。
+    /// `monitor` is the full `rcMonitor` rect, not the work area: an AppBar cuts
+    /// from the whole screen.
     pub fn apply(&mut self, edge: Edge, thickness: i32, monitor: Rect) -> Option<Rect> {
         if !self.registered {
             let mut ab = self.base();
             ab.uCallbackMessage = WM_APP_AB;
-            // ABM_NEW 失败（返回 FALSE）说明系统拒绝登记，此时不该继续
-            // SETPOS —— 那样只会安静地什么也不做，还留下错误的状态。
+            // ABM_NEW returning FALSE means the shell refused registration;
+            // continuing to SETPOS would silently do nothing.
             if unsafe { SHAppBarMessage(ABM_NEW, &raw mut ab) } == 0 {
                 return None;
             }
@@ -153,11 +135,11 @@ impl AppBar {
         }
         ab.rc = to_win_rect(want);
 
-        // 系统会把它挪到实际可用的位置（避开任务栏与别的 AppBar）。
+        // The shell moves the rect to where space is actually free.
         unsafe { SHAppBarMessage(ABM_QUERYPOS, &raw mut ab) };
 
-        // QUERYPOS 可能只调整了坐标，厚度必须按我们自己的要求重新固定，
-        // 否则拿回来的可能是一条很窄的缝。
+        // QUERYPOS may only adjust the coordinates; the thickness must be forced
+        // back to ours, otherwise the granted strip can be a narrow sliver.
         match edge {
             Edge::Top => ab.rc.bottom = ab.rc.top + thickness,
             Edge::Bottom => ab.rc.top = ab.rc.bottom - thickness,
@@ -175,7 +157,7 @@ impl AppBar {
         Some(got)
     }
 
-    /// 注销并把工作区还给系统。幂等。
+    /// Deregister and give the work area back. Idempotent.
     pub fn remove(&mut self) {
         if !self.registered {
             return;
@@ -197,7 +179,7 @@ impl AppBar {
 
 impl Drop for AppBar {
     fn drop(&mut self) {
-        // 关键：不注销的话用户桌面会永久缺一条，重启前无法自愈。
+        // Not deregistering leaves the desktop short one strip until reboot.
         self.remove();
     }
 }
@@ -226,7 +208,7 @@ mod tests {
             autohide: true,
         };
         assert!(!should_reserve(true, true, Edge::Bottom, Some(tb)));
-        // 换了边就不冲突，照常预留。
+        // A different edge does not conflict, reserve as usual.
         assert!(should_reserve(true, true, Edge::Left, Some(tb)));
     }
 
@@ -246,7 +228,7 @@ mod tests {
         assert!(!should_reserve(true, false, Edge::Bottom, None));
     }
 
-    /// 只读验证：打印任务栏的边与自动隐藏状态。
+    /// Read-only: prints the taskbar edge and autohide state.
     #[test]
     #[ignore = "queries the live taskbar; run with --ignored"]
     fn taskbar_state_is_readable() {
@@ -260,14 +242,14 @@ mod tests {
         assert_eq!(from_win_rect(to_win_rect(r)), r);
     }
 
-    /// 未登记时 `remove` 必须是空操作。
+    /// `remove` must be a no-op before registration.
     ///
-    /// `Drop` 会无条件调用它，如果没做幂等保护，一个从未成功登记的
-    /// 实例在析构时会向系统发一次 `ABM_REMOVE` —— 那是另一个 AppBar
-    /// 的槽位也可能被误伤（同一 hwnd 重复注销的行为没有明确文档保证）。
+    /// `Drop` calls it unconditionally; without the guard a never-registered
+    /// instance would send `ABM_REMOVE` and could hit another AppBar's slot.
     #[test]
     fn remove_is_idempotent_before_new() {
-        // 拿一个无效句柄：只要不真的走 SHAppBarMessage 就不会崩。
+        // An invalid handle: nothing crashes as long as SHAppBarMessage is not
+        // reached.
         let mut bar = AppBar::new(HWND::default());
         bar.remove();
         bar.remove();

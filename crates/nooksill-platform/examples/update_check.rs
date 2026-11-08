@@ -1,12 +1,14 @@
-//! 手工验收 updater 的整条链路：查最新版 → 选镜像 → 下载 → 校验。
+//! Manually verify the whole updater chain: fetch latest, pick a mirror, download,
+//! verify.
 //!
 //! ```text
-//! cargo run -p nooksill-platform --example update_check           # 只查
-//! cargo run -p nooksill-platform --example update_check -- stage  # 查到就下载并校验
+//! cargo run -p nooksill-platform --example update_check           # fetch only
+//! cargo run -p nooksill-platform --example update_check -- stage  # fetch, download, verify
 //! ```
 //!
-//! 会真的发网络请求；`stage` 会把整包下载到 exe 同级目录的
-//! `NookSill.update.exe`，校验不过就报错，不会覆盖任何东西。
+//! This makes real network requests. `stage` downloads the whole asset next to the
+//! exe as `NookSill.update.exe`; a checksum mismatch is an error and nothing is
+//! overwritten.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let want_stage = std::env::args().nth(1).as_deref() == Some("stage");

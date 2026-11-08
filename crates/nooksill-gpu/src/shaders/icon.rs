@@ -26,7 +26,7 @@ impl IconShader {
         Self { rt, pipeline }
     }
 
-    /// Apply the mask and return the resulting RGBA bytes.
+    /// Applies the mask and returns the resulting RGBA bytes.
     #[must_use]
     pub fn round_mask(
         &self,

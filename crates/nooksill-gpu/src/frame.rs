@@ -1,22 +1,23 @@
-//! 一帧的完整提交路径：egui → 离屏纹理 → 回读 → 分层窗口。
+//! Submission path for one frame: egui -> offscreen texture -> readback ->
+//! layered window.
 //!
-//! 这条链路原先在 `overlay.rs`（设置窗口）与 `bin/dock.rs`（Dock 窗口）
-//! 各写了一遍，逐行相同。抽出来之后**只有一个地方**需要跟着 wgpu/egui
-//! 的 API 变动走，也只有一个地方需要保证顺序：
+//! The order matters and is the reason this lives in one place:
 //!
-//! 1. `run_ui` 产出 `FullOutput`；
-//! 2. `textures_delta.set` 逐项上传（字形图集、图标纹理）；
-//! 3. `tessellate` → `update_buffers` 写顶点/索引；
-//! 4. `begin_render_pass` + `LoadOp::Clear(TRANSPARENT)` —— **透明清屏是
-//!    窗口能透出桌面的关键**，写成 `Load` 或任何不透明色都会退化成实心块；
-//! 5. `copy_texture_to_buffer` → 同步回读 → 预乘 BGRA 写进 DIB；
-//! 6. `UpdateLayeredWindow` 交给 DWM；
-//! 7. `textures_delta.free` 回收，然后 `clear()` —— 不 clear 会在 Drop 时
-//!    触发断言 panic（M0 实测）。
+//! 1. `run_ui` produces a `FullOutput`;
+//! 2. upload each `textures_delta.set` entry (glyph atlas, icon textures);
+//! 3. `tessellate` -> `update_buffers` writes vertices and indices;
+//! 4. `begin_render_pass` with `LoadOp::Clear(TRANSPARENT)`: the transparent
+//!    clear is what lets the desktop show through, while `Load` or any opaque
+//!    colour turns the window into a solid block;
+//! 5. `copy_texture_to_buffer` -> synchronous readback -> premultiplied BGRA
+//!    into the DIB;
+//! 6. `UpdateLayeredWindow` hands the result to DWM;
+//! 7. free `textures_delta.free`, then call `clear()` - skipping it trips an
+//!    assertion in `Drop`.
 //!
-//! 关于颜色格式：离屏目标**必须**是 sRGB（[`Gpu::COLOR_FORMAT`]）。
-//! 用 `Rgba8Unorm` 时 egui 会自己做一次 gamma 编码，回读出来的面板
-//! 从 24 灰变成 81 灰。
+//! The offscreen target must be sRGB ([`Gpu::COLOR_FORMAT`]). With
+//! `Rgba8Unorm` egui applies its own gamma encoding and the readback turns
+//! panel grey 24 into grey 81.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,20 +31,22 @@ use crate::offscreen::Offscreen;
 use crate::present::LayeredPresenter;
 pub use crate::present::Reflection;
 
-/// 组合模式每帧真高斯最多覆盖 `1/STRIPES` 幅宽。变化列在预算内就
-/// 全部真算（结构完全实时）；整屏都在变时按条带轮转削峰，其余列
-/// 交给色场重投影，避免峰值退回整幅卷积。
+/// Per frame the full gaussian covers at most `1/STRIPES` of the width. When
+/// the changed columns fit the budget they all run the real blur; otherwise
+/// the stripes rotate and the rest is reprojected from the colour field, which
+/// caps the peak instead of falling back to a full-width convolution.
 const TRUE_BLUR_STRIPES: u32 = 4;
 
-/// 一帧渲染完成后，调用方真正需要知道的两件事。
+/// The two things the caller needs after a frame is rendered.
 ///
-/// 不返回 `egui::FullOutput`：shapes 与纹理增量在 `render` 内部就消费掉了，
-/// 交出去只会诱使调用方再处理一遍。
+/// `egui::FullOutput` is not returned: shapes and texture deltas are already
+/// consumed inside `render`, and handing them out would invite double
+/// processing.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameOutcome {
-    /// egui 想要的光标形状（`WM_SETCURSOR` 时用）。
+    /// Cursor shape egui wants (used by `WM_SETCURSOR`).
     pub cursor: egui::CursorIcon,
-    /// 下一次该在什么时候重绘。`Duration::MAX` = 没有待办，可以阻塞等消息。
+    /// When to repaint next; `Duration::MAX` = nothing pending, block on messages.
     pub repaint_delay: Duration,
 }
 
@@ -62,7 +65,7 @@ impl FrostLayer {
     }
 }
 
-/// 渲染目标 + 呈现器的组合。一个窗口一份。
+/// Render target plus presenter; one per window.
 pub struct FrameRenderer {
     ctx: egui::Context,
     renderer: Renderer,
@@ -75,25 +78,25 @@ pub struct FrameRenderer {
     shaders: crate::shaders::ShaderRuntime,
     /// Lazily created: only windows that enable frost pay for the pipeline.
     blur: Option<crate::shaders::frost::GpuBlur>,
-    /// 实验性「实时模糊 + 视觉欺骗」组合；只在开关打开且毛玻璃启用时创建。
+    /// Experimental live-blur plus illusion combination; both switches must be on.
     illusion: Option<crate::shaders::illusion::Illusion>,
-    /// 当前基底纹理的尺寸；尺寸变了必须重建基底。
+    /// Size of the current base texture; a size change requires a rebuild.
     frost_size: Option<(u32, u32)>,
-    /// 大面积变化时轮到哪条条带跑真高斯（0..[`TRUE_BLUR_STRIPES`]）。
+    /// Which stripe runs the real gaussian next (0..[`TRUE_BLUR_STRIPES`]).
     stripe: u32,
-    /// 最近一帧捕获。开关切换而桌面静止（没有新帧）时用它立即重建。
+    /// Last captured frame; rebuilds at once when a switch flips on a static desktop.
     last_frame: Option<crate::frost::FrostFrame>,
-    /// 上一帧用的模糊路径，用于检测开关变化。
+    /// Blur path used last frame, to detect switch changes.
     last_mode: bool,
     /// Smoke compute output, registered after `run_ui` produces it.
     smoke: Option<crate::shaders::smoke::SharedLayer>,
-    /// 倒影参数；`None` = 这一帧不画倒影（设置窗、菜单都为 None）。
+    /// Reflection parameters; `None` = draw none (settings window and menus).
     reflection: Option<Reflection>,
-    /// 毛玻璃背景层，画在 UI 最底层（见 `crate::frost`）。
+    /// Frost background layer, drawn below the UI (see `crate::frost`).
     frost: Option<FrostLayer>,
-    /// 面板可见期间的实时抓取线程。`None` = 只在开窗时抓过一次。
+    /// Live capture thread while the panel is visible; `None` = one capture at open.
     live: Option<crate::frost::Live>,
-    /// 上一个 [`crate::frost::Spec`]，实时帧来了才知道模糊半径与圆角。
+    /// Last [`crate::frost::Spec`]; live frames need it for radius and corners.
     frost_spec: Option<crate::frost::Spec>,
 }
 
@@ -106,618 +109,6 @@ impl std::fmt::Debug for FrameRenderer {
     }
 }
 
-impl FrameRenderer {
-    /// 建离屏目标、分层窗口 DIB 与 egui 渲染器。
-    ///
-    /// `width`/`height` 是**物理像素**（`CreateWindowExW` 与离屏纹理的口径）。
-    /// 字体必须在第一帧之前装好：egui 0.37 缺字形是 `panic` 而不是豆腐块。
-    pub fn new(
-        gpu: &Gpu,
-        width: u32,
-        height: u32,
-        pixels_per_point: f32,
-    ) -> Result<Self, GpuError> {
-        // Large windows use 2x: at high pixel density the extra samples cost
-        // tens of MB without visible gain. Config can force 1/2/4.
-        let flags = gpu
-            .adapter
-            .get_texture_format_features(Gpu::COLOR_FORMAT)
-            .flags;
-        let adapter_specific = gpu
-            .device
-            .features()
-            .contains(egui_wgpu::wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
-        let area = u64::from(width) * u64::from(height);
-        let wanted = crate::perf::auto_msaa_samples(area, crate::gpu::msaa_preference());
-        let samples = crate::perf::resolve_samples(wanted, flags, adapter_specific);
-        let offscreen = Offscreen::new(&gpu.device, width, height, Gpu::COLOR_FORMAT, samples);
-        let presenter = LayeredPresenter::new(width as i32, height as i32)?;
-
-        let ctx = egui::Context::default();
-        if !nooksill_settings::fonts::install_cjk(&ctx) {
-            eprintln!("警告: 未找到中文字体，界面会因缺字形而崩溃。");
-        }
-
-        let renderer = Renderer::new(
-            &gpu.device,
-            Gpu::COLOR_FORMAT,
-            RendererOptions {
-                msaa_samples: samples,
-                depth_stencil_format: None,
-                // 抖动：柔和大面积低透明度的投影渐变时，8bit 里只有几十个
-                // 可用档位，不开抖动会出肉眼可见的色带。
-                dithering: true,
-                ..Default::default()
-            },
-        );
-
-        Ok(Self {
-            ctx,
-            renderer,
-            offscreen,
-            presenter,
-            pixels_per_point,
-            device: gpu.device.clone(),
-            queue: gpu.queue.clone(),
-            shaders: crate::shaders::ShaderRuntime::new(&gpu.device, &gpu.queue),
-            blur: None,
-            illusion: None,
-            frost_size: None,
-            stripe: 0,
-            last_frame: None,
-            last_mode: false,
-            smoke: None,
-            reflection: None,
-            frost: None,
-            live: None,
-            frost_spec: None,
-        })
-    }
-
-    /// 改变离屏目标与 DIB 的尺寸，**保留** egui 上下文与渲染管线。
-    ///
-    /// 为什么需要它：右键菜单的高度随项数变化，每次打开都要换尺寸。
-    /// 而 `FrameRenderer::new` 里最贵的两步是 egui 上下文（装 CJK 字体，
-    /// 解析字体文件）与 wgpu 管线编译（几十毫秒）—— 它们与尺寸无关。
-    /// 每次重建的话，菜单弹出会明显卡一下。
-    ///
-    /// 尺寸不变时直接返回，避免无谓地重建纹理。
-    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) -> Result<(), GpuError> {
-        if self.offscreen.width() == width && self.offscreen.height() == height {
-            return Ok(());
-        }
-        self.offscreen = Offscreen::new(
-            &gpu.device,
-            width,
-            height,
-            Gpu::COLOR_FORMAT,
-            self.offscreen.samples(),
-        );
-        self.presenter = LayeredPresenter::new(width as i32, height as i32)?;
-        Ok(())
-    }
-
-    /// Connect a smoke compute output to this renderer. Called once at startup.
-    pub fn set_smoke_layer(&mut self, layer: crate::shaders::smoke::SharedLayer) {
-        self.smoke = Some(layer);
-    }
-
-    /// Blur captured bytes on the GPU and register the output with egui.
-    /// Returns false so the caller can fall back to CPU blur.
-    pub fn set_frost_gpu(
-        &mut self,
-        bits: &[u8],
-        w: u32,
-        h: u32,
-        spec: crate::frost::Spec,
-        ppp: f32,
-    ) -> bool {
-        let Some(view) = self.blur_frost(bits, w, h, spec, ppp, 0..w) else {
-            return false;
-        };
-        self.register_frost_view(&view);
-        true
-    }
-
-    /// 组合路径的首帧：整幅跑一次真高斯，后续帧由
-    /// [`Self::poll_illusion`] 做「局部真高斯 + 色场补偿」。
-    pub fn set_frost_illusion(
-        &mut self,
-        bits: &[u8],
-        w: u32,
-        h: u32,
-        spec: crate::frost::Spec,
-        _ppp: f32,
-    ) -> bool {
-        let frame = crate::frost::FrostFrame {
-            bits: Arc::new(bits.to_vec()),
-            w,
-            h,
-            x0: 0,
-            x1: w,
-            field: Arc::new(crate::frost::color_field(bits, w as usize, h as usize)),
-        };
-        self.rebuild_illusion_base(&frame, spec)
-    }
-
-    /// 跑 GPU 卷积，返回输出纹理视图（不注册给 egui）。
-    /// `cols` 是脏列范围；全量帧传 `0..w`。
-    fn blur_frost(
-        &mut self,
-        bits: &[u8],
-        w: u32,
-        h: u32,
-        spec: crate::frost::Spec,
-        ppp: f32,
-        cols: std::ops::Range<u32>,
-    ) -> Option<TextureView> {
-        if self.blur.is_none() {
-            self.blur = crate::shaders::frost::GpuBlur::new(&self.device, &self.queue);
-        }
-        let blur = self.blur.as_mut()?;
-        let scale = f32::from(crate::frost::CAPTURE_PCT) / 100.0;
-        blur.blur_range(bits, w, h, spec.radius, spec.corner_pt * ppp * scale, cols)?;
-        blur.view().cloned()
-    }
-
-    /// 把某个 compute 输出注册（或原地刷新）为 egui 的毛玻璃纹理。
-    fn register_frost_view(&mut self, view: &TextureView) {
-        let filter = egui_wgpu::wgpu::FilterMode::Linear;
-        let id = match &self.frost {
-            Some(FrostLayer::Gpu { id }) => {
-                self.renderer.update_egui_texture_from_wgpu_texture(
-                    &self.device,
-                    view,
-                    filter,
-                    *id,
-                );
-                *id
-            }
-            _ => self
-                .renderer
-                .register_native_texture(&self.device, view, filter),
-        };
-        self.frost = Some(FrostLayer::Gpu { id });
-    }
-
-    fn ensure_illusion(&mut self) -> &mut crate::shaders::illusion::Illusion {
-        if self.illusion.is_none() {
-            let device = self.device.clone();
-            let queue = self.queue.clone();
-            self.illusion = Some(crate::shaders::illusion::Illusion::new(&device, &queue));
-        }
-        self.illusion
-            .as_mut()
-            .expect("illusion was just created above")
-    }
-
-    /// CPU fallback: reuse the texture handle when the size is unchanged.
-    pub fn set_frost(&mut self, image: egui::ColorImage) {
-        if let Some(FrostLayer::Cpu(tex)) = &mut self.frost {
-            if tex.size() == image.size {
-                tex.set(image, egui::TextureOptions::LINEAR);
-                return;
-            }
-        }
-        let tex = self
-            .ctx
-            .load_texture("nooksill-frost", image, egui::TextureOptions::LINEAR);
-        self.frost = Some(FrostLayer::Cpu(tex));
-    }
-
-    /// 撤掉背景层（毛玻璃关掉、或捕获失败时调用）。
-    /// 是否已有磨砂层。
-    #[must_use]
-    pub fn has_frost(&self) -> bool {
-        self.frost.is_some()
-    }
-
-    pub fn clear_frost(&mut self) {
-        self.frost = None;
-    }
-
-    /// 开始实时抓取背景。
-    pub fn start_live_frost(&mut self, hwnd: HWND, spec: crate::frost::Spec, _ppp: f32) {
-        self.frost_spec = Some(spec);
-        self.live = crate::frost::Live::start(hwnd);
-    }
-
-    /// 停掉实时抓取。背景层留在原地，面板照常显示上一帧。
-    pub fn stop_live_frost(&mut self) {
-        self.live = None;
-        self.frost_spec = None;
-        self.illusion = None;
-        self.frost_size = None;
-        self.stripe = 0;
-        self.last_frame = None;
-    }
-
-    /// 当前毛玻璃参数。
-    #[must_use]
-    pub const fn frost_spec(&self) -> Option<crate::frost::Spec> {
-        self.frost_spec
-    }
-
-    /// Consume the newest captured frame. The classic path re-convolves only
-    /// the changed columns; the experimental path re-projects a colour field.
-    fn poll_frost(&mut self) -> bool {
-        let Some(frame) = self.live.as_ref().and_then(crate::frost::Live::latest) else {
-            return false;
-        };
-        let Some(spec) = self.frost_spec else {
-            return false;
-        };
-        // 缓存一份（Arc 共享，几乎零成本）：开关切换而桌面静止时，
-        // 没有新帧可用，就靠它把当前画面立刻重建成新路径的结果。
-        self.last_frame = Some(frame.clone());
-        if crate::frost::illusion() {
-            return self.poll_illusion(&frame, spec);
-        }
-
-        // 从实验路径切回来（或尺寸变了）时纹理里其它列可能是旧的，
-        // 必须整幅重算一次，不能沿用脏列优化。
-        let force_full = self.illusion.is_some() || self.frost_size != Some((frame.w, frame.h));
-        self.illusion = None;
-        self.stripe = 0;
-        let pad = spec.radius.clamp(1, 12) + 2;
-        let cols = if force_full {
-            0..frame.w
-        } else {
-            frame.x0.saturating_sub(pad)..frame.x1.saturating_add(pad).min(frame.w)
-        };
-        let Some(view) = self.blur_frost(
-            &frame.bits,
-            frame.w,
-            frame.h,
-            spec,
-            self.pixels_per_point,
-            cols,
-        ) else {
-            return false;
-        };
-        self.register_frost_view(&view);
-        self.frost_size = Some((frame.w, frame.h));
-        true
-    }
-
-    /// 「实时模糊 + 视觉欺骗」组合：**每帧都跑真高斯**，只是范围有预算。
-    ///
-    /// - 首帧 / 尺寸变化 / 全量帧：整幅重建基底；
-    /// - 局部变化且在预算内：变化列全部真算，结构完全实时；
-    /// - 整屏都在变：只对本轮条带跑真高斯（1/4 幅宽），其余列由
-    ///   `Illusion` 用低频色场补偿颜色，避免峰值退回整幅卷积。
-    ///
-    /// 无论哪种，基底都在持续更新 —— 不再有「结构冻结」的观感。
-    fn poll_illusion(
-        &mut self,
-        frame: &crate::frost::FrostFrame,
-        spec: crate::frost::Spec,
-    ) -> bool {
-        let size_changed = self.frost_size != Some((frame.w, frame.h));
-        let full_frame = frame.x0 == 0 && frame.x1 == frame.w;
-        if self.illusion.is_none() || size_changed || full_frame {
-            return self.rebuild_illusion_base(frame, spec);
-        }
-
-        let budget = (frame.w / TRUE_BLUR_STRIPES).max(1);
-        let pad = spec.radius.clamp(1, 12) + 2;
-        let dirty = frame.x0.saturating_sub(pad)..frame.x1.saturating_add(pad).min(frame.w);
-        let start = self.stripe.min(TRUE_BLUR_STRIPES - 1) * budget;
-        self.stripe = (self.stripe + 1) % TRUE_BLUR_STRIPES;
-        let cols = if dirty.start < dirty.end && dirty.end - dirty.start <= budget {
-            dirty
-        } else {
-            start..(start + budget).min(frame.w)
-        };
-
-        // 真高斯：被覆盖的列输出就是最新结构。
-        let Some(base) = self.blur_frost(
-            &frame.bits,
-            frame.w,
-            frame.h,
-            spec,
-            self.pixels_per_point,
-            cols.clone(),
-        ) else {
-            return false;
-        };
-        // 视觉欺骗：其余列叠加低频色场差值（90 ms 插值过渡）。
-        let ill = self.ensure_illusion();
-        ill.push(frame.field.as_ref(), cols, frame.w);
-        let Some(out) = ill.render(&base, frame.w, frame.h) else {
-            return false;
-        };
-        self.register_frost_view(&out);
-        self.frost_size = Some((frame.w, frame.h));
-        true
-    }
-
-    /// 整幅真高斯重建（首帧、尺寸变化、模式切换、全量捕获帧）。
-    fn rebuild_illusion_base(
-        &mut self,
-        frame: &crate::frost::FrostFrame,
-        spec: crate::frost::Spec,
-    ) -> bool {
-        let Some(view) = self.blur_frost(
-            &frame.bits,
-            frame.w,
-            frame.h,
-            spec,
-            self.pixels_per_point,
-            0..frame.w,
-        ) else {
-            return false;
-        };
-        let field = (*frame.field).clone();
-        let ill = self.ensure_illusion();
-        ill.set_base(&field, frame.w);
-        let Some(out) = ill.render(&view, frame.w, frame.h) else {
-            return false;
-        };
-        self.register_frost_view(&out);
-        self.frost_size = Some((frame.w, frame.h));
-        self.stripe = 0;
-        self.last_frame = Some(frame.clone());
-        true
-    }
-
-    /// 开关切换但这一帧没有新抓屏时，用最近的捕获帧立刻重建背景。
-    ///
-    /// 没有它会有一个隐蔽的坑：桌面静止时抓屏线程不产出新帧，开关打开后
-    /// `poll_frost` 一直早退，画面会停在旧路径上直到下一次抓屏（最长
-    /// 300 ms 兜底）。用户点完开关要下一帧就看到变化。
-    fn refresh_for_mode(&mut self, illusion: bool) {
-        let Some(frame) = self.last_frame.clone() else {
-            return;
-        };
-        let Some(spec) = self.frost_spec else {
-            return;
-        };
-        if illusion {
-            let _ = self.rebuild_illusion_base(&frame, spec);
-            return;
-        }
-        if let Some(view) = self.blur_frost(
-            &frame.bits,
-            frame.w,
-            frame.h,
-            spec,
-            self.pixels_per_point,
-            0..frame.w,
-        ) {
-            self.register_frost_view(&view);
-        }
-        self.illusion = None;
-        self.stripe = 0;
-        self.frost_size = Some((frame.w, frame.h));
-    }
-
-    /// 推进颜色过渡；返回需要重新注册的输出纹理与「是否还要下一帧」。
-    fn advance_illusion(&mut self) -> (Option<TextureView>, bool) {
-        if !crate::frost::illusion() {
-            return (None, false);
-        }
-        let Some(base) = self.blur.as_ref().and_then(|b| b.view()).cloned() else {
-            return (None, false);
-        };
-        let Some((w, h)) = self.frost_size else {
-            return (None, false);
-        };
-        let Some(ill) = self.illusion.as_mut() else {
-            return (None, false);
-        };
-        let more = ill.advance();
-        if !ill.take_dirty() {
-            return (None, more);
-        }
-        (ill.render(&base, w, h), more)
-    }
-
-    /// 当前有没有背景层。面板据此决定底色用不透明还是半透明 tint。
-    #[must_use]
-    pub const fn frost_on(&self) -> bool {
-        self.frost.is_some()
-    }
-
-    /// egui 用的 `Context`（需要 `request_repaint` 之类时用）。
-    #[must_use]
-    pub const fn ctx(&self) -> &egui::Context {
-        &self.ctx
-    }
-
-    #[must_use]
-    pub const fn pixels_per_point(&self) -> f32 {
-        self.pixels_per_point
-    }
-
-    #[must_use]
-    pub const fn size(&self) -> (u32, u32) {
-        (self.offscreen.width(), self.offscreen.height())
-    }
-
-    /// MSAA 采样数。截图工具会在输出里带出来，方便确认抗锯齿档位。
-    #[must_use]
-    pub const fn samples(&self) -> u32 {
-        self.offscreen.samples()
-    }
-
-    /// 设置倒影参数，下一帧生效。`None` = 不画。
-    ///
-    /// 放在呈现层而不是 egui 里：倒影是"同一帧的镜像像素"，只有拿到回读
-    /// 缓冲才可能画得准；用 egui 再画一遍图标是另一套代码，必然漂移。
-    pub const fn set_reflection(&mut self, spec: Option<Reflection>) {
-        self.reflection = spec;
-    }
-
-    /// Draw a frame and present it. `pos` is the window's screen origin.
-    pub fn render(
-        &mut self,
-        gpu: &Gpu,
-        raw: egui::RawInput,
-        hwnd: HWND,
-        pos: (i32, i32),
-        build: impl FnMut(&mut egui::Ui),
-    ) -> Result<FrameOutcome, GpuError> {
-        let outcome = self.draw_frame(gpu, raw, build);
-        {
-            let presenter = &mut self.presenter;
-            // Write the mapped pixels straight into the DIB: no full-frame
-            // Vec allocation and no extra copy.
-            self.offscreen
-                .with_mapped_pixels(&gpu.device, |data, stride| {
-                    presenter.upload_rgba_strided(data, stride as usize);
-                    Ok(())
-                })
-                .map_err(GpuError::Wgpu)?;
-        }
-        if let Some(spec) = self.reflection {
-            self.presenter.mirror_below(spec);
-        }
-        self.presenter.present(hwnd, pos.0, pos.1)?;
-        Ok(outcome)
-    }
-
-    /// Draw a frame and return premultiplied RGBA pixels without presenting.
-    /// Used by offscreen screenshots and pixel regression.
-    pub fn render_rgba(
-        &mut self,
-        gpu: &Gpu,
-        raw: egui::RawInput,
-        build: impl FnMut(&mut egui::Ui),
-    ) -> Result<(Vec<u8>, FrameOutcome), GpuError> {
-        let outcome = self.draw_frame(gpu, raw, build);
-        let pixels = self
-            .offscreen
-            .read_pixels(&gpu.device)
-            .map_err(GpuError::Wgpu)?;
-        Ok((pixels, outcome))
-    }
-
-    /// Submit one frame. Both output paths share this draw code.
-    fn draw_frame(
-        &mut self,
-        gpu: &Gpu,
-        raw: egui::RawInput,
-        mut build: impl FnMut(&mut egui::Ui),
-    ) -> FrameOutcome {
-        // A live frost frame must land before `run_ui` claims texture deltas.
-        // 开关切换即便没有新帧也要立刻换路径（见 `refresh_for_mode`）。
-        let mode = crate::frost::illusion();
-        let mode_changed = mode != self.last_mode;
-        self.last_mode = mode;
-        let had_new = self.poll_frost();
-        if mode_changed && !had_new {
-            self.refresh_for_mode(mode);
-        }
-        // 实验路径的颜色过渡：过渡期间每帧推进一帧插值并主动要重绘，
-        // 于是桌面变色是连续渐变而不是「攒够一帧突然跳一下」。
-        let (illusion_view, animating) = self.advance_illusion();
-        if let Some(view) = illusion_view {
-            self.register_frost_view(&view);
-        }
-        if animating {
-            self.ctx.request_repaint_after(Duration::from_millis(16));
-        }
-        let frost = self.frost.as_ref().map(FrostLayer::id);
-        let full = self.ctx.run_ui(raw, |ui| {
-            if let Some(id) = frost {
-                let rect = ui.max_rect();
-                ui.painter().image(
-                    id,
-                    rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-            }
-            build(ui);
-        });
-
-        // `SmokeFx::paint` produced a view inside `run_ui`; register it now,
-        // before the render pass samples the texture. First frame has no id yet
-        // and is skipped; from then on the same texture object is refreshed.
-        if let Some(layer) = &self.smoke {
-            if let Ok(mut l) = layer.lock() {
-                if let Some(view) = &l.view {
-                    let id = self.shaders.register(&mut self.renderer, view, l.id);
-                    l.id = Some(id);
-                }
-            }
-        }
-
-        let delay = full
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map_or(Duration::MAX, |v| v.repaint_delay);
-        let cursor = full.platform_output.cursor_icon;
-
-        let egui::FullOutput {
-            shapes,
-            pixels_per_point,
-            mut textures_delta,
-            ..
-        } = full;
-
-        let jobs = self.ctx.tessellate(shapes, pixels_per_point);
-        for (id, deltas) in &textures_delta.set {
-            for delta in deltas {
-                self.renderer
-                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
-            }
-        }
-
-        let screen = ScreenDescriptor {
-            size_in_pixels: [self.offscreen.width(), self.offscreen.height()],
-            pixels_per_point,
-        };
-        let mut encoder =
-            gpu.device
-                .create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                    label: Some("nooksill-frame"),
-                });
-        let buffers =
-            self.renderer
-                .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
-
-        {
-            // MSAA 开启时颜色画进多采样纹理、硬件 resolve 到离屏纹理；
-            // 关闭时 color_target() 把两个引用都指向同一块纹理。
-            let (color, resolve) = self.offscreen.color_target();
-            let mut pass = encoder
-                .begin_render_pass(&egui_wgpu::wgpu::RenderPassDescriptor {
-                    label: Some("nooksill"),
-                    color_attachments: &[Some(egui_wgpu::wgpu::RenderPassColorAttachment {
-                        view: color,
-                        resolve_target: resolve,
-                        depth_slice: None,
-                        ops: egui_wgpu::wgpu::Operations {
-                            // 透明清屏：分层窗口里 alpha=0 即"透出桌面"。
-                            load: egui_wgpu::wgpu::LoadOp::Clear(
-                                egui_wgpu::wgpu::Color::TRANSPARENT,
-                            ),
-                            store: egui_wgpu::wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                })
-                .forget_lifetime();
-            self.renderer.render(&mut pass, &jobs, &screen);
-        }
-        self.offscreen.copy_to_buffer(&mut encoder);
-        gpu.queue
-            .submit(buffers.into_iter().chain([encoder.finish()]));
-
-        // Official egui-wgpu order: free after submit, then clear the delta.
-        for id in &textures_delta.free {
-            self.renderer.free_texture(id);
-        }
-        textures_delta.clear();
-
-        FrameOutcome {
-            cursor,
-            repaint_delay: delay,
-        }
-    }
-}
+mod frost_state;
+mod render;
+mod setup;

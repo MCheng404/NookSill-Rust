@@ -1,16 +1,15 @@
-//! 把两个新面板（分组 / 速记）离屏渲染成 BMP。
+//! Renders the group and quick-note panels offscreen to BMPs.
 //!
 //! ```text
-//! cargo run -p nooksill-gpu --example panels_shot -- out_dir [dark]
+//! cargo run -p nooksill-gpu --example panels_shot -- out_dir [light]
 //! ```
 //!
-//! 走的是与真实窗口**同一份**绘制函数（`group_win::paint_preview` /
-//! `note_win::paint_preview`），只是不建 Win32 窗口、不 `UpdateLayeredWindow`。
-//! 这两个面板此前只有编译检查与几何单测，没有任何像素级证据；
-//! 有了这个工具，加字段、改配色之后能直接出图核对。
+//! Uses the same paint functions as the real windows (`group_win::paint_preview`,
+//! `note_win::paint_preview`) without creating one, so a new field or a recolour
+//! can be checked in pixels right away.
 //!
-//! 分组面板的图标传空表，因此画的是"首字占位"退化路径 —— 这是有意的，
-//! 离屏拿不到 shell 图标，正好顺带覆盖这条分支。
+//! The group panel is given an empty icon table on purpose: offscreen has no
+//! shell icons, which exercises the first-letter fallback.
 
 #[path = "common/bmp.rs"]
 mod bmp;
@@ -31,8 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ppp = 1.25_f32;
     let gpu = Gpu::new("")?;
 
-    // ① 分组面板：5 个子项（跨两行），第 2 项悬停 → 显示 × 与 ← →。
-    // 故意混入多种 ItemKind，用来核对「按类型画预制图标」而不是首字占位。
+    // Group panel: five kids over two rows, the second hovered so the remove
+    // and reorder buttons show. Mixed `ItemKind`s check that the glyph follows
+    // the kind rather than falling back to the first letter.
     let kinds = [
         ItemKind::File,
         ItemKind::Folder,
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |ui| group_win::paint_preview(ui, dark, false, "开发工具", &kids, Some(1)),
     )?;
 
-    // ② 速记面板：7 条（跨两页），第 1 条悬停。
+    // Note panel: seven notes over two pages, the first hovered.
     let mut book = NoteBook::default();
     for (i, (t, b)) in [
         ("购物清单", "牛奶\n面包\n鸡蛋"),
@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |ui| note_win::paint_preview(ui, dark, false, &book, 0, Some(0)),
     )?;
 
-    // ③ 空态：两条路径都要能画，不能因为列表为空就 panic。
+    // Empty state: an empty list must still paint, not panic.
     shot(
         &gpu,
         &format!("{dir}/panel_notes_empty.bmp"),
@@ -100,8 +100,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |ui| note_win::paint_preview(ui, dark, false, &NoteBook::default(), 0, None),
     )?;
 
-    // ④ 编辑弹窗（速记的标题 + 多行正文）。多行框是后加的，
-    //    离屏图能直接看出高度、文字是否被裁、按钮是否被挤出窗口。
+    // Edit dialog with a multiline field: the shot shows whether the height,
+    // the text clipping and the buttons actually fit.
     let req = EditRequest {
         title: "速记".to_owned(),
         fields: vec![
@@ -132,7 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |ui| edit_win::paint_preview(ui, &req, &values, dark, false),
     )?;
 
-    // ⑤ 磨砂叠加层：同一份绘制函数，底色改为半透明 tint 让背景透出来。
+    // Same paint functions with a translucent tint so the background shows.
     shot(
         &gpu,
         &format!("{dir}/panel_notes_frosted.bmp"),
@@ -152,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         |ui| group_win::paint_preview(ui, dark, true, "开发工具", &kids, Some(1)),
     )?;
 
-    // ⑥ 自定义透明度 + 更强叠加层：验证配置真的作用到了绘制。
+    // Non-default opacity and overlay, to prove the config reaches the painter.
     let mut cfg = Config::default();
     cfg.apply_i32(Key::PANEL_OPACITY, 45);
     cfg.apply_i32(Key::PANEL_OVERLAY, 70);

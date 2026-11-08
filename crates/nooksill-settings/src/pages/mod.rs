@@ -1,18 +1,7 @@
-//! 设置界面：11 页、纯 egui、无窗口/GPU 依赖。
+//! Settings pages: 12 pure-egui pages, no window or GPU dependency.
 //!
-//! 布局是「左侧导航栏 + 右侧多卡片内容区」。雏形见
-//! `docs/settings-prototype.html` —— 那是 Rust 端的施工图：页面、卡片、
-//! 行一一对应。改设计先改雏形，再改这里。
-//!
-//! 每个页面单独一个文件（`general.rs` … `add.rs`），共享控件在
-//! `widgets.rs`。这样"加一页设置"= 加一个文件，不动别人。
-//!
-//! 设计原则只有一条：**控件的取值范围、键名、夹紧规则全部来自
-//! `core::config`**，这里只负责"长什么样"。加一个设置项只改一处（core 的
-//! `Key` 表），而不是原版那样在建表 / 绘制 / 命中 / 命令四处同步修改。
-//!
-//! 也因此这个模块可以在无显示器环境被 kittest 完整驱动：
-//! 没有 HWND、没有 device、没有线程。
+//! Layout is a left navigation column plus a right stack of cards. Ranges, key
+//! names and clamping all come from `core::config`; this layer only renders.
 
 mod about;
 mod about_art;
@@ -36,7 +25,7 @@ use nooksill_core::item::Item;
 
 pub(crate) use widgets::Ctx;
 
-/// 十二个页面。顺序 = 侧边导航顺序。
+/// Settings pages, in sidebar order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
     #[default]
@@ -88,7 +77,7 @@ impl Page {
         }
     }
 
-    /// 页头下面那行小字。
+    /// One-line description under the page header.
     #[must_use]
     pub const fn subtitle(self) -> &'static str {
         match self {
@@ -108,75 +97,78 @@ impl Page {
     }
 }
 
-/// UI 层私有的状态。**不属于** `Config`：页面位置、显示器名字、内存统计
-/// 都不该进 ini。
+/// UI-only state, kept out of `Config`: page position and live stats must not
+/// reach the INI file.
 #[derive(Clone, Debug)]
 pub struct SettingsState {
     pub page: Page,
-    /// 显示器名字列表，由调用方（platform 层）填。
+    /// Monitor names, filled by the platform layer.
     pub monitors: Vec<String>,
-    /// 开机自启动的当前实际状态（注册表里的真值，不是配置项）。
+    /// Real autostart state read from the registry, not the config value.
     pub auto_start: bool,
     pub config_dir: String,
-    /// 性能页显示的统计文本，由 GPU 层每帧刷新。
+    /// Stats text on the performance page, refreshed by the GPU layer.
     pub stats: String,
-    /// 可选适配器（不含"自动"）。由 platform 层枚举后填入。
+    /// Selectable adapters, excluding "auto", enumerated by the platform layer.
     pub adapters: Vec<String>,
-    /// 当前**实际**在用的渲染器名字。由 GPU 层填，用户不能直接改它。
+    /// Renderer actually in use, filled by the GPU layer; not user-editable.
     pub active_adapter: String,
-    /// 配置请求的适配器与实际情况不一致时的提示（空 = 无异常）。
+    /// Warning when the requested adapter differs from the active one.
     pub adapter_note: String,
-    /// 底部状态条。
+    /// Bottom status bar text.
     pub status: String,
-    /// 「关于」页的隐藏入口已解锁（连点版本号 5 次）。窗口一关就复位。
+    /// The About page's hidden entry is unlocked (version clicked 5 times).
+    /// Resets when the window closes.
     pub advanced: bool,
-    /// 版本号被连点的次数。
+    /// Click counter for the version label.
     pub version_clicks: u8,
-    /// 更新器当前状态，由 GPU 层在后台线程里刷新。
+    /// Updater state, refreshed by the GPU layer from a background thread.
     pub update: UpdateView,
-    /// 「添加网页应用」输入框里的地址。
+    /// Address typed into the "add web app" field.
     pub url_input: String,
-    /// 图标库页选中的图标文件夹（空 = 还没选）。
+    /// Icon folder selected on the library page (empty = none).
     pub icon_dir: String,
-    /// 顶栏搜索框的内容：非空时只显示命中的导航标签。
+    /// Top bar search text; when non-empty only matching nav labels are shown.
     pub nav_filter: String,
-    /// 当前展开的说明气泡（点击钉住 / 悬停 3 秒自动展开）。
+    /// Currently expanded help bubble, pinned by click or opened by 3 s hover.
     pub tip: Option<Tip>,
-    /// 正在悬停的提示点：悬停满 3 秒才展开，需要跨帧计时。
+    /// Hovered tip dot with its start instant; the 3 s delay spans frames.
     pub tip_hover: Option<(egui::Id, std::time::Instant)>,
-    /// 上一帧各卡片的高度（按基准左上角查）：磁吸的衰减要用。
+    /// Card heights of the previous frame, keyed by base top-left, for magnets.
     pub card_h_prev: Vec<(egui::Pos2, f32)>,
-    /// 本帧各卡片的高度，下一帧变成 `card_h_prev`。
+    /// Card heights of this frame, becoming `card_h_prev` next frame.
     pub card_h: Vec<(egui::Pos2, f32)>,
-    /// 上一帧各行的矩形（按基准左上角查）：悬停底色垫在行内容之下。
+    /// Row rects of the previous frame keyed by base top-left; the hover band
+    /// is drawn below row content.
     pub row_bands_prev: Vec<(egui::Pos2, egui::Rect)>,
-    /// 本帧各行的矩形，下一帧变成 `row_bands_prev`。
+    /// Row rects of this frame, becoming `row_bands_prev` next frame.
     pub row_bands: Vec<(egui::Pos2, egui::Rect)>,
 
-    // ---- 「条目」页 ----
-    /// Dock 条目的副本。由主程序每次同步进来（它是唯一的事实来源）。
+    /// Copy of the dock items, synced by the host program, which owns them.
     pub items: Vec<Item>,
-    /// 正在编辑的条目下标。`None` = 没有条目在编辑。
+    /// Index of the item being edited; `None` when nothing is open.
     pub editing: Option<usize>,
-    /// 编辑中的名称。
+    /// Name being edited.
     pub edit_name: String,
-    /// 编辑中的路径（文件 / 文件夹 / 网址）。
+    /// Path being edited (file, folder or URL).
     pub edit_path: String,
-    /// 编辑中的启动参数。
+    /// Launch arguments being edited.
     pub edit_args: String,
-    /// 编辑时要并入的分组下标。`None` = 不归组（留在栏体上）。
+    /// Group index to merge into; `None` keeps the item on the bar.
     pub edit_group: Option<usize>,
 }
 
-/// 一个展开中的说明气泡。
+/// An expanded help bubble.
 #[derive(Clone, Debug)]
 pub struct Tip {
-    /// 归属的圆点：同一个圆点反复悬停不会重建，点击靠它判定"收起还是展开"。
+    /// Owning dot; reusing it keeps the bubble alive so a click toggles it
+    /// instead of rebuilding.
     pub id: egui::Id,
     pub text: String,
-    /// 圆点的矩形，气泡锚在它下方（放不下时翻到上方）。
+    /// Rect of the dot; the bubble anchors below it, or above when it does
+    /// not fit.
     pub anchor: egui::Rect,
-    /// 点击钉住的气泡不会因移开光标而消失。
+    /// Pinned bubbles survive the cursor moving away.
     pub pinned: bool,
 }
 
@@ -214,17 +206,17 @@ impl Default for SettingsState {
     }
 }
 
-/// 条目的可编辑字段。改名 / 改路径 / 改参数一次做完。
+/// Editable fields of an item; name, path and arguments are applied together.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ItemEdit {
     pub name: String,
     pub path: String,
     pub args: String,
-    /// 要并入的分组下标。`None` = 留在栏体上。
+    /// Group index to merge into; `None` keeps the item on the bar.
     pub group: Option<usize>,
 }
 
-/// 需要主程序执行的动作（打开对话框、写注册表、增删条目……）。
+/// Actions the host program must perform (dialogs, registry, item edits).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Close,
@@ -243,68 +235,63 @@ pub enum Command {
     AddTrash,
     ExportAll,
     Import,
-    /// 用默认浏览器打开一个链接。
+    /// Open a link in the default browser.
     OpenUrl(&'static str),
-    /// 检查更新（后台线程，结果回到 [`UpdateView`]）。
+    /// Check for updates on a background thread; the result lands in
+    /// [`UpdateView`].
     CheckUpdate,
-    /// 下载并校验新版本。
+    /// Download and verify a new version.
     DownloadUpdate,
-    /// 用已下载的文件替换本程序并重启。
+    /// Replace this binary with the downloaded one and restart.
     ApplyUpdate,
-    /// 改第 `index` 个条目的名称 / 路径 / 参数 / 归属分组。
+    /// Change name, path, arguments and group of item `index`.
     EditItem(usize, ItemEdit),
-    /// 删除第 `index` 个条目。
+    /// Remove item `index`.
     RemoveItem(usize),
-    /// 第 `index` 个条目上移（`-1`）或下移（`+1`）。
+    /// Move item `index` up (`-1`) or down (`+1`).
     MoveItem(usize, i32),
-    /// 把第 `index` 个组里的第 `kid` 个子项搬回栏体。
+    /// Move child `kid` of group `index` back onto the bar.
     ExtractKid(usize, usize),
-    /// 解散第 `index` 个组，子项摊平回栏体。
+    /// Dissolve group `index`, flattening its children onto the bar.
     DissolveGroup(usize),
-    /// 给第 `index` 个条目挑一个自定义图标文件。
+    /// Pick a custom icon file for item `index`.
     PickIcon(usize),
-    /// 清掉第 `index` 个条目的自定义图标，恢复默认。
+    /// Clear the custom icon of item `index`.
     ResetIcon(usize),
-    /// 把第 `group` 个组里的第 `kid` 个子项上移（`-1`）或下移（`+1`）。
+    /// Move child `kid` of group `group` up (`-1`) or down (`+1`).
     MoveKid(usize, usize, i32),
-    /// 往 Dock 里加一个速记条目。
+    /// Add a note item to the dock.
     AddNote,
-    /// 打开速记面板。
+    /// Open the notes panel.
     OpenNotes,
 }
 
-/// 更新器给界面看的那一面。
+/// The updater as seen by the UI.
 ///
-/// 只放字符串和布尔：设置层不认识网络类型，GPU 层负责把
-/// `update::Release` 翻译成这几行字。
+/// Strings and flags only: this layer does not know the network types, the GPU
+/// layer translates `update::Release` into them.
 #[derive(Clone, Debug, Default)]
 pub struct UpdateView {
-    /// 一行状态文字（"正在检查…" / "已是最新" / "发现 1.0.1" / 错误）。
+    /// One status line ("checking", "up to date", "found 1.0.1", or an error).
     pub status: String,
-    /// 有新版本可下。
+    /// A newer version can be downloaded.
     pub available: bool,
-    /// 已下载并校验完成，等重启。
+    /// Downloaded and verified, waiting for a restart.
     pub ready: bool,
-    /// 正在跑网络请求，按钮置灰。
+    /// A request is in flight; buttons are disabled.
     pub busy: bool,
 }
 
-/// 一帧的结果。
+/// Result of one frame.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
     pub changed: bool,
     pub command: Option<Command>,
 }
 
-/// 渲染整个设置界面（左侧导航 + 右侧卡片内容）。
+/// Render the whole settings UI: navigation column plus card content.
 ///
-/// 状态文本不在这里画：它属于顶栏（`settings_win::shell` 的右栏）。
-///
-/// # 为什么是「两列」而不是 egui 的 `SidePanel`
-///
-/// `SidePanel` 按**根 Ui** 的可用区域布局，而设置窗口外面还套了一层
-/// 标题栏的子 Ui —— 在子 Ui 里开面板会跟标题栏抢地方。这里改成在一
-/// 个 Ui 里手工切两列：想放哪放哪，也不依赖窗口外壳的形状。
+/// The status line is drawn by the window layer, not here.
 pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> Outcome {
     let mut out = Outcome::default();
     {
@@ -314,18 +301,15 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
             out: &mut out,
         };
 
-        // 两列的矩形：左栏固定宽，右栏吃剩下的。
+        // Split the rect by hand instead of using `SidePanel`, which lays out
+        // against the root UI's available area and would fight the title bar
+        // drawn by an outer child UI.
         //
-        // 用 `new_child(max_rect)` 而不是 egui 的 `SidePanel`：面板按**根 Ui**
-        // 的可用区域布局，而设置窗口外面还套了一层标题栏的子 Ui ——
-        // 在子 Ui 里开面板会跟标题栏抢地方。手工切矩形就没有这个约束。
-        //
-        // 起点必须用 `available_rect_before_wrap()` 而不是 `max_rect()`：
-        // `max_rect` 不随内容收缩，外壳已经画掉的标题栏高度它不认，两列会
-        // 直接盖到标题上（第一版就是这样）。
+        // Must start from `available_rect_before_wrap()`: `max_rect()` does not
+        // shrink with content, so the columns would cover the title bar.
         let rect = ui.available_rect_before_wrap();
-        // 导航高度 = 窗口高；标签超过上限时按 12 行截断，其余滚动。
-        // 目前 10 页 < 12，这条不触发 —— 它是导航的容量上限，防止以后加页被遗忘。
+        // Navigation height is the window height; past `MAX_LABELS` rows it is
+        // capped and the rest scrolls.
         let nav_h = if Page::ALL.len() > widgets::MAX_LABELS {
             (widgets::MAX_LABELS as f32 * (widgets::NAV_ITEM_H + 3.0) + 20.0).min(rect.height())
         } else {
@@ -337,8 +321,8 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
             egui::pos2(rect.right(), rect.bottom()),
         );
 
-        // 左栏底色：半透明叠在毛玻璃上（Fluent 侧栏），再加 1px 微描边
-        // 压出导航区的边界 —— 纯靠透明度差在毛玻璃上会显得没有形状。
+        // Translucent sidebar fill plus a 1 px stroke: alpha alone reads as
+        // shapeless over the frosted backdrop.
         let dark = ui.visuals().dark_mode;
         ui.painter().rect_filled(
             nav_rect,
@@ -359,7 +343,7 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
             egui::StrokeKind::Inside,
         );
 
-        // ① 左栏：导航。内缩 6 px，让选中块的圆角不贴边。
+        // Inset by 6 px so the selection pill does not touch the edge.
         let mut nav_ui = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(nav_rect.shrink2(egui::vec2(6.0, 6.0)))
@@ -367,9 +351,10 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
         );
         widgets::sidebar(&mut nav_ui, ctx.state);
 
-        // ② 右栏：页头 + 卡片内容。
-        // 卡片高度 / 行矩形是"上一帧"几何，翻页时必须清空 ——
-        // 否则新页面的第一帧会拿旧页面的位置算磁吸和悬停底色。
+        // Card heights and row rects describe the previous frame, so they must
+        // be cleared before drawing: the first frame of a new page would
+        // otherwise compute magnets and hover bands from the old page's
+        // geometry.
         ctx.state.card_h_prev = std::mem::take(&mut ctx.state.card_h);
         ctx.state.row_bands_prev = std::mem::take(&mut ctx.state.row_bands);
 
@@ -398,8 +383,8 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
                 Page::About => about::page(&mut ctx, ui),
             });
 
-        // ③ 说明气泡最后渲染：此刻所有行的悬停/点击状态都已结算，
-        // 不会出现"这一帧气泡开着、下一帧状态才更新"的抖动。
+        // Bubbles last: every row's hover and click state is settled by now, so
+        // the bubble never lags a frame behind.
         widgets::render_tip(ui, ctx.state);
     }
     out

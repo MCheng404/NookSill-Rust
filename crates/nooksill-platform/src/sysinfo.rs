@@ -1,47 +1,39 @@
-//! 系统资源采样：CPU 占用率、内存占用、磁盘占用。
+//! System resource sampling: CPU load, memory usage, disk usage.
 //!
-//! 三个数据源：
-//!
-//! - **CPU**：`GetSystemTimes` 的 idle / kernel / user 三个 FILETIME，
-//!   取两次采样之间的差值算占比。idle 计入分母，占比 = 1 - idle/total。
-//! - **内存**：`GlobalMemoryStatusEx` 的 `dwMemoryLoad`（系统直接给的
-//!   百分比）与 `ullTotalPhys` / `ullAvailPhys`（字节数）。
-//! - **磁盘**：`GetDiskFreeSpaceExW` 取 C 盘剩余 / 总容量。
-//!
-//! 全部是只读调用，不改系统状态。
+//! `GetSystemTimes` reports cumulative counters, so CPU load is the delta of
+//! two samples. Every call here is read-only.
 
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::GetSystemTimes;
 
-/// 一次采样的结果。
+/// One sample.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SysInfo {
-    /// CPU 占用率（百分比，0..=100）。
+    /// CPU load percent, 0..=100.
     pub cpu_percent: u8,
-    /// 内存占用率（百分比，0..=100）。
+    /// Memory usage percent, 0..=100.
     pub mem_percent: u8,
-    /// 磁盘占用率（百分比，0..=100）。
+    /// Disk usage percent, 0..=100.
     pub disk_percent: u8,
-    /// 已用内存（MB）。
+    /// Used memory in MB.
     pub mem_used_mb: u64,
-    /// 总内存（MB）。
+    /// Total memory in MB.
     pub mem_total_mb: u64,
-    /// 磁盘剩余（GB）。
+    /// Free disk space in GB.
     pub disk_free_gb: u64,
-    /// 磁盘总量（GB）。
+    /// Total disk size in GB.
     pub disk_total_gb: u64,
 }
 
-/// CPU 占用率的计算器。
+/// CPU load calculator.
 ///
-/// `GetSystemTimes` 给的是**累计值**，必须拿两次采样的差值才能算出占用率。
-/// 所以这个类型要留着自己上次的值 —— 用三个 `static` 变量做同样的事，
-/// 这里做成显式的状态，避免全局可变状态。
+/// `GetSystemTimes` returns cumulative counters, so two samples are needed. The
+/// previous one is held here as explicit state instead of three globals.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct CpuSampler {
-    /// 上一次采样的 idle / kernel / user 累计值（100 ns 单位）。
+    /// Previous cumulative idle / kernel / user, in 100 ns units.
     prev: Option<(u64, u64, u64)>,
 }
 
@@ -51,10 +43,9 @@ impl CpuSampler {
         Self { prev: None }
     }
 
-    /// 采样一次，返回 CPU 占用率（百分比）。
+    /// Take one sample and return the CPU load percent.
     ///
-    /// 第一次调用返回 0 —— 没有上一次的基线，算不出差值。
-    /// 这。
+    /// The first call returns 0: without a previous baseline there is no delta.
     pub fn sample(&mut self) -> u8 {
         let Some((idle, kernel, user)) = system_times() else {
             return 0;
@@ -65,8 +56,8 @@ impl CpuSampler {
         };
         self.prev = Some((idle, kernel, user));
 
-        // 累计值只增不减；时钟回拨或计数器重置时差值会变成巨数，
-        // 那种情况下宁可报 0 也不要给出一个离谱的百分比。
+        // Counters only grow; a clock rollback or reset makes the delta huge.
+        // Reporting 0 beats emitting an absurd percentage.
         let Some(d_idle) = idle.checked_sub(p_idle) else {
             return 0;
         };
@@ -76,9 +67,9 @@ impl CpuSampler {
         let Some(d_user) = user.checked_sub(p_user) else {
             return 0;
         };
-        // 分母是 kernel + user（idle 已包含在 kernel 里）。
-        // 写的是 `tot = dk + du`，其中 dk 是 kernel 的**全量**
-        // （含 idle），这个口径沿用 —— 差一个 idle 会让占用率偏高。
+        // The denominator is kernel + user, and kernel already includes idle.
+        // Keeping full kernel in the sum matters: dropping idle makes the load
+        // read too high.
         let total = d_kernel + d_user;
         if total == 0 {
             return 0;
@@ -89,7 +80,7 @@ impl CpuSampler {
     }
 }
 
-/// 读 `GetSystemTimes`，返回 (idle, kernel, user) 的 100 ns 累计值。
+/// Read `GetSystemTimes` as cumulative (idle, kernel, user) in 100 ns units.
 fn system_times() -> Option<(u64, u64, u64)> {
     let mut idle = FILETIME::default();
     let mut kernel = FILETIME::default();
@@ -102,14 +93,14 @@ fn system_times() -> Option<(u64, u64, u64)> {
     ))
 }
 
-/// FILETIME 的 100 ns 计数转成 u64。
+/// Combine a FILETIME's two 32-bit halves into one 100 ns count.
 fn filetime_value(ft: FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
 
-/// 采样内存与磁盘信息。
+/// Sample memory and disk.
 ///
-/// CPU 部分不在这里 —— 它需要前后两次采样，由 [`CpuSampler`] 负责。
+/// CPU is excluded because it needs two samples; see [`CpuSampler`].
 pub fn sample_memory_disk() -> SysInfo {
     let mut out = SysInfo::default();
 
@@ -123,7 +114,7 @@ pub fn sample_memory_disk() -> SysInfo {
         out.mem_used_mb = ms.ullTotalPhys.saturating_sub(ms.ullAvailPhys) / (1024 * 1024);
     }
 
-    // 取的是 C 盘。
+    // Always the C: drive.
     let mut free_to_caller = 0_u64;
     let mut total = 0_u64;
     let mut total_free = 0_u64;
@@ -152,7 +143,7 @@ pub fn sample_memory_disk() -> SysInfo {
     out
 }
 
-/// 一次完整采样：CPU + 内存 + 磁盘。
+/// Full sample: CPU, memory and disk.
 pub fn sample(cpu: &mut CpuSampler) -> SysInfo {
     let mut out = sample_memory_disk();
     out.cpu_percent = cpu.sample();
@@ -166,7 +157,7 @@ mod tests {
     #[test]
     fn cpu_sampler_first_call_is_zero() {
         let mut s = CpuSampler::new();
-        // 第一次没有基线，算不出占用率。
+        // No baseline on the first call, so no load can be computed.
         assert_eq!(s.sample(), 0);
     }
 

@@ -1,24 +1,23 @@
-//! 启动条目。
+//! Launching dock items.
 //!
-//! 这里只负责"把东西跑起来"，不做任何 UI 反馈 —— 弹跳动画、运行状态扫描
-//! 都在调用方。分成两层的原因是：启动是唯一会**产生外部副作用**的动作，
-//! 单独一个模块才能在测试里显式地不打桩就跑不起来。
+//! Only starts things; the bounce animation and running-state scanning belong
+//! to the caller.
 
 use nooksill_core::item::Item;
 use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-/// 启动失败的原因。
+/// Why launching failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchError {
-    /// 该类型还没实现（组、速记、文件夹扇面）。
+    /// The kind is not implemented yet (group, note, folder fan).
     Unsupported(&'static str),
-    /// Shell 拒绝执行，`code` 是 `ShellExecuteW` 的返回值。
+    /// Shell refused; `code` is the `ShellExecuteW` return value.
     Shell(i32),
-    /// 要打开的路径是空的。
+    /// The target path is empty.
     EmptyTarget,
-    /// 路径不存在（或类型不对，例如要求目录却给了文件）。
+    /// The path does not exist or has the wrong type.
     NotFound(String),
 }
 
@@ -26,7 +25,6 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsupported(what) => write!(f, "{what} 尚未实现"),
-            // 同样以 32 为界；把原始码打出来比"失败"两个字有用得多。
             Self::EmptyTarget => write!(f, "路径为空"),
             Self::NotFound(p) => write!(f, "路径不存在：{p}"),
             Self::Shell(0) => write!(f, "系统内存不足"),
@@ -38,14 +36,14 @@ impl std::fmt::Display for LaunchError {
     }
 }
 
-/// UTF-16 + NUL。`ShellExecuteW` 要求以 NUL 结尾的宽字符串。
+/// NUL-terminated UTF-16, as `ShellExecuteW` requires.
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// 调一次 `ShellExecuteW("open", ...)`。
+/// Call `ShellExecuteW("open", ...)`.
 ///
-/// 返回值 <= 32 表示失败（这是 Win32 的约定，不是我们的选择）。
+/// A return value of 32 or below means failure, by Win32 convention.
 fn shell_open(file: &str, params: Option<&str>, dir: Option<&str>) -> Result<(), LaunchError> {
     let file_w = wide(file);
     let params_w = params.map(wide);
@@ -66,7 +64,7 @@ fn shell_open(file: &str, params: Option<&str>, dir: Option<&str>) -> Result<(),
             SW_SHOWNORMAL,
         )
     };
-    // `HINSTANCE` 装的是 isize；<= 32 是错误码。
+    // `HINSTANCE` holds an isize; 32 or below is an error code.
     let code = ret.0 as i32;
     if code <= 32 {
         return Err(LaunchError::Shell(code));
@@ -74,14 +72,14 @@ fn shell_open(file: &str, params: Option<&str>, dir: Option<&str>) -> Result<(),
     Ok(())
 }
 
-/// 网页应用：`app_mode == 1` 时优先用 Edge / Chrome 的 `--app` 窗口。
+/// Web app: with `app_mode == 1`, prefer an Edge or Chrome `--app` window.
 ///
-/// 顺序沿用：Edge 优先于 Chrome（Windows 上 Edge 一定存在），
-/// 两者都失败才退回默认浏览器 —— 不带 `--app` 的普通标签页。
+/// Edge comes before Chrome because it always exists on Windows; the default
+/// browser, which opens a normal tab, is the last resort.
 fn open_url(url: &str, app_mode: i32, browser: i32) -> Result<(), LaunchError> {
     let app = app_mode == 1;
     for exe in browser_order(browser) {
-        // Firefox 没有 `--app` 这种独立窗口模式，给它普通打开。
+        // Firefox has no `--app` window mode, so it opens normally.
         let params = if app && *exe != "firefox.exe" {
             format!("--app={url}")
         } else {
@@ -90,17 +88,17 @@ fn open_url(url: &str, app_mode: i32, browser: i32) -> Result<(), LaunchError> {
         if shell_open(exe, Some(&params), None).is_ok() {
             return Ok(());
         }
-        // 指定的浏览器没装：继续试下一个，最后退回系统默认。
-        // 「点不动」比「用别的浏览器打开」糟得多。
+        // The chosen browser is missing: try the next, then the system default.
+        // A dead click is worse than opening in another browser.
     }
     shell_open(url, None, None)
 }
 
-/// `Browser` 键 → 依次尝试的可执行文件。
+/// `Browser` key to the executables tried in order.
 ///
-/// 取值见 `CONFIG.md`：0 自动 / 1 Edge / 2 Chrome / 3 Firefox / 4 系统默认。
-/// 自动档沿用"Edge 优先"——Windows 上它一定存在，而且 `--app` 支持最完整。
-/// 空列表 = 直接用系统默认浏览器。
+/// Values: 0 auto, 1 Edge, 2 Chrome, 3 Firefox, 4 system default. Auto prefers
+/// Edge because it always exists on Windows and supports `--app` best.
+/// An empty list means use the system default browser.
 const fn browser_order(browser: i32) -> &'static [&'static str] {
     match browser {
         1 => &["msedge.exe"],
@@ -111,21 +109,10 @@ const fn browser_order(browser: i32) -> &'static [&'static str] {
     }
 }
 
-/// 启动一个条目。
+/// Launch one item.
 ///
-/// 与 `ItemKind` 的对应关系：
-///
-/// | 类型 | 行为 |
-/// |---|---|
-/// | 分割线 | 什么都不做（不是错误） |
-/// | 网址 | `--app` 窗口或默认浏览器 |
-/// | 回收站 | `shell:RecycleBinFolder` |
-/// | 文件 | 工作目录设为文件所在目录 |
-/// | 文件夹 | 直接打开，不设工作目录 |
-/// | 组 / 速记 | 未实现（要等弹窗层） |
-///
-/// 文件与文件夹的差别是就有的：给文件设工作目录，是为了让那些
-/// "在当前目录找资源"的老程序能找到旁边的 dll/配置。
+/// A file gets its own directory as working directory so legacy programs that
+/// look for resources next to themselves still find them; a folder opens as is.
 pub fn launch(item: &Item, browser: i32) -> Result<(), LaunchError> {
     let params = if item.args.is_empty() {
         None
@@ -144,26 +131,25 @@ pub fn launch(item: &Item, browser: i32) -> Result<(), LaunchError> {
             shell_open(&item.path, params, dir.as_deref())
         }
         nooksill_core::item::ItemKind::Folder => shell_open(&item.path, params, None),
-        // 防御性分支：分组与速记现在都在 `bin/dock.rs::step_click` 里
-        // 特判成"打开面板"，走不到这里。保留是防止将来改了类型分发
-        // 却漏掉启动层 —— 那时至少有一句明确的错误，而不是静默成功。
+        // Groups and notes are opened as panels in `bin/dock.rs::step_click`
+        // before reaching here; kept so a dispatch change errors loudly instead
+        // of silently succeeding.
         nooksill_core::item::ItemKind::Group => Err(LaunchError::Unsupported("应用组")),
         nooksill_core::item::ItemKind::Note => Err(LaunchError::Unsupported("速记")),
     }
 }
 
-/// 在资源管理器中打开一个目录（右键菜单的"在资源管理器中打开"）。
+/// Open a directory in Explorer (the context menu action).
 ///
-/// 与 [`launch`] 的区别：这里**总是**用 Explorer，不看条目类型，
-/// 也不传条目自带的参数 —— 那个参数是给应用启动用的，
-/// 塞给 `explorer.exe` 可能被当成开关解析。
+/// Unlike [`launch`], this always uses Explorer and never forwards item args:
+/// those target the app and could be parsed as switches by `explorer.exe`.
 pub fn open_folder(path: &str) -> Result<(), LaunchError> {
     if path.is_empty() {
         return Err(LaunchError::EmptyTarget);
     }
     if !std::path::Path::new(path).is_dir() {
-        // 不是目录就别假装能打开：`ShellExecute` 对不存在的路径
-        // 也可能"成功"返回（转交给默认处理程序），错误会静默消失。
+        // Do not pretend a missing directory opens: `ShellExecute` may report
+        // success by handing it to a default handler, hiding the error.
         return Err(LaunchError::NotFound(path.to_owned()));
     }
     shell_open(path, None, None)
@@ -178,14 +164,14 @@ mod tests {
         Item::new(kind, "测试", "")
     }
 
-    /// 分割线不是"启动失败"，调用方不该因为它弹错误提示。
+    /// A separator is not a launch failure, so no error is reported.
     #[test]
     fn separator_is_a_noop() {
         assert_eq!(launch(&item(ItemKind::Separator), 0), Ok(()));
     }
 
-    /// 组与速记要返回明确的"未实现"，而不是静默成功 ——
-    /// 否则用户点了没反应，也没法从日志里看出原因。
+    /// Groups and notes must report "unsupported" rather than silently succeed,
+    /// otherwise a click does nothing and the log says nothing either.
     #[test]
     fn group_and_note_report_unsupported() {
         assert_eq!(
@@ -198,14 +184,10 @@ mod tests {
         );
     }
 
-    /// 真的启动一个进程并检查它产生了副作用。
+    /// Really start a process and verify the side effect.
     ///
-    /// 标 `ignore` 是因为它会**真的弹出进程**（测试跑在桌面上会闪黑框）。
-    /// 需要验证启动链路时显式跑：
-    ///
-    /// ```text
-    /// cargo test -p nooksill-platform --lib launch -- --ignored
-    /// ```
+    /// Ignored by default because it spawns a real process; run explicitly with
+    /// `cargo test -p nooksill-platform --lib launch -- --ignored`.
     #[test]
     #[ignore = "会真的启动进程，需显式 --ignored"]
     fn launches_a_real_command_and_it_has_an_effect() {
@@ -213,12 +195,12 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
 
         let mut it = Item::new(ItemKind::File, "探针", r"C:\Windows\System32\cmd.exe");
-        // 用 `>` 重定向写文件：能证明命令行参数真的被传下去了，
-        // 而不只是"进程起来了"。
+        // Redirect with `>` to prove the args were passed, not just that a
+        // process started.
         it.args = format!("/c echo ok > {}", marker.display());
         launch(&it, 0).expect("启动失败");
 
-        // ShellExecute 是异步的，轮询等它落盘。
+        // ShellExecute is asynchronous, so poll until the file lands.
         let mut seen = false;
         for _ in 0..40 {
             if marker.exists() {
@@ -233,7 +215,7 @@ mod tests {
         let _ = std::fs::remove_file(&marker);
     }
 
-    /// 错误码要能翻译成人话，至少把常见几个覆盖掉。
+    /// Error codes must translate to readable text, at least the common ones.
     #[test]
     fn error_codes_have_messages() {
         assert_eq!(LaunchError::Shell(2).to_string(), "找不到文件");
@@ -246,7 +228,7 @@ mod tests {
 mod browser_tests {
     use super::browser_order;
 
-    /// 取值语义见 CONFIG.md：0 自动 / 1 Edge / 2 Chrome / 3 Firefox / 4 系统默认。
+    /// Value semantics: 0 auto, 1 Edge, 2 Chrome, 3 Firefox, 4 system default.
     #[test]
     fn browser_key_picks_the_expected_exe() {
         assert_eq!(browser_order(0), &["msedge.exe", "chrome.exe"]);

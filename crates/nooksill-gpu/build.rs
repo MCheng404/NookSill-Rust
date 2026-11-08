@@ -1,9 +1,10 @@
-//! 把 `assets/nooksill.ico` 与版本信息嵌进 nooksill-dock.exe 的资源表 ——
-//! 资源管理器、任务栏、Alt+Tab 看到的应用图标就是它，属性页里的版本号
-//! 来自 `scripts/version.rs`（与 `nooksill_core::VERSION`、产物名同源）。
+//! Embeds `assets/nooksill.ico` and the version info into the resource table
+//! of `nooksill-dock.exe`; that icon is what Explorer, the taskbar and Alt+Tab
+//! show. The version comes from `scripts/version.rs`, the same source as
+//! `nooksill_core::VERSION` and the artifact name.
 //!
-//! 只在 Windows 目标上跑；找不到 rc.exe（没装 Windows SDK）时只警告，
-//! 不让整个构建挂掉 —— 图标是外观，不是编译前提。
+//! Windows only. A missing `rc.exe` (no Windows SDK) only warns: the icon is
+//! cosmetic and must not break the build.
 
 include!("../../scripts/version.rs");
 
@@ -40,14 +41,15 @@ fn main() {
     res.set("LegalCopyright", "GNU GPL v3.0 or Later");
     res.set("OriginalFilename", "nooksill-dock.exe");
     res.set("InternalName", "nooksill-dock");
-    // 数值版本决定"属性 → 详细信息"里的排序，字符串版本决定显示文本；
-    // 两个都要写，否则资源管理器会把 dev 后缀吞掉。
+    // The numeric version drives the sort order in the property sheet, the
+    // string version the displayed text; both are needed, otherwise Explorer
+    // swallows the dev suffix.
     res.set_version_info(winresource::VersionInfo::FILEVERSION, packed(&version));
     res.set_version_info(winresource::VersionInfo::PRODUCTVERSION, packed(&version));
     res.set("FileVersion", &version.text);
     res.set("ProductVersion", &version.text);
 
-    // 只给主程序嵌，probe 之类的工具 exe 不需要。
+    // Only the main binary gets the icon; helper exes like probe do not.
     if let Err(e) = res.compile_for("nooksill-dock") {
         println!("cargo:warning=应用图标资源编译失败（不影响运行）：{e}");
     }

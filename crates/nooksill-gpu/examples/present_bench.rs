@@ -1,9 +1,9 @@
 //! Cost of the layered-window present path, measured on a live window.
 //!
 //! Three per-frame costs, none of which depends on scene complexity:
-//! 1. `upload_rgba_strided` — RGBA rows to premultiplied BGRA inside the DIB;
-//! 2. `present` — full-surface `UpdateLayeredWindow`;
-//! 3. `present_dirty` — `UpdateLayeredWindowIndirect` with a small `prcDirty`.
+//! 1. `upload_rgba_strided` - RGBA rows to premultiplied BGRA inside the DIB;
+//! 2. `present` - full-surface `UpdateLayeredWindow`;
+//! 3. `present_dirty` - `UpdateLayeredWindowIndirect` with a small `prcDirty`.
 //!
 //! ```text
 //! cargo run --release -p nooksill-gpu --example present_bench -- [w] [h] [iters]
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1000.0 / part.mean
     );
     if failures > 0 {
-        println!("failures: {failures} — timings above are not trustworthy");
+        println!("failures: {failures} - timings above are not trustworthy");
     }
     Ok(())
 }

@@ -1,9 +1,8 @@
-//! 显示器枚举与工作区。
+//! Monitor enumeration and work areas.
 //!
-//! `GetMon` 的两个细节必须保留：
-//! 1. **主显示器排第一**，`Monitor` 配置项的下标才有稳定含义；
-//! 2. 枚举失败时回落到"包含 (0,0) 的显示器"，而不是报错 ——
-//!    Dock 是常驻程序，宁可退化到默认屏也不能起不来。
+//! The primary monitor is always first so the `Monitor` config index stays
+//! stable. When enumeration fails the fallback is the monitor containing
+//! (0,0), not an error: the dock must always start.
 
 use nooksill_core::layout::Rect;
 use windows::core::BOOL;
@@ -14,14 +13,14 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
 
-/// 一个显示器。
+/// A single monitor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Monitor {
-    /// 原生句柄，仅用于比较/调试。
+    /// Native handle, used only for comparison and debugging.
     pub handle: isize,
-    /// 完整区域（含任务栏）。
+    /// Full area, taskbar included.
     pub rect: Rect,
-    /// 工作区（不含任务栏）。
+    /// Work area, taskbar excluded.
     pub work: Rect,
     pub primary: bool,
 }
@@ -32,8 +31,8 @@ unsafe extern "system" fn enum_proc(
     _rect: *mut RECT,
     data: LPARAM,
 ) -> BOOL {
-    // SAFETY: `data` 由 `monitors` 传入，指向一个存活的 Vec<HMONITOR>，
-    // 且回调在 `EnumDisplayMonitors` 返回前同步执行。
+    // SAFETY: `data` comes from `monitors` and points at a live Vec<HMONITOR>;
+    // the callback runs synchronously inside `EnumDisplayMonitors`.
     let list = unsafe { &mut *(data.0 as *mut Vec<HMONITOR>) };
     list.push(monitor);
     BOOL(1)
@@ -56,7 +55,7 @@ fn info_of(monitor: HMONITOR) -> Option<(Rect, Rect, bool)> {
     ))
 }
 
-/// 枚举所有显示器，主显示器排第一。
+/// Enumerate all monitors, primary first.
 #[must_use]
 pub fn monitors() -> Vec<Monitor> {
     let mut handles: Vec<HMONITOR> = Vec::new();
@@ -69,7 +68,7 @@ pub fn monitors() -> Vec<Monitor> {
         )
     };
     if !ok.as_bool() && handles.is_empty() {
-        // 极端情况（会话 0 / 远程桌面）：退回主显示器。
+        // Degenerate sessions (0 or a remote desktop) still get the primary.
         let fallback = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
         if let Some((rect, work, _)) = info_of(fallback) {
             return vec![Monitor {
@@ -94,14 +93,14 @@ pub fn monitors() -> Vec<Monitor> {
         })
         .collect();
 
-    // 主显示器前置，其余保持系统顺序。
+    // Primary first, the rest keeps the system order.
     if let Some(pos) = out.iter().position(|m| m.primary) {
         out.swap(0, pos);
     }
     out
 }
 
-/// 取第 `index` 个显示器的工作区；越界回落到主显示器，再不行回落到 1080p。
+/// Work area of monitor `index`; out of range falls back to primary, then 1080p.
 #[must_use]
 pub fn work_area(index: i32) -> Rect {
     let list = monitors();
@@ -116,11 +115,11 @@ pub fn work_area(index: i32) -> Rect {
     list[idx].work
 }
 
-/// 取第 `index` 个显示器的**完整**区域（含任务栏）。
+/// Full area of monitor `index`, taskbar included.
 ///
-/// 与 [`work_area`] 的区别只在 AppBar 上体现：`SHAppBarMessage` 是在整个
-/// 屏幕上切一条，不是在 `rcWork` 里切。传错会算出一条"两次都扣掉任务栏高度"
-/// 的窄条，表现为 Dock 比预期矮一半。
+/// AppBar matters here: `SHAppBarMessage` reserves an edge on the whole screen,
+/// not inside `rcWork`. Passing the work area subtracts the taskbar twice and
+/// yields a dock about half as tall as intended.
 #[must_use]
 pub fn monitor_rect(index: i32) -> Rect {
     let list = monitors();
@@ -137,7 +136,7 @@ pub fn monitor_rect(index: i32) -> Rect {
     )
 }
 
-/// 系统 DPI（见 [`crate::win::system_dpi`] 的说明，为什么要单列一个导出）。
+/// System DPI, re-exported from [`crate::win::system_dpi`].
 #[must_use]
 pub fn system_dpi() -> i32 {
     crate::win::system_dpi()
@@ -149,7 +148,7 @@ mod tests {
 
     #[test]
     fn at_least_one_monitor_on_a_desktop() {
-        // 这条测试只能在有桌面的会话里跑（CI 的 Windows runner 满足）。
+        // Needs a desktop session; the Windows CI runner has one.
         let list = monitors();
         assert!(!list.is_empty(), "至少应枚举到一个显示器");
         assert!(list[0].primary || list.len() == 1);

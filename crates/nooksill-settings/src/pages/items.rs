@@ -1,19 +1,7 @@
-//! 条目页：管理 Dock 栏上的东西。
+//! Items page: manage what sits on the dock bar.
 //!
-//! 这一页是"条目"这件事的**唯一完整入口**。此前条目只能加、不能改：
-//! 名字定死、顺序只能靠拖、删一个就找不回来。分组更是只有一个空壳 ——
-//! 设置页能建一个组，却没有任何办法往里放东西。
-//!
-//! 三块内容：
-//!
-//! | 卡片 | 作用 |
-//! |---|---|
-//! | Dock 条目 | 列出全部条目：改名、改路径与参数、排序、删除 |
-//! | 分组 | 列出全部分组：往里放条目、把条目捞出来、解散分组 |
-//! | 新建 | 建组、加分割线、加回收站 |
-//!
-//! 条目列表由主程序每次同步进来（[`super::SettingsState::items`]）——
-//! 设置界面不持有事实来源，只有一份快照。
+//! Three cards: dock items, groups, and creation. The item list is a snapshot
+//! synced by the host program, which owns the real state.
 
 use egui::{Align, Id, Layout, RichText, Sense, Ui};
 
@@ -23,7 +11,7 @@ use super::widgets::{card, small_button, Ctx};
 use super::{Command, ItemEdit};
 use crate::text_field::{text_field, FieldOpts, FIELD_H};
 
-/// 条目类型的徽标文字。
+/// Badge text for an item kind.
 fn kind_tag(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::File => "应用",
@@ -36,7 +24,7 @@ fn kind_tag(kind: ItemKind) -> &'static str {
     }
 }
 
-/// 条目的第二行说明（路径 / 子项数）。
+/// Second line of an item row: path or child count.
 fn detail(item: &Item) -> String {
     match item.kind {
         ItemKind::Separator => "分隔栏体".to_owned(),
@@ -58,7 +46,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     create_card(ctx, ui);
 }
 
-/// Dock 条目：改名、改路径与参数、排序、删除。
+/// Dock items: rename, edit path and arguments, reorder, remove.
 fn items_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
@@ -74,8 +62,9 @@ fn items_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 );
                 return;
             }
-            // 倒序画：最上面的就是最靠近 Dock 左端的那一项。
-            // 列表是"从上到下 = 从左到右"，所以索引要反过来取。
+            // Drawn in reverse: the list reads top-to-bottom as left-to-right
+            // on the bar, so the top row is the item closest to the dock's
+            // left end.
             let n = ctx.state.items.len();
             for i in (0..n).rev() {
                 let item = ctx.state.items[i].clone();
@@ -85,7 +74,7 @@ fn items_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     );
 }
 
-/// 一个条目的行。
+/// One item row.
 fn item_row(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
     let editing = ctx.state.editing == Some(index);
     ui.horizontal(|ui| {
@@ -128,7 +117,7 @@ fn item_row(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
     }
 }
 
-/// 进入编辑态：把当前值抄进缓冲区。
+/// Enter edit mode, copying the current values into the buffers.
 fn begin_edit(ctx: &mut Ctx<'_>, index: usize, item: &Item) {
     ctx.state.editing = Some(index);
     ctx.state.edit_name = item.name.clone();
@@ -137,7 +126,7 @@ fn begin_edit(ctx: &mut Ctx<'_>, index: usize, item: &Item) {
     ctx.state.edit_group = None;
 }
 
-/// 编辑表单：名称 / 路径 / 参数 / 归属分组。
+/// Edit form: name, path, arguments and target group.
 fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
     let groups: Vec<(usize, String)> = ctx
         .state
@@ -219,18 +208,18 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                         }
                     })
                     .response
-                    // AccessKit 不会把相邻 label 当成控件的名字。少了这一句，
-                    // 读屏软件看到的是一个没有名字的下拉框，kittest 也会拦下。
+                    // AccessKit does not adopt the adjacent label as the
+                    // widget name, so screen readers and kittest need this.
                     .labelled_by(group_label.id);
                 ui.end_row();
             });
 
-        // 图标行**不进 Grid**：一行里塞「路径文字 + 两个按钮」会把
-        // Grid 的第二列撑宽，下一帧回来算列宽时其它行的
-        // `available_width() - 60` 会变负（egui 0.37 直接 panic）。
+        // Icon row stays outside the Grid: a path plus two buttons would widen
+        // column two, and the other rows' `available_width() - 60` would go
+        // negative on the next frame and panic.
         //
-        // 只列 shell 能给图标的格式（`.ico` / `.exe` / `.dll`）——
-        // PNG/JPEG 还没有解码器，放进过滤器会挑到一个用不了的文件。
+        // Only formats the shell can decode are offered: there is no PNG or
+        // JPEG decoder, so listing them would let the user pick a dead path.
         ui.horizontal(|ui| {
             ui.label("图标：");
             let shown = if item.icon_src.is_empty() {
@@ -276,7 +265,7 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
     ui.add_space(8.0);
 }
 
-/// 分组：往里放东西、把东西捞出来、解散分组。
+/// Groups: move items in and out, dissolve.
 fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
@@ -329,8 +318,9 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                                 if small_button(ui, "移出", "把这个子项放回栏体") {
                                     ctx.out.command = Some(Command::ExtractKid(gi, ki));
                                 }
-                                // 用文字而不是「↑/↓」：条目行里已经有同名的箭头按钮，
-                                // 两个列表摆在同一页上，同名会让人分不清点的是哪一个。
+                                // Words instead of arrows: the item rows above
+                                // already use arrows, and both lists share the
+                                // page.
                                 if ki + 1 < group.kids.len()
                                     && small_button(ui, "下移", "在分组里往后移一位")
                                 {
@@ -350,7 +340,7 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     );
 }
 
-/// 新建：组、分割线、回收站。
+/// Creation: group, separator, trash.
 fn create_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(ctx, ui, "新建", "", |ctx, ui| {
         ui.horizontal_wrapped(|ui| {
@@ -367,7 +357,7 @@ fn create_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     });
 }
 
-/// 条目的显示名（空名退回类型名）。
+/// Display name of an item, falling back to the kind tag.
 fn display_name(item: &Item) -> String {
     if item.name.is_empty() {
         kind_tag(item.kind).to_owned()

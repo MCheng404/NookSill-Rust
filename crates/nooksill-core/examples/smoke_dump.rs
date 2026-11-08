@@ -1,14 +1,11 @@
-//! 把一帧烟雾合成到深色背景上，写成 BMP，用于**无 GPU** 地看效果。
+//! Composite one smoke frame onto a dark background and write a BMP, so the
+//! effect can be judged without a GPU.
 //!
-//! 为什么需要它：烟雾是"动起来才好看"的东西，而全部算法都在 core 里、
-//! 不依赖 Win32。有了这个探针，调参（浓度 / 厚度 / 衰减）不用起 Dock，
-//! 改完 `cargo run --example smoke_dump` 就能看图。
-//!
-//! 用法：
+//! Usage:
 //! ```text
-//! cargo run -q -p nooksill-core --example smoke_dump -- [秒] [输出.bmp]
+//! cargo run -q -p nooksill-core --example smoke_dump -- [seconds] [out.bmp]
 //! ```
-//! 默认 4 秒、输出到当前目录的 `smoke.bmp`。
+//! Defaults to 4 seconds and `smoke.bmp` in the current directory.
 
 use std::time::Instant;
 
@@ -17,7 +14,7 @@ use nooksill_core::smoke::{Fluid, Frame, Noise, Tuning, CELL, PALETTE};
 const BAR_W: usize = 720;
 const BAR_H: usize = 48;
 
-/// 栏体尺寸（物理像素）。取用户实际配置：图标 72、内边距 12 → 栏高 48。
+/// Bar size in physical pixels; matches a typical config (icon 72, padding 12).
 fn env_usize(k: &str, d: usize) -> usize {
     std::env::var(k)
         .ok()
@@ -64,7 +61,8 @@ fn main() {
     let w = ((bar_w as f32 + 2.0 * mx) / CELL).ceil() as usize;
     let h = ((bar_h as f32 + 2.0 * my) / CELL).ceil() as usize;
     let mut fl = Fluid::new();
-    // 栏体在网格里的矩形（格）：网格是"栏体 + 边距"，所以从边距反推。
+    // The bar rectangle in grid cells: the grid is "bar + margin", so it is
+    // derived from the margin.
     fl.ensure(
         w,
         h,
@@ -91,7 +89,8 @@ fn main() {
             Frame {
                 dt: 1.0 / fps,
                 time: i as f32 / fps,
-                // 光标停在栏体中间偏左，模拟"鼠标悬停"。
+                // The cursor rests slightly left of the bar center, as if the
+                // mouse hovered there.
                 mouse: (bar_w as f32 * 0.35 / CELL, (bar_h as f32 / 2.0 + my) / CELL),
                 mouse_vel: (0.0, 0.0),
             },
@@ -104,11 +103,12 @@ fn main() {
     fl.post(PALETTE[0], None, (mx, bar_w as f32), tune.opacity);
     let raster_ms = t2.elapsed().as_secs_f32() * 1000.0;
 
-    // 合成：深色底 + 栏体（圆角近似用胶囊距离场）+ 预乘烟雾。
+    // Composite: dark base + bar (rounded corners approximated by a capsule
+    // distance field) + premultiplied smoke.
     //
-    // 按**屏幕像素**遍历，再从半分辨率的位图双线性取值 —— 与 egui 用
-    // `LINEAR` 采样放大 2 倍的效果一致。直接按位图分辨率合成会让栏体
-    // 位置差一倍（第一版就是这么翻的）。
+    // Iterate in screen pixels and sample the half-resolution bitmap
+    // bilinearly, matching the way egui scales it 2x with `LINEAR`. Compositing
+    // at the bitmap resolution would put the bar at half its size.
     let (sw, sh) = (
         pw * nooksill_core::smoke::RES,
         ph * nooksill_core::smoke::RES,
@@ -121,9 +121,10 @@ fn main() {
             let x = sx as f32 + 0.5;
             let y = sy as f32 + 0.5;
             let mut c = [26.0_f32, 27.0, 31.0];
-            // **栏体画在烟之上**：真实 z 序就是这样（烟是背景光晕，
-            // 图标与栏体盖住中间那部分）。先合成烟再判断栏体，否则
-            // 预览会把"被栏体挡住的部分"也画出来，看着比实际浓。
+            // The bar is drawn on top of the smoke, matching the real z order
+            // (the smoke is a background glow that the icons and bar cover).
+            // Compositing the smoke first and testing the bar afterwards
+            // avoids painting the covered part.
             let inside = x >= bar.0 && x < bar.0 + bar.2 && y >= bar.1 && y < bar.1 + bar.3;
             let opaque = if inside {
                 let rx = (bar.0 + radius - x)
@@ -170,7 +171,7 @@ fn main() {
     );
 }
 
-/// 半分辨率位图 → 屏幕像素（双线性）。
+/// Half-resolution bitmap to screen pixels (bilinear).
 fn sample(px: &[u8], pw: usize, ph: usize, sx: usize, sy: usize) -> (u8, u8, u8, u8) {
     let res = nooksill_core::smoke::RES;
     let fx = (sx as f32 + 0.5) / res as f32 - 0.5;
@@ -190,7 +191,8 @@ fn sample(px: &[u8], pw: usize, ph: usize, sx: usize, sy: usize) -> (u8, u8, u8,
     (out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
 }
 
-/// 24 位 BMP（自底向上，行按 4 字节对齐）。不引图片库：这是唯一的用途。
+/// 24-bit BMP (bottom-up, rows padded to 4 bytes). No image crate: this is the
+/// only use.
 fn write_bmp(path: &std::path::Path, rgb: &[u8], w: usize, h: usize) -> std::io::Result<()> {
     let stride = (w * 3).div_ceil(4) * 4;
     let body = stride * h;

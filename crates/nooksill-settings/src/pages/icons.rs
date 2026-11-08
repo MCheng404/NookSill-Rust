@@ -1,4 +1,4 @@
-//! 图标页：底盘、分割线、运行指示、标签。
+//! Icons page: plate, separators, running indicator, labels.
 
 use egui::{RichText, Ui};
 use nooksill_core::config::Key;

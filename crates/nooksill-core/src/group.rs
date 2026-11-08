@@ -1,34 +1,25 @@
-//! 应用组（"目录"）的纯逻辑：建组、归组、出组、解散。
+//! Pure logic for app groups ("folders"): create, merge, extract, dissolve.
 //!
-//! 一个组是 [`ItemKind::Group`] 类型的条目，它的子项存在
-//! [`Item::kids`] 里（上限 [`MAX_KIDS`]）。ini 侧的读写在
-//! [`crate::store`]，本模块只管**内存里**的这些操作。
+//! A group is an [`ItemKind::Group`] item whose children live in [`Item::kids`],
+//! capped at [`MAX_KIDS`]. Ini IO lives in [`crate::store`]; this module only
+//! mutates memory. Groups never nest, overflow errors instead of dropping, and
+//! an extracted child lands right after the group.
 //!
-//! # 为什么单独一个模块
-//!
-//! 分组是唯一一处"条目会变成别的条目的子项"的地方，而条目的下标在
-//! Dock、菜单、图标缓存、拖拽四处都被当作身份用。把归组/出组集中到
-//! 几个纯函数里，才能保证：
-//!
-//! - 组的子项**不能是组**（套娃会让"解散"变成递归，且四宫格图标没意义）；
-//! - 组的子项数量有硬上限（`MAX_KIDS`），超了要报错而不是静默丢弃；
-//! - 出组时子项回到栏体的**哪个位置**是确定的（组的正后方）。
-//!
-//! 全部操作都在 `Vec<Item>` 上就地完成，调用方负责写盘。
+//! Every operation mutates `Vec<Item>` in place; the caller persists.
 
 use crate::item::{Item, ItemKind};
 use crate::MAX_KIDS;
 
-/// 分组操作失败的原因。
+/// Why a group operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupError {
-    /// 下标越界（条目列表里没有这一项）。
+    /// Index out of range.
     NoSuchItem,
-    /// 目标不是组（不能往普通条目里塞子项）。
+    /// Target is not a group, so it cannot take children.
     NotGroup,
-    /// 组的子项已满（`MAX_KIDS`）。
+    /// Group already has `MAX_KIDS` children.
     Full,
-    /// 组里不能塞组。
+    /// Groups cannot be nested.
     Nested,
 }
 
@@ -43,16 +34,16 @@ impl std::fmt::Display for GroupError {
     }
 }
 
-/// 造一个空组。
+/// Create an empty group.
 ///
-/// 名字会按 [`crate::item::truncate_units`] 的规则截断（`name` 字段上限
-/// 127 个 UTF-16 单元），与其它条目一致。
+/// The name is truncated by [`crate::item::truncate_units`] like any other
+/// item (127 UTF-16 units for `name`).
 #[must_use]
 pub fn new_group(name: &str) -> Item {
     Item::new(ItemKind::Group, name, "")
 }
 
-/// 组里的子项数。
+/// Number of children, or 0 for a non-group.
 #[must_use]
 pub fn kid_count(group: &Item) -> usize {
     if group.kind == ItemKind::Group {
@@ -62,19 +53,18 @@ pub fn kid_count(group: &Item) -> usize {
     }
 }
 
-/// 往组里加一个子项。
-///
-/// 拒绝组套组，也拒绝超过 [`MAX_KIDS`]。返回 `Err` 时组**没有被改动**。
+/// Add a child. Rejects nested groups and overflow past [`MAX_KIDS`]. On
+/// `Err` the group is unchanged.
 pub fn add_kid(group: &mut Item, kid: Item) -> Result<(), GroupError> {
     can_add_kid(group, &kid)?;
     group.kids.push(kid);
     Ok(())
 }
 
-/// 能不能把 `kid` 放进 `group`。
+/// Check whether `kid` fits in `group`.
 ///
-/// [`add_kid`] 失败时子项已经被移走了，调用方拿不回来 —— 所以要在
-/// 调用**之前**先问一遍。
+/// Call this before [`add_kid`]: a failed `add_kid` consumes the child and the
+/// caller cannot get it back.
 pub fn can_add_kid(group: &Item, kid: &Item) -> Result<(), GroupError> {
     if group.kind != ItemKind::Group {
         return Err(GroupError::NotGroup);
@@ -88,16 +78,16 @@ pub fn can_add_kid(group: &Item, kid: &Item) -> Result<(), GroupError> {
     Ok(())
 }
 
-/// 从组里取出第 `idx` 个子项（不移除）。
+/// Borrow child `idx` without removing it.
 #[must_use]
 pub fn kid_at(group: &Item, idx: usize) -> Option<&Item> {
     group.kids.get(idx)
 }
 
-/// 解散一个组：把它的子项原样摊平。
+/// Flatten a group into its children.
 ///
-/// 返回的顺序就是子项的顺序 —— 摊到栏体上时保持这个顺序，用户才认得出
-/// "这是刚才那个组里的东西"。
+/// The returned order is the child order; spreading them onto the bar in that
+/// order keeps the group recognizable to the user.
 #[must_use]
 pub fn dissolve(group: &Item) -> Vec<Item> {
     if group.kind == ItemKind::Group {
@@ -107,9 +97,9 @@ pub fn dissolve(group: &Item) -> Vec<Item> {
     }
 }
 
-/// 把 `items[src]` 并入 `items[dst]`（`dst` 必须是组）。
+/// Merge `items[src]` into `items[dst]`, which must be a group.
 ///
-/// `src` 的条目会从栏体上消失（它变成组的子项了）。组内不能套组。
+/// `src` disappears from the bar and becomes a child. Groups cannot nest.
 pub fn merge_item(items: &mut Vec<Item>, src: usize, dst: usize) -> Result<(), GroupError> {
     if src >= items.len() || dst >= items.len() {
         return Err(GroupError::NoSuchItem);
@@ -124,14 +114,14 @@ pub fn merge_item(items: &mut Vec<Item>, src: usize, dst: usize) -> Result<(), G
         return Err(GroupError::Nested);
     }
     let item = items.remove(src);
-    // `src` 可能大于 `dst`，移除后目标下标要跟着前移。
+    // Removing `src` before `dst` shifts the target down by one.
     let dst = if src < dst { dst - 1 } else { dst };
     add_kid(&mut items[dst], item)
 }
 
-/// 把组里的第 `kid` 个子项搬回栏体，插在组的**正后方**。
+/// Move child `kid` back onto the bar, right after the group.
 ///
-/// 返回子项在栏体里的新下标。
+/// Returns the child's new index on the bar.
 pub fn extract_kid(
     items: &mut Vec<Item>,
     group_idx: usize,
@@ -152,9 +142,10 @@ pub fn extract_kid(
     Ok(at)
 }
 
-/// 解散 `items[group_idx]` 这个组：子项摊平到栏体，插在组原来的位置。
+/// Dissolve `items[group_idx]`: children spread onto the bar at the group's
+/// slot, the group itself removed.
 ///
-/// 返回子项在栏体里的新下标（组被移除了）。
+/// Returns the index of the first child.
 pub fn dissolve_item(items: &mut Vec<Item>, group_idx: usize) -> Result<usize, GroupError> {
     if group_idx >= items.len() {
         return Err(GroupError::NoSuchItem);
@@ -171,9 +162,10 @@ pub fn dissolve_item(items: &mut Vec<Item>, group_idx: usize) -> Result<usize, G
     Ok(at)
 }
 
-/// 把组里的第 `kid` 个子项上移（`-1`）或下移（`+1`）。
+/// Move child `kid` up (`-1`) or down (`+1`).
 ///
-/// 越界（包括首尾再往外移）返回 `NoSuchItem`，组**不改**。
+/// Out of range, including moving past either end, returns `NoSuchItem` and
+/// leaves the group unchanged.
 pub fn move_kid(group: &mut Item, kid: usize, delta: i32) -> Result<(), GroupError> {
     if group.kind != ItemKind::Group {
         return Err(GroupError::NotGroup);
@@ -189,10 +181,10 @@ pub fn move_kid(group: &mut Item, kid: usize, delta: i32) -> Result<(), GroupErr
     Ok(())
 }
 
-/// 组图标用几格。
+/// Grid cells used to draw a group icon.
 ///
-/// 上游是 2×2 四宫格：1 个子项占满整格，2 个占上下两格，3–4 个占四格。
-/// 返回值是 `(列数, 行数)`。
+/// The icon is a 2x2 quadrant: 1 child fills it, 2 split it top/bottom, 3-4
+/// use all four cells. Returns `(cols, rows)`.
 #[must_use]
 pub const fn grid_cells(n: usize) -> (usize, usize) {
     match n {
@@ -269,7 +261,7 @@ mod tests {
 
     #[test]
     fn merge_handles_source_after_target() {
-        // 源下标大于目标时，移除源会让目标前移一位。
+        // Removing an earlier source shifts the target down by one.
         let mut items = vec![new_group("工具"), file("a"), file("b")];
         merge_item(&mut items, 2, 0).expect("应当成功");
         assert_eq!(items.len(), 2);
@@ -337,7 +329,7 @@ mod tests {
         assert_eq!(grid_cells(9), (2, 2), "超过四个也只用四格");
     }
 
-    /// 组内子项排序：交换相邻两项，首尾越界不动。
+    /// Swap adjacent children; moving past either end does nothing.
     #[test]
     fn move_kid_swaps_neighbours_only() {
         let mut g = new_group("工具");
@@ -364,7 +356,8 @@ mod tests {
         assert_eq!(move_kid(&mut it, 0, 1), Err(GroupError::NotGroup));
     }
 
-    /// 解散之后子项要能原样存回 ini 再读出来（子项的字段不能丢）。
+    /// After dissolving, children must round-trip through the ini with all
+    /// their fields intact.
     #[test]
     fn dissolved_kids_survive_a_store_roundtrip() {
         let mut g = new_group("工具");

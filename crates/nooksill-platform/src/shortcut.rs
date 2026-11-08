@@ -1,8 +1,6 @@
 //! Resolve a `.lnk` to its target executable.
 //!
-//! Needed to match a Dock item against a running process.
-//! Uses the generated `windows` 0.62.2 wrappers; their signatures match the
-//! COM ABI (ADR-063 supersedes ADR-029).
+//! Needed to match a dock item against a running process.
 
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::System::Com::{
@@ -59,20 +57,20 @@ fn resolve_lnk(path: &str) -> Option<Shortcut> {
     }
 }
 
-/// 读一个 `.url` Internet Shortcut，取出目标网址。
+/// Read a `.url` Internet Shortcut and return its URL.
 ///
-/// 拖入 `.url` 时不能当成普通 `File`：那样 `ShellExecute` 虽然也能打开，
-/// 但 `ItemKind::File` 会走运行状态扫描、图标按 exe 取，语义全错。
-/// 解析成 `ItemKind::Url` 才能走 `Browser` 配置那套浏览器选择。
+/// A `.url` cannot be treated as a plain `File`: `ShellExecute` would still open
+/// it, but `ItemKind::File` triggers running-state scanning and exe icon
+/// lookup. Parsing it as `ItemKind::Url` routes it through the `Browser` choice.
 #[must_use]
 pub fn read_url_shortcut(path: &str) -> Option<String> {
-    // `.url` 常见是 ANSI/UTF-8，偶尔带 BOM。`from_utf8_lossy` 会把坏字节
-    // 换成占位符，但 `URL=` 那一行是纯 ASCII，不受影响。
+    // `.url` files are usually ANSI or UTF-8, occasionally with a BOM.
+    // `from_utf8_lossy` replaces bad bytes, but the `URL=` line is pure ASCII.
     let bytes = std::fs::read(path).ok()?;
     parse_url_shortcut(&String::from_utf8_lossy(&bytes))
 }
 
-/// 从 `.url` 的文本里找 `URL=`。抽成纯函数，单测不必造临时文件。
+/// Find `URL=` in the text of a `.url` file. Pure so tests need no temp file.
 #[must_use]
 pub fn parse_url_shortcut(content: &str) -> Option<String> {
     let mut in_section = false;
@@ -92,7 +90,7 @@ pub fn parse_url_shortcut(content: &str) -> Option<String> {
             continue;
         }
         let url = value.trim();
-        // 只认真网址：本地路径、空值、奇怪的 scheme 一律不给。
+        // Real URLs only: local paths, empty values and odd schemes are rejected.
         if url.len() > 8
             && (url.starts_with("http://")
                 || url.starts_with("https://")
@@ -141,8 +139,8 @@ mod tests {
     #[test]
     fn url_shortcut_ignores_other_sections_and_casing() {
         let s = "\u{feff}[InternetShortcut]\r\n url = HTTP://Example.COM \r\n[Other]\r\nURL=file:///etc/passwd\r\n";
-        // 只认小写 http/https/ftp 前缀，大小写不一致的 scheme 不给 ——
-        // `open_url` 后续按字符串直接拼，宁可保守。
+        // Only lowercase http/https/ftp prefixes pass; schemes with different
+        // case are rejected because `open_url` concatenates strings verbatim.
         assert_eq!(parse_url_shortcut(s), None);
         let ok = "[internetshortcut]\nURL=http://a.cn\n[Other]\nURL=file:///x\n";
         assert_eq!(parse_url_shortcut(ok), Some("http://a.cn".to_owned()));

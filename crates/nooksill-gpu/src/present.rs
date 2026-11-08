@@ -1,15 +1,8 @@
-//! 分层窗口呈现：DIB + `UpdateLayeredWindow`。
+//! Layered-window presentation: DIB plus `UpdateLayeredWindow`.
 //!
-//! 这是 M0 之后 Dock 的**唯一**呈现路径。它把"GPU 渲染"和"逐像素透明"
-//! 两件事拆开：GPU 负责画，`UpdateLayeredWindow` 负责把预乘位图交给 DWM。
-//!
-//! 几个必须踩准的点：
-//! 1. 窗口必须带 `WS_EX_LAYERED`，且不能用 `SetLayeredWindowAttributes`
-//!    （与 `UpdateLayeredWindow` 互斥）。
-//! 2. DIB 是 **BGRA + 预乘 alpha**；egui 的混合结果已经是预乘，只需换通道序。
-//! 3. 颜色源必须用 **sRGB 纹理**（`Rgba8UnormSrgb`）。反过来试过
-//!    `Rgba8Unorm`：egui 在非 sRGB 目标上自己做一次 gamma 编码，24 灰变 81 灰，
-//!    整块面板发白。硬件做编码、回读即屏幕值，这条链路才对。
+//! The window needs `WS_EX_LAYERED` and must not mix in
+//! `SetLayeredWindowAttributes` (mutually exclusive). The DIB is BGRA with
+//! premultiplied alpha, matching egui's blend output apart from channel order.
 
 use std::ffi::c_void;
 
@@ -25,27 +18,27 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::gpu::GpuError;
 
-/// 一块可以直接喂给分层窗口的 DIB。
-/// 倒影参数。坐标与尺寸都是**物理像素**，相对窗口左上角。
+/// Reflection parameters. Coordinates and sizes are physical pixels, relative to
+/// the window's top-left corner.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reflection {
-    /// 镜像源区顶行（栏体上沿）。
+    /// Top row of the mirrored source (the bar's top edge).
     pub src_top: i32,
-    /// 镜像源区高度（栏高）。
+    /// Height of the source region (the bar height).
     pub src_h: i32,
-    /// 栏体下沿与倒影之间的空隙。
+    /// Gap between the bar's bottom edge and the reflection.
     pub gap: i32,
-    /// 倒影区总高（决定衰减曲线的长度）。
+    /// Total reflection height, i.e. the length of the fade.
     pub height: i32,
-    /// 起始不透明度，0..1。
+    /// Starting opacity, 0..1.
     pub opacity: f32,
 }
 
-/// 倒影的核心：把 `src_top` 起的 `src_h` 行上下翻转后写到其下 `gap` 行处，
-/// 纵向线性衰减。
+/// Flip the `src_h` rows starting at `src_top` into the `gap` rows below them,
+/// fading linearly downwards.
 ///
-/// 抽成自由函数是为了能单测：`LayeredPresenter` 要建 GPU 设备，测不起。
-/// `dst` 是预乘 BGRA 的整帧缓冲，`w` 是宽度（像素）。
+/// Free function so it can be tested: `LayeredPresenter` needs a GPU device.
+/// `dst` is the whole frame in premultiplied BGRA, `w` the width in pixels.
 pub fn mirror_rows(dst: &mut [u8], w: usize, h: i32, spec: Reflection) {
     let Reflection {
         src_top,
@@ -65,7 +58,7 @@ pub fn mirror_rows(dst: &mut [u8], w: usize, h: i32, spec: Reflection) {
     }
 
     for y in 0..rows {
-        // 目标第 0 行取源区**最下面**一行，往上依次回溯 —— 镜像。
+        // The first destination row takes the source's last row: a mirror.
         let src_y = src_top + src_h - 1 - y;
         if src_y < 0 {
             break;
@@ -169,7 +162,7 @@ impl LayeredPresenter {
         swap_rb_strided(dst, src, row, rows, src_stride);
     }
 
-    /// 调试用：读 DIB 里的一个像素（BGRA）。
+    /// Debug helper: read one pixel from the DIB (BGRA).
     #[must_use]
     pub fn debug_pixel(&self, x: i32, y: i32) -> [u8; 4] {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {
@@ -180,24 +173,26 @@ impl LayeredPresenter {
         [slice[0], slice[1], slice[2], slice[3]]
     }
 
-    /// 把 `src_top` 起的 `src_h` 行**上下翻转**后画到其下方 `gap` 行处，
-    /// 纵向按 `opacity` 线性衰减 —— 倒影就是这么来的。
+    /// Draw the reflection: flip the `src_h` rows at `src_top` into the `gap`
+    /// rows below, fading downwards by `opacity`.
     ///
-    /// DIB 是预乘 BGRA：四个通道一起乘衰减系数等于"乘 alpha"，颜色不会偏。
-    /// 源区与目标区必然不重叠（目标从栏体下沿开始），所以可以原地读写。
+    /// The DIB is premultiplied BGRA, so scaling all four channels applies the
+    /// fade without shifting color. Source and destination never overlap, so an
+    /// in-place write is fine.
     pub fn mirror_below(&mut self, spec: Reflection) {
         let w = self.width as usize;
         let h = self.height;
         if w == 0 || h <= 0 {
             return;
         }
-        // SAFETY: `bits` 覆盖 width*height 个 BGRA 像素；`mirror_rows` 的所有
-        // 下标都在这个范围内（越界行直接 break）。
+        // SAFETY: `bits` covers width*height BGRA pixels; `mirror_rows` clamps
+        // every index into that range and breaks on out-of-range rows.
         let dst = unsafe { std::slice::from_raw_parts_mut(self.bits, w * h as usize * 4) };
         mirror_rows(dst, w, h, spec);
     }
 
-    /// 交给 DWM。`x/y` 是窗口左上角的屏幕坐标。
+    /// Hand the DIB to DWM. `x` / `y` are the window's top-left in screen
+    /// coordinates.
     pub fn present(&self, hwnd: HWND, x: i32, y: i32) -> Result<(), GpuError> {
         let dst = POINT { x, y };
         let src = POINT { x: 0, y: 0 };
@@ -263,10 +258,9 @@ impl LayeredPresenter {
     }
 }
 
-/// 0xAARRGGBB → 0xAABBGGRR：保留 A/G，交换 R 与 B。
+/// 0xAARRGGBB -> 0xAABBGGRR: keep A and G, swap R with B.
 ///
-/// 抽成纯函数有两个原因：可以在没有窗口/DC 的环境里单测，
-/// 也可以直接比对"逐字节赋值"的旧写法来量化收益。
+/// Pure so it can be tested without a window or a DC.
 fn swap_rb(dst: &mut [u32], src: &[u32]) {
     debug_assert_eq!(dst.len(), src.len());
     for (d, s) in dst.iter_mut().zip(src) {
@@ -351,8 +345,8 @@ impl Drop for LayeredPresenter {
 mod tests {
     use super::{mirror_rows, swap_rb, swap_rb_strided, swap_rb_strided_scalar, Reflection};
 
-    /// 4 像素宽、6 行：源区 0..2（第 0 行 = 100，第 1 行 = 50），
-    /// 倒影从第 3 行开始（gap=1），高 3 行。
+    /// 4 pixels wide, 6 rows: source rows 0..2 (row 0 = 100, row 1 = 50), the
+    /// reflection starts at row 3 (gap=1) and is 3 rows tall.
     fn spec(src_top: i32, src_h: i32, gap: i32, height: i32, opacity: f32) -> Reflection {
         Reflection {
             src_top,
@@ -379,11 +373,12 @@ mod tests {
         let mut v = buffer();
         mirror_rows(&mut v, 4, 6, spec(0, 2, 1, 3, 1.0));
         let row = |y: usize| v[(y * 4) * 4];
-        // 第 3 行（倒影第一行）取源的**最后**一行：50，衰减 1 - 0/3 = 1
+        // Row 3 (first reflection row) takes the source's last row: 50, faded
+        // by 1 - 0/3.
         assert_eq!(row(3), 50, "第一行该是源区的底行");
-        // 第 4 行取源区上一行（100），衰减 1 - 1/3 ≈ 0.667
+        // Row 4 takes the row above (100), faded by 1 - 1/3 ~ 0.667.
         assert_eq!(row(4), 67, "第二行往上回溯并按距离衰减");
-        // 第 5 行：源已耗尽（只剩一行是 2 行高的源）→ 继续回溯到负数就停
+        // Row 5: the source is exhausted, and the loop stops at a negative index.
         assert_eq!(row(5), 0, "源区用完之后不该凭空画东西");
     }
 
@@ -391,7 +386,7 @@ mod tests {
     fn keeps_gap_untouched() {
         let mut v = buffer();
         mirror_rows(&mut v, 4, 6, spec(0, 2, 1, 3, 1.0));
-        // 第 2 行是空隙（gap=1），必须原样保留。
+        // Row 2 is the gap (gap=1) and must stay untouched.
         assert_eq!(v[(2 * 4) * 4], 0, "空隙行不该被写");
     }
 
@@ -406,7 +401,7 @@ mod tests {
     #[test]
     fn refuses_to_write_past_the_buffer() {
         let mut v = buffer();
-        // 倒影区比缓冲还高：只能写到缓冲区末尾，不能越界。
+        // The reflection is taller than the buffer, so writing stops at its end.
         mirror_rows(&mut v, 4, 6, spec(0, 2, 1, 100, 1.0));
         assert_eq!(v.len(), 4 * 6 * 4);
     }
@@ -494,7 +489,7 @@ mod tests {
 
     #[test]
     fn swap_rb_matches_byte_wise_reference() {
-        // 覆盖边界：全 0、全 1、最大 alpha、只剩单通道。
+        // Edge cases: all zero, all ones, max alpha, single channels.
         let cases: [u32; 6] = [
             0x0000_0000,
             0xFFFF_FFFF,
@@ -512,12 +507,9 @@ mod tests {
         }
     }
 
-    /// 与旧写法（逐字节四次赋值）比对吞吐。**只打印不断言**：
-    /// 时间在不同机器/负载下波动，断言会变成 flaky 测试。
-    ///
-    /// 默认 `#[ignore]`：它要搬 1320×1080×4×20 ≈ 114 MB，是 benchmark 不是
-    /// 正确性测试，放进默认的 `cargo test` 只会让每次跑测试都慢一秒多。
-    /// 需要数字时显式跑：`cargo test -p nooksill-gpu -- --ignored --nocapture`。
+    /// Compares throughput against the old byte-wise loop. Prints only: timings
+    /// vary by machine, so asserting would be flaky. Ignored by default; run with
+    /// `--ignored --nocapture`.
     #[test]
     #[ignore = "吞吐 benchmark，用 --ignored 显式运行"]
     fn swap_rb_throughput() {
@@ -537,8 +529,8 @@ mod tests {
         }
         let fast = t0.elapsed();
 
-        // 旧写法**原样**搬过来（逐字节四次赋值），不要用 `to_le_bytes` 构造替身
-        // —— 那测的是另一段代码，会夸大收益。
+        // The old loop is copied verbatim; a `to_le_bytes` stand-in would measure
+        // different code and inflate the gain.
         let src_bytes = unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u8>(), n * 4) };
         let slow_bytes =
             unsafe { std::slice::from_raw_parts_mut(slow.as_mut_ptr().cast::<u8>(), n * 4) };

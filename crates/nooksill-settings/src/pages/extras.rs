@@ -1,4 +1,4 @@
-//! 附件页：时钟、倒影、小组件、浏览器。
+//! Extras page: clock, reflection, widgets, browser.
 
 use egui::Ui;
 use nooksill_core::config::Key;
@@ -89,7 +89,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             "速记（点击即可记录文字）",
             "开启后 Dock 上出现「速记」图标",
         );
-        // 开关旁边给一个直接入口：光有图标时用户还得先找到它。
+        // Shortcut next to the switch: the dock icon alone is hard to find.
         button(ctx, ui, "打开速记…", Command::OpenNotes);
     });
 }

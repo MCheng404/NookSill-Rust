@@ -1,7 +1,4 @@
-//! 效果页：栏体周围的环境烟雾。
-//!
-//! 一项设置对应 `[effect.smoke]` 的一个键。这一页总共一屏，所以不折叠 ——
-//! 折叠起来反而要多点一次才看得到「浓度」。
+//! Effect page: ambient smoke around the bar, one key per setting.
 
 use egui::Ui;
 use nooksill_core::config::Key;

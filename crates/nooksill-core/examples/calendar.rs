@@ -1,6 +1,6 @@
-//! 打印某个月的日历网格与农历信息，用来人工核对渲染与算法。
+//! Print one month's calendar grid and lunar info for manual verification.
 //!
-//! 用法：`cargo run -q -p nooksill-core --example calendar -- 2026 11`
+//! Usage: `cargo run -q -p nooksill-core --example calendar -- 2026 11`
 
 use nooksill_core::calendar::{self, CalendarState};
 
