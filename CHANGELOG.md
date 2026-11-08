@@ -1,951 +1,110 @@
 # 变更记录
 
-格式：里程碑为单位，每条写"做了什么 / 为什么 / 已知问题"。
-版本号从 1.0.0 起以 `Cargo.toml` 为唯一来源；此前按里程碑递进，
-未与 crate 版本绑定（0.1.0 一直没动过）。
+每个版本一节，只写「改了什么 + 依据 + 验证」。过程叙事、排查流水、临时产物清单
+不进这里。`2026-11-06` 及更早的条目是当时的原始记录，保留原样。
 
 ---
 
-## 未发布 — 运行中应用可固定 / 长度键改逻辑像素（2026-11-08）
+## 未发布 — 2.0.0 之后（2026-11-08）
 
-### 依据
+### Dock 交互
 
-三条用户需求，加一个在改它们时暴露出来的旧 bug：
-
-1. 正在运行的应用应当能**固定**进 Dock，而不是永远挂在右边；
-2. 运行中应用应当能**自由排序**（上一轮只做到"段内可排"，跨段被夹住）；
-3. 图标大小等尺寸应当"**先 DPI 自动调整，再经人工设置**"，其余渲染同理；
-4. 顺带发现：`[Settings]` 里 10 个键（`HideDelay` / `ShowDelay` 两对、
-   `Widget*` / `Panel*` 共 6 个）**从来没进过读写列表** —— 滑块能调、当次
-   生效、重启回默认值。它们是前几轮加的键，`Key::ALL` / `EXTRA` 都没补。
-
-### 改了什么
-
-| 位置 | 做法 |
-|---|---|
-| 固定（菜单） | `MenuCmd::PinItem` + `App::pin_item`：把临时条目搬进 `raw` 并写盘，追加到固定区末尾 |
-| 固定（手势） | `reorder_bar` 返回 `BarMove{Pinned,Running,PinnedNow}`；**运行中应用拖进固定区 = 就地固定**，落点就是它在配置里的位置。`Dock::clamp_segment` 只挡"固定条目拖进运行中区" |
-| 分段边界 | `Dock::set_pinned` 在固定发生时立刻更新（不能等 `sync_items` —— 拖动期间它是挂起的） |
-| 长度单位 | `Config` 存 96 DPI 逻辑像素；`calc_metrics` / `Dock::pxf` 乘 `dpi/96`；`Key::is_length()` 是唯一判定（`NUMERIC_KEYS` 最后一列，顺手补齐了 `SepWidth` / `ReflGap` / `WidgetRadius` / `WidgetGap`） |
-| 迁移 | `CONFIG_VERSION` 3 → 4；`Config::migrate_units` 把旧 ini 的长度键按当前 DPI 换算成逻辑像素；1.x 文件在 `upgrade_legacy` 里一并换算。百分比 / 角度 / 颜色 / 毫秒一律不动 |
-| 持久化 | 10 个漏写的键补进 `Key::EXTRA`；新增 `every_numeric_key_is_persisted` 单测守住"表里有、读写列表里没有"这类漏配 |
-| 验收工具 | `dock_shot` 跑 120 帧再截屏（此前只跑一帧，图标还停在入场动画的 30%，看不出真实比例） |
-
-### 单位换算的实际效果
-
-同一份 ini 在 100% 下 `IconSize=48` 画 48 px，在 150% 下画 72 px。
-用户已有的配置升级一次后**物理尺寸完全不变**（72 物理 → 48 逻辑 → 72 物理），
-但从此换显示器 / 换缩放比不用再手调。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿。新增/改写的单测：
-
-- `dock::running_items_can_be_dragged_into_the_pinned_zone`（运行中应用能拖到
-  最前面且拖动不断）、`dock::running_items_swap_among_themselves`；
-- `reorder_bar` 三条：固定段内换位、运行中段内换位（`temp_keys` 同步）、
-  **拖进固定区就地固定**（`raw` / `temps` / `temp_keys` 三者都对）；
-  以及"固定条目拖不进运行中区"必须被拒；
-- `config::defaults_are_logical_pixels`、`length_keys_are_exactly_the_pixel_sized_ones`、
-  `migrate_units_converts_only_the_length_keys`（含幂等）、
-  `every_numeric_key_is_persisted`；
-- `units::unscale_round_trips_the_common_tiers`。
-
-离屏验收：`dock_shot` 在 dpi=120 下出图，图标充满卡片高度、圆角与倒影正常
-（换算后 48 逻辑 → 60 物理）。
-
-### 注意
-
-行为变化两处：① 运行中应用拖进固定区会被**永久固定**（写 ini）；
-② 从菜单固定时图标会跳到固定区末尾（拖拽固定则落在原地）。
-
----
-
-## 未发布 — 修复拖动换位被打断（2026-11-08）
-
-### 依据
-
-用户报告："拖动调整 Dock 图标，在换位的一瞬间就被什么东西打断了"。
-
-根因不在拖拽状态机（逐帧扫过整条栏的模拟是单调的），而在**换位之后
-主循环的重建**：`step_reorder` 拿到的 `(from, to)` 只要有一个落在
-"运行中应用"那一段，就判定成"配置里没有这一项"，随即
-`sync_items()` → `Dock::replace_items()`，而 `replace_items` 会把
-`drag`、`press`、`hover` 一起清掉 —— 用户看到的就是图标刚换到新位置、
-拖动立刻断，并且栏体顺序被还原。实机配置 `[Items] Count=0`（全部图标
-都来自"显示运行中应用"），所以**第一次换位就会撞上**。
-
-同时发现两个同源问题：`pending_move` 只有一个槽位，一帧里连着换位
-（消息队列被抽干时才轮到主循环）只会记住最后一次，配置顺序与栏体
-差一格 —— 点 A 启动 B；`sync_items` 也没有"正在拖动"的概念。
-
-### 改了什么
-
-| 位置 | 做法 |
-|---|---|
-| 分段 | `Dock` 新增 `pinned`（前 N 项来自配置）+ `set_pinned`；`drag_to` 用 `clamp_segment` 把插入下标夹在被拖项**自己那一段**里。栏体上"固定项夹在临时项中间"这种顺序配置装不下，夹住之后同步就只是搬数组，不必整条重建 |
-| 重排队列 | `pending_move: Option<_>` → `pending_moves: Vec<_>`，`take_pending_moves()` 按顺序施加上去，一帧多次换位不再丢 |
-| 落点 | 新增 `reorder_bar(raw, temps, temp_keys, from, to)`：固定条目改 `raw`；运行中应用改 `temps` **并同步 `temp_keys`**（扫描线程按它保序，不写回的话约 1.2 s 后的扫描会把顺序冲掉）。跨段或越界返回 `false` |
-| 重建挂起 | `sync_items` 在 `Dock::press_active()` 期间只置 `items_stale`，由 `flush_items_stale` 在松手后补（主循环 ③.5）。`press_active` 覆盖"按下但还没越过起拖阈值"的几帧 —— `dragging()` 只认已起拖 |
-| 写盘 | 只有固定条目进了配置才 `touch_items()`：全是运行中应用的栏体拖完不该产生一次内容没变的 `[Items]` 回写 |
-| 重建观感 | `replace_items` 按路径（内置条目按位置）沿用上一帧的 `cur`：条目列表因"运行中应用变化"重建时不再让整条栏体从 0 重新长出来。真正新出现的条目仍是 0，入场动画照旧 |
-| 移除/归组 | 拖出或拖到组上的若是运行中应用，给出明确提示并重建回配置顺序（松手后重建，不再打断拖动） |
-
-### 验证
-
-新增 9 条单测：
-
-- `dock::dragging_across_the_bar_never_ping_pongs` —— 每次 `drag_to` 后跟一帧
-  `update()`（真机就是这样），顺序必须单调向右、不回头；
-- `dock::dragging_never_crosses_the_pinned_boundary`（2 固定 + 2 运行中：
-  只换一格且 `dragging()` 仍为 `Some`）、`dock::running_items_swap_among_themselves`
-  （`pinned=0` 时照样能换位）、`dock::press_state_covers_the_frames_before_the_drag_starts`、
-  `dock::a_stale_pinned_count_cannot_break_the_clamp`、
-  `dock::replacing_items_keeps_the_current_icon_size`；
-- `dock::reorder_inside_the_pinned_segment_edits_raw`、
-  `dock::reorder_between_running_items_keeps_temp_keys_in_step`、
-  `dock::reorder_across_the_segments_is_refused`。
-
-`./scripts/build.sh --gate` 全绿（fmt + clippy `-D warnings` + 全量测试）。
-
-实机日志（`NOOKSILL_GEOM=1`）确认了成因现场：启动即是
-`[items] 重建 raw=0 temps=3` —— 固定条目为 0、全是运行中应用，所以
-**第一次换位**就一定落到旧代码的"丢弃 + 重建"分支。真机逐帧拖动的
-注入验证受桌面上的真实鼠标干扰，没能拿到干净的 `[reorder]` 序列；
-本轮以单测为准。
-
-### 注意
-
-行为变化：固定条目拖不过"运行中应用"那一段（会在分界处停住）。
-换位后的运行中应用顺序**只活在本次会话**（`temp_keys`，不写 ini）。
-
----
-
-## 未发布 — 拖放动态让位（OLE IDropTarget，2026-11-08）
-
-### 依据
-
-从桌面 / 资源管理器 / 任务管理器拖图标进 Dock 时，旧版只在松手时收到
-一条 `WM_DROPFILES` —— 拖拽过程中没有任何反馈，看不到"会插在哪"。
-用户要求拖到两个图标之间时，两侧图标实时向左右让出位置；拖出移除时
-也要看到合拢预览。`DragAcceptFiles` 拿不到 `DragOver`，因此必须接 OLE
-`IDropTarget`（PORTING.md 台账第 5 条）。
-
-### 改了什么
-
-| 层 | 做法 |
-|---|---|
-| OLE 目标 | 新增 `gpu::drop_target::DockDropTarget`（`#[implement(IDropTarget)]`）。`DragEnter` 用 `QueryGetData` 只收 `CF_HDROP`；`DragOver` 把 `POINTL` 转客户区并写 [`Dock::set_external_drop`]；`DragLeave`/`Drop` 清让位；`Drop` 从 `IDataObject` 取 `STGMEDIUM`，`DragQueryFileW` 拿路径后**无条件** `ReleaseStgMedium`，再复用现有 `push_dropped_paths` |
-| 注册 | `run()` 里 `OleInitialize` → `RegisterDragDrop(hwnd, &target)`，`app.run()` 结束后、窗口销毁前 `RevokeDragDrop`。`IDropTarget` 保持为 `run()` 局部变量，晚于 Revoke 析构。`DragAcceptFiles` 留作注册失败兜底；`WM_DROPFILES` 分支不动 |
-| 布局 | `layout::place_slots_insert(m, cur, extra, Some((index, width)))` 在插入点预留一个图标宽的空槽并计入 `bar_w`；旧 `place_slots` 包装调用它，所有既有调用与测试零改动。`Slots` 新增 `insert_l` 给绘制层 |
-| 让位动画 | `Dock::update` 对比上一帧 `slot_l`，空槽出现/消失时给每个图标补一次 `slide`，让位与合拢是滑过去的而不是瞬间跳变；与既有重排补偿互不重叠 |
-| 插入标记 | `paint_insert_mark` 在空槽中央画一条圆角胶囊线，深/浅各一档；空状态文案不再写"网址要 OLE 拖放，还没接" |
-| 移除逻辑 | 拖出栏体时把被拖项宽度压 0（`remove_preview`），两侧图标**动态合拢**预览移除结果；拖回来恢复。用 `drag.is_some()` 过滤，松手后自动失效，无需在多处清理 |
-
-### 验证
-
-新增 2 条单测：`layout::insert_slot_pushes_icons_apart`（左右偏移差正好等于
-空槽宽度、插入点右侧整体平移、`insert_l` 有/无）、
-`dock::external_drop_reserves_and_releases_an_insert_slot`
-（`update()` 后 `geom.insert_l` 出现并随 `clear` 消失）。
-
-`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
-`dock_shot` 增加第 4 个参数 `insert`（模拟拖到第 2、3 图标之间），
-出 `dock_insert.bmp` 与 `dock_plain.bmp` 对照：空槽确实把右侧图标推开、
-圆角胶囊插入标记居中显示，深浅主题各自可读。
-
-### 注意
-
-本轮工作区同时存在**非本轮的并行实验改动**（`frame.rs` /
-`shaders/illusion.*` / `gpu.rs` / `settings_win.rs` 等的时域重投影）。
-门禁运行期间它多次出现接口不一致的中间状态（`blur_frost` 参数、
-`Illusion::set_base` 签名、`REFRESH_DELTA` import 等），本轮**没有修改
-这些文件**。本轮结果未提交。
-
----
-
-## 未发布 — 清理构建产物 / 拆分小组件模块 / 预制图标（2026-11-08）
-
-### ① 清理中间构建产物
-
-只读扫描后按「可再生 + 本会话产物」两条标准精确删除：
-
-| 项 | 体积 | 依据 |
+| 项 | 改了什么 | 依据 |
 |---|---|---|
-| `target/x86_64-pc-windows-msvc/debug/incremental/` | 6.0 GB | cargo 增量缓存，下次构建自动重建 |
-| `scratch/panel_dark|panel_light/`（14 张） | 本轮生成的对比图 |
-| `scratch/widgets_*.bmp` / `settings_{interaction,appearance}.bmp` / `NookSill-fixed-*.exe` | — | 本会话生成的临时产物 |
+| 运行中应用可固定 | 拖进固定区即就地固定（`BarMove::PinnedNow`），菜单「固定」写盘 | 运行中应用不该永远挂在右端 |
+| 自由排序 | `temp_keys` 会话内保序；`clamp_segment` 只挡「固定项拖进运行中区」 | 同上，且配置装不下跨段顺序 |
+| 换位不被打断 | `sync_items` 在 `press_active()` 期间只置 `items_stale`，松手后再重建 | `replace_items` 会清 `drag/press/hover`，拖一下即断 |
+| 换位不丢步 | `pending_move: Option` → `pending_moves: Vec` | 一帧多次换位只留最后一次，配置与栏体差一格 |
+| OLE 拖放 | `DockDropTarget`（`IDropTarget`）：`DragOver` 实时让位、`Drop` 走 `CF_HDROP` | `DragAcceptFiles` 无 `DragOver`，画不出插入位置 |
+| 按落点插入 | `GetCursorPos + ScreenToClient` → `drop_index_at`，一批只认首个落点 | `DragQueryPoint` 坐标系文档不明 |
+| 拖入落组 | 落在组图标上直接 `group::add_kid`，失败退回插入 | 满组/嵌套不该丢文件 |
+| 快捷方式与去重 | `.url` 解析为 `ItemKind::Url`；路径大小写不敏感去重 | 旧实现把 `.url` 当 exe，重复拖入加出两个图标 |
+| 显隐迟滞 | `HideDelay / ShowDelay / HideDelayMax / ShowDelayMax` 四键，非对称计时 | 只有一半迟滞时热区边缘会反复显隐 |
+| 中文输入 | 组合串回显 `ImeEvent::Preedit/Commit`、候选窗随焦点、多行 `Ctrl+Enter` | 编辑弹窗与设置窗口只收了 `GCS_COMPSTR` 不显示 |
 
-`target` 由 21 GB 降到 15 GB。**未动** `scratch/` 里的 202 张 png /
-92 个 py / 11 个 exe 等 529 个实验素材，也未动 `deps`(11 GB) /
-`examples`(1.5 GB) —— 它们正被并行编译使用。三者都在 `.gitignore`。
+### 渲染与性能
 
-### ② 统一拆分小组件 rs 位置
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 毛玻璃延迟 | 25 ms 像素探针提前唤醒；按脏列 `[x0,x1)` dispatch；静止退避到 800 ms | 静止 800 ms 退避导致"慢半拍"，全幅重算无谓 |
+| 实验性重投影 | `shaders::illusion` 用 24×16 低频色场做时域重投影，`FrostIllusion` 开关 | 降低每帧卷积成本；原算法完整保留 |
+| 空闲出帧 | 三个面板 `render()` 末尾把 `next_repaint` 推到未来 | 裸 `Instant` 让 `due()` 恒真，Dock 被拖进 60 fps |
+| 每帧系统调用 | accent 解析与系统深浅模式缓存到 `App`，配置变化才重读 | 每帧两次相同 DWM 跨进程调用 + 一次注册表读 |
+| 图标请求去重 | `IconLoader` 按 `(下标, 路径)` 抑制在途请求，`forget` 解绑换图标 | 取不到图标的条目每轮重排 |
+| 抓屏忙循环 | `recv_timeout` 等待加 1 ms 下限 | 超时后 0 等待，后台线程以最高频率重抓 |
+| COM 字符串 | 文件对话框先转换、无条件 `CoTaskMemFree`、再判错 | `?` 提前返回跳过释放 |
+| 小组件样式 | `WidgetStyle` / `PanelStyle` 收口配色、圆角、字号、内边距 | 七个面板各写一套，圆角九种、alpha 顺序错传 |
+| 卡片文本 | 量宽后直接 `painter.galley()`，只有缩字号才重排 | 同一文本每帧 shaping 两次 |
+| 图标线宽 | IBM Carbon 分档 + 32 px 以上次线性增长并钳 3.0 | 纯比例线宽在 84 px 下发肿 |
+| 图标几何 | 月牙两弧解析求交点、`smooth_line` 内缩端点、`arc_steps` 自适应采样 | 内弧端点不重合、butt cap 外露、固定 18 段折角明显 |
 
-`src/` 根目录原先散着 `calendar_win.rs` / `cc_win.rs` / `tool_win.rs` /
-`resmon_win.rs` / `note_win.rs` / `group_win.rs` / `edit_win.rs` +
-`panel_style.rs`，想单独维护一个面板要在一堆无关模块里翻。
+### 小组件与面板
 
-- `git mv` 到 `src/widgets/`，命名去掉 `*_win` 后缀：
-  `calendar / control / timer / resource / notes / group / editor / style`。
-- 新建 `widgets/mod.rs` 统一声明；7 个面板内部的
-  `crate::panel_style` 改为 `crate::widgets::style`。
-- `lib.rs` 用 `pub use widgets::calendar as calendar_win` 之类**保留旧路径
-  重导出**，`bin/dock.rs` 与 `examples/*.rs` 零改动，降低拆分风险。
+- 速记：`core::note` + 面板列表/分页，录入走模态编辑弹窗（面板是 NOACTIVATE 窗口，拿不到键盘焦点）。
+- 单项图标：右键与设置页「更换 / 恢复默认」；`clear_icon(index)` 精确失效一张纹理。
+- 组内排序：`core::group::move_kid`，悬停箭头完全落在 `cell_rect` 内。
+- 托盘：`Shell_NotifyIconW` + RAII 注销；右键菜单复用自绘窗口，不用 `TrackPopupMenu`。
+- 条目管理：设置页「条目」页 + 右键新建应用组 / 新建文件夹 / 重命名 / 复制 / 解散。
+- 控制中心有线网卡：`GetAdaptersAddresses` 找处于 Up 的以太网接口，失败降级为无线。
 
-### ③ 预制图标替代名称首字
+### 配置
 
-`glyph::paint_monogram`（名称首字）此前是「取不到 shell 图标」时的兜底，
-中文首字在 20px 下辨识度差、同名条目也分不出来。
+- 长度键改存 96 DPI 逻辑像素：`Key::is_length()` 单一判定，`calc_metrics` 与 `Dock::pxf` 两处换算，`CONFIG_VERSION` 3 → 4，旧值由 `migrate_units` 一次性换算。
+- 补齐 10 个从未进读写列表的键（`HideDelay/ShowDelay/Widget*/Panel*`），新增 `every_numeric_key_is_persisted` 守住同类漏配。
+- 新增 `PanelOpacity / PanelOverlay / WidgetOpacity / WidgetRadius / WidgetGap / WidgetBlur`，全部 `0` = 跟随。
 
-- `Builtin` 新增 `Folder / File / Url / Group / Trash / Separator` 六个
-  矢量图标，全部「主题色圆角底 + 白色图形」，与既有内置条目同一套
-  视觉语言，且只用圆 / 圆角矩形 / 线段，不留锐角。
-- `Builtin::from_kind(ItemKind)` 是**穷尽匹配**，新增类型会被编译器
-  强制补图标；`paint_kind()` 直接按类型画。
-- 替换 `widgets/group.rs` 与 `dock.rs` 两处首字占位。`paint_monogram`
-  保留，但生产路径已不再使用（只剩 `icon_sheet` 画廊展示它本身）。
-- `bin/dock.rs` 的 `from_path` 分支补 `_ => {}`，并加单测钉住
-  「路径识别绝不返回类型图标」。
+### 修复
 
-### 验证
+- 启动即 panic：空条目 + 多个小组件时 `bar_w` 为负，`f32::clamp(min > max)` 直接 panic。`place_slots` 先夹非负再取 `min`，`rounded_gradient` 的尺寸检查移到 `clamp` 之前。
+- 操作回执下溢 panic：`NOTICE_MS - elapsed` 在淡出边界 u128 下溢。改为 `notice_alpha()` 纯函数 + 饱和减法。
 
-`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
-`glyph` 新增 2 条单测（7 种 ItemKind 的预制图标互不相同、
-`from_path` 只返回三个内置动作）。
-`panels_shot` 的分组示例改为混合 5 种 `ItemKind`，出图确认
-5 个图标分别是文档 / 文件夹 / 地球 / 四圆点 / 回收站，
-图标内不再出现名称首字。
+### 工程
 
-### 注意
+拆分（原文件 → 模块目录，依据：单文件超过 600 行读不动，`impl` 可跨文件分散，
+公开路径一律不变）：
 
-本轮**未提交**。工作区在清理前已被外部进程提交推送为 `b57a1b6`
-（含上一轮弹出面板统一打磨与实验性时域重投影），本轮改动独立留在工作区。
+| 原文件 | 行数 | 拆分后 |
+|---|---|---|
+| `gpu/src/bin/dock.rs` | 4990 | `bin/dock/` 21 文件 |
+| `gpu/src/dock.rs` | 4423 | `dock/` 8 文件 |
+| `core/src/config.rs` | 2727 | `config/` 7 文件 |
+| `gpu/src/launchpad_win.rs` | 2247 | `launchpad_win/` 9 文件 |
+| `core/src/layout.rs` | 2113 | `layout/` 6 文件 |
+| `core/src/smoke.rs` | 1201 | `smoke/` 5 文件 |
+| `core/src/launchpad.rs` | 1117 | `launchpad/` 6 文件 |
+| `settings/src/pages/widgets.rs` | 1108 | `pages/widgets/` 11 文件 |
+| `gpu/src/menu.rs` | 974 | `menu/` 5 文件 |
+| `gpu/src/frost.rs` | 957 | `frost/` 4 文件 |
+| `gpu/src/worker.rs` | 947 | `worker/` 5 文件 |
+| `gpu/src/glyph.rs` | 875 | `glyph/` 4 文件 |
+| `gpu/src/settings_win.rs` | 842 | `settings_win/` 6 文件 |
+| `gpu/src/frame.rs` | 723 | `frame/` 4 文件 |
+| `gpu/src/widgets/{timer,group,control,calendar,editor}.rs` | 761–916 | 各 5–6 文件 |
+| `settings/tests/settings_ui.rs` | 750 | 7 文件 |
 
----
+测试文件同样收口：`dock/tests.rs`(1391) → 5、`layout/tests.rs`(1034) → 5、
+`config/tests.rs`(1120) → 7，共享辅助函数留在 `tests/mod.rs`。
+副作用：`nooksill-gpu/src/widgets.rs` → `widgets/mod.rs`（避免与 `widgets/` 同名
+产生 `widgets/widgets.rs`）。
 
-## 未发布 — 模糊延迟优化 + 实验性时域重投影（2026-11-08）
-
-### 为什么
-
-看毛玻璃总有「慢半拍、跳一下」的割裂感。定位到三处：静止时抓屏退避到
-800 ms，桌面突然变了要等满一个退避周期；动态背景固定 100 ms 节拍；
-每来一帧都对整幅 640×400 跑两趟 25-tap 高斯，哪怕只有时钟那一小块在变。
-GPU 提交本身不慢，慢的是「感知延迟」和「无谓的全幅重算」。
-
-### 改了什么
-
-| 项 | 做法 |
-|---|---|
-| 提前唤醒 | `frost::Live` 加 25 ms 像素探针（`GetDC(NULL)` + 20 个 `GetPixel`），退避期间一发现变色立刻全量抓屏；探针失效时 300 ms 兜底抓一次 |
-| 跟随节拍 | 桌面在动按 50 ms 抓，静止从 100 ms 逐次退避到 800 ms；两次全量抓屏至少隔 40 ms，动态桌面不会把探针变成 25 ms 一抓 |
-| 脏列卷积 | 抓屏线程比较前后帧算出变化列 `[x0,x1)`，`frost.wgsl` 加 `x0` uniform、改列优先索引，两趟只 dispatch `[x0-r, x1+r)`；丢帧时 `Live::latest` 把脏列取并集。全量帧结果与改前逐像素一致 |
-| 少传一点 | 高斯权重只在半径/目标重建时上传；参数 uniform 仍每帧写 |
-| 实验性路径 | 新增 `shaders/illusion.rs` + `illusion.wgsl`：一次真高斯保留结构，之后每帧只上传 24×16 低频色场做色彩重投影，90 ms 时间插值消除跳变；色场差 > 18 且距上次刷新 > 300 ms 才重跑真高斯。过渡期间主动 `request_repaint_after(16ms)`，静止零提交 |
-| 开关 | `[appearance] FrostIllusion`（默认 0 = 原高斯），藏在「关于 → 连点版本号 5 次」的高级卡片里，主循环每帧同步到进程级开关，改动即时生效。**原模糊算法完整保留** |
-
-### 验证
-
-`cargo check --workspace --all-targets`、`cargo clippy --workspace --all-targets
--- -D warnings`、`cargo fmt --all -- --check` 全绿；
-`cargo test --workspace --lib --tests` 全绿。
-真机 GPU（`--ignored`）8 项全过，其中新增两项：
-`partial_blur_matches_full_blur_on_the_dirty_band`（局部重算与整幅逐像素
-一致、范围外保留上一帧）与 `reprojection_is_identity_then_tracks_colour`
-（色场不变时输出等于基底、变亮后跟着变亮）。原有
-`gpu_blur_matches_cpu_reference` / `gpu_frost_renders_like_cpu_frost`
-继续通过，证明原算法观感没动。
-
-### 已知问题
-
-- 实验路径在「窗口位置/形状骤变」时，结构最长到下一次（≥300 ms）结构
-  刷新才更新，颜色会立刻跟上；这类场景不如原高斯精确。
-- 静止时探针 + 300 ms 兜底抓屏比原来的 800 ms 纯退避略费 CPU
-  （约一次抓屏 / 300 ms），换的是最坏反应时间从 800 ms 降到 ~25 ms。
-- 探针依赖屏幕 DC 能读到别的窗口；读不到时由兜底路径接管，不会更差。
-- 本轮同时修了工作区里并行改动留下的编译/clippy 问题
-  （`panels_shot` 的 `frosted` 参数、`group_win`/`tool_win`/`panel_style`
-  的 lint），未改动其设计。
-
----
-
-## 未发布 — 小组件弹出面板统一打磨（2026-11-08）
-
-范围是**点开小组件后的弹窗面板**，不是 Dock 栏上的卡片。
-
-### 依据
-
-七个弹出面板（日历 / 控制中心 / 计时器待办 / 资源监视器 / 速记 /
-分组 / 编辑弹窗）各自复制一套配色与圆角：圆角有
-`16/14/13/10/8/7/6/3/12` 九种，背景 alpha 有 `250/246/248` 三种硬编码，
-且 `tool_win` / `resmon_win` 的前景把 `argbc(a,r,g,b)`（**alpha 在前**）
-当 RGBA 传，得到 `(255,28,28,34)` 这种"红色 + alpha 34"的文字。
-
-### 改了什么
-
-| 项 | 做法 |
-|---|---|
-| 共享样式 | 新增 `gpu::panel_style::PanelStyle`，七个面板统一走 `paint_frame()`：底色 → 磨砂叠加层 → 细边框；三级文字 `ink / ink_sub / faint` 全部不透明；圆角常量 `R_PANEL=18 / R_CARD=12 / R_FIELD=10 / R_SMALL=8`，`pill(h)` 按短边一半生成胶囊 |
-| 修配色 | `tool_win` / `resmon_win` 的错误前景改为共享 ink；日历/控制中心的磁贴、音量轨、进度条、导航按钮都改成胶囊或共享圆角，消除锐角 |
-| 自定义透明度 | 新增 `PanelOpacity`（0..100，`0` = 自动）与 `PanelOverlay`（0..100，默认 28）。`0` 时**跟随毛玻璃**：有磨砂底色压到 78% 让背景纹理透出，无磨砂用 97% 保证文字不发灰；非 0 为用户值。七个面板构造函数只拿 `dark`，配置经进程级 `sync_prefs` 同步（与 `MSAA_PREF` 同做法），主循环每帧一次 |
-| 层级 / 区分 | 面板底 → 叠加层 → 子卡片 → 悬停四级明度递增；标题、图标、数值按 `CENTER_CENTER` 摆放 |
-| 性能 | 共享样式的方法都是纯计算（无额外 shaping / 无新帧提交）；绘制路径不变 |
+- 全部 7205 行中文注释改写为纯英文，删掉改动历史、踩坑叙事、设计论证长段落与
+  横幅注释，只留读代码看不出来的东西（Win32 消息怪癖、单位与 DPI 换算、
+  行对齐、`WM_APP` 号段、执行顺序、性能约束、不变量）。
+- `scripts/check-comments.sh`：扫 `crates/` 里非 ASCII 的 `//` 注释，有则退出码 1。
+- `CONTRIBUTING.md` 新增「代码备注」「单文件规模」两节；`scripts/build.sh --gate`
+  从三步改为四步：注释语言 → fmt → `clippy -D warnings` → 全量测试。
+- `DECISIONS.md` 74 条 ADR 压成「决定 / 依据 / 代价」（3578 → 984 行），
+  删掉调试过程、重复实测表与前后对比叙事。
 
 ### 验证
 
-`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
-`PanelStyle` 新增 3 条单测（深浅文字不透明且对比正确、磨砂降 alpha 且
-用户值覆盖自动值、圆角常量与胶囊上限）；settings kittest 覆盖 6 条滑条。
-
-`panels_shot` 扩展为 7 张图，深浅两套分别输出到
-`scratch/panel_dark/` 与 `scratch/panel_light/`：
-常规 / 磨砂叠加层 / 自定义透明度（45% + 70% 叠加）三组对比。
-像素核对：圆角无锐角、胶囊按钮、文字清晰、层级可区分，
-自定义透明度图明显更透且文字仍可读。
-
-### 注意
-
-本轮工作区同时存在**非本轮的外部实验改动**
-（`frame.rs` / `shaders/illusion.*` / `frost.rs` / `about.rs` 等的时域色彩
-重投影）。门禁运行期间该改动一度处于接口不一致的中间状态，
-之后自行恢复；本轮没有修改这些文件。因包含未完成的外部改动，
-本轮结果**未提交**。
-
----
-
-## 修复 — 启动即 panic：空条目 + 多个小组件算出负栏宽（实机报告，2026-11-08）
-
-### 现象
-
-用户提供的 `NookSill-2.0.0-89-b93e705-win64-debug.exe` 双击即弹：
-`panicked at core/src/num/f32.rs:1605:9: min > max, or either was NaN.
-min = 0.0, max = -25.333334`。
-
-### 根因（已用对照实验钉死）
-
-用户 ini 里 `[Items]` **为空**、却启用了 5 个小组件 + 时钟
-（`CtrlCenter/ResMon/ToolW/ModeW/TrayW=1`、`WMerge=1`）。
-`layout::place_slots` 算 `bar_w = total.min(lw - 4 - widget_extra)`，
-条带占位超过窗口宽度时右式为负，`min` 把负宽度直接写进 `bar_w`。
-栏体渐变随后在 `rounded_gradient` 里执行
-`radius.clamp(0.0, w.min(h) * 0.5)` —— 上界为负，`f32::clamp` 立即
-panic；而 `if w <= 0` 的早退写在 clamp **下一行**，永远来不及执行。
-
-用旧 exe 从终端重定向 stderr 复现出完全相同的 `-25.333334`；
-用修复后重新构建的 debug exe、同一份 ini 启动 6 秒无任何 panic
-（`exit=124` 为限时结束，进程正常常驻）。
-
-### 改了什么
-
-| 层 | 修法 |
-|---|---|
-| 根因 | `place_slots` 先把可用宽度 `(lw - 4 - widget_extra).max(0.0)`，再取 `min`，保证 `bar_w >= 0` |
-| 通用防线 | `rounded_gradient` 把尺寸检查移到 `clamp` 之前，并加 `is_finite`；任何坏尺寸矩形都安静返回 `Shape::Noop` |
-| 同类加固 | `icon::sample_bilinear`（`sw/sh=0` 时 `sw-1` 会 u32 下溢）、`smoke::bilinear` / `advect`（`w<2` 时上界为负且 `x0+1` 越界）补早退 |
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿。新增单测 2 条：
-`layout::widget_strip_larger_than_window_never_yields_negative_bar_width`
-（直接构造 `widget_extra > lw`）、
-`dock::rounded_gradient_tolerates_degenerate_rects`
-（负宽/负高/零宽/NaN 都返回 Noop，正常尺寸仍出网格）。
-`layout` 60 条、`gpu` 147 条全过。
-
-**实机对照**：旧 exe 复现 panic，新构建的 debug exe 用同一份用户配置
-无 panic 并正常常驻 6 秒。
-
----
-
-## 未发布 — 小组件统一打磨：样式 / 边界 / 性能 / 视觉参数（2026-11-08）
-
-以**当前 `dock.rs` 与各面板实现**为准做的一轮收口，不依赖历史描述。
-
-### 改了什么
-
-| 类别 | 项 |
-|---|---|
-| 样式（真 bug） | 5 处浅色卡片前景误写成 `from_rgba_unmultiplied(232, 30, 32, 40)` —— 红色、alpha 40，浅色栏体上几乎看不见；时钟卡的 `(245,30,30,36)` / `(190,60,60,70)` 同源。根因是把 `argbc(a,r,g,b)`（**alpha 在前**）当 RGBA 传。统一抽到 `WidgetStyle::ink / ink_sub / rule`，深浅两套只在一处定义 |
-| 样式（一致性） | 内边距 `6/4`、图标比例 `0.30/0.62/0.46`、字号比例 `0.27`、最小文本宽 `8.0` 全部收进 `WidgetStyle`；卡片圆角与底盘透明度也走共享方法，不再各自发挥 |
-| 边界（真 bug） | `paint_resource_card` 缺 `avail > 0` 保护与 `size.max(1.0)`：卡片宽度退化到 0 时 `size *= avail / w` 会给 epaint 负字号并 panic（时钟卡早有保护，资源卡漏了）。补齐，并把"最小文本宽"收进共享常量 |
-| 性能 | `resource` / `clock` / `bubble` 三处「量宽 + `painter.text`」对同一文本排版两次，改为量出的 `Arc<Galley>` 直接 `painter.galley()` 画；只有需要缩字号时才重排一次。不缩字号的常见路径每帧少一次 CJK shaping，画质不变 |
-| 布局 | `WidgetStrip` 新增 `gap_extra` 字段：`build()` 的占位与 `left_of()` 的位置此前各硬编码 `6.0`，统一后调间距不会错位 |
-| 视觉参数 | 新增 4 个表驱动键 `Key::Numeric(109..112)`：`WidgetOpacity`（卡片底盘不透明度）、`WidgetRadius`（卡片圆角）、`WidgetGap`（条带间距，默认 6 与旧版一致）、`WidgetBlur`（弹出层磨砂半径，`frost_spec` 覆盖 `Blur`）。全部 `0` = 跟随，零默认行为变化；设置页外观页用共享 `card + slider` 呈现 |
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets` 通过。
-单测：`gpu` 146 条（新增 `widget_ink_is_readable_in_both_themes`）、
-`core::layout` 59 条（新增 `widget_gap_shifts_strip_consistently`）、
-`settings` kittest 26 条（新增外观页 4 滑条）。
-`core::config` 表驱动键数/名称测试自动覆盖 4 个新键。
-
-离屏像素回归：`widgets_light.bmp` / `widgets_dark.bmp` 两套各 1217×247。
-浅色下图标与 `CPU 0%` 由"红色近乎透明"变为深色清晰，深色下白色清晰，
-无裁切或重叠；`settings_appearance.bmp` 外观页版式一致（新卡片在滚动区）。
-
-### 已知限制
-
-- 栏体 `BgMode::Frost` 仍退化为渐变（Backlog #6）；`WidgetBlur` 只作用于
-  `frost_spec()` 创建的**弹出层**，不假装给栏体加了独立模糊。
-- 弹出面板自身的背景 alpha（`246` / `248`）仍是硬编码，本轮未做
-  `PanelOpacity`；卡片底盘透明度已可配。
-- 未在真实桌面会话验证高 DPI（150% / 200%）与竖排 Dock 下的卡片布局。
-
----
-
-## 未发布 — 显示 / 隐藏灵敏度延迟（2026-11-08）
-
-### 依据
-
-用户实测反馈：Dock 显示隐藏频率太高，光标在热区边缘来回扫就反复显隐。
-旧实现里收起宽限期是硬编码的 450 ms，而**隐藏时碰到热区立刻展开** ——
-只有一半迟滞，抖动自然压不住。上游 C 版同样没有这个功能。
-
-### 改了什么
-
-新增 4 个表驱动键（`Key::Numeric(105..108)`，单位 ms），两套场景自动切换：
-
-| 键 | 场景 | 方向 | 默认 |
-|---|---|---|---|
-| `HideDelay` | 普通 | 移开光标 → 收起 | 450 |
-| `ShowDelay` | 普通 | 隐藏时唤醒 → 展开 | 180 |
-| `HideDelayMax` | 前台窗口最大化 | 移开光标 → 收起 | 900 |
-| `ShowDelayMax` | 前台窗口最大化 | 隐藏时唤醒 → 展开 | 400 |
-
-- **非对称迟滞**：`Dock::tick_auto_hide` 收起从「最后一次靠近」起算持续
-  离开，展开从「进入热区」起算持续停留；任一方向中途反悔都清空对应
-  计时（`show_pending_ms`）。默认值 450/0 等价于旧行为，20 处既有调用
-  与测试零改动 —— 延迟做成 `Dock` 字段而不是改函数签名，是有意的。
-- **场景判定**：`platform::occlusion::maximized_foreground()` 用
-  `IsZoomed(GetForegroundWindow())`，与 `step_fullscreen` 共用同一个
-  节流窗口，不额外增加系统枚举。无边框全屏（整体隐藏 Dock）与普通
-  最大化（只换延迟档）保持两条独立逻辑。
-- **设置页只用共享元素**：交互页加两张 `card`，每张两个 `slider`，
-  说明放在 `card` 的 note 里 —— 没有新造延迟控件或版式。
-- 配置改了下一轮 tick 就生效，不必重启。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿；`dock_shot` / `settings_shot` 基线正常。
-新增单测：`Dock` 迟滞 3 条（连续停留才展开 / 边缘抖动 5 轮不展开 /
-隐藏延迟可配）、kittest 交互页 4 条滑条与默认值 1 条。
-`core::config` 的表驱动键数/名称测试自动覆盖 4 个新键。
-
-### 已知限制
-
-- 自动隐藏模式下主循环每 100 ms 轮询光标，延迟的**实际分辨率约 100 ms**；
-  设 50 与 90 在当前实现里差别不可见。要做更细得改主循环调度，收益有限。
-- 未实机验证：真实光标抖动场景、最大化窗口切换档位的时机。
-- 本轮同时向上游 `wang01116/MiniDock` 提交等价功能 PR：
-  [wang01116/MiniDock#14](https://github.com/wang01116/MiniDock/pull/14)
-  （分支 `MCheng404/MiniDock@feat/auto-hide-hysteresis`，+76/−3，
-  含 ini 键、迟滞逻辑、交互动效页 4 条滑条与 README；已用 MinGW-w64
-  完整编译验证）。
-
----
-
-## 未发布 — 审查驱动的一轮：空闲出帧、泄漏、忙循环、主题缓存、图标去重、有线网卡（2026-11-08）
-
-提交并推送 `a48ab52` 之后做了一轮系统性只读审查（稳定性 / 性能两条线），
-下面六项都是**核实过代码**才动的，不是照抄审查结论。
-
-### ① 稳定性：三个面板让 Dock 空闲时全速出帧（真 bug）
-
-`calendar_win` / `cc_win` / `launchpad_win` 的 `next_repaint` 是裸
-`Instant`，`show()` 与所有事件分支都设成 `now`，但 `render()` 从不推进。
-于是面板可见期间 `due()` **恒为真** → 主循环每轮都渲染面板并把主 Dock
-一起拖进约 60 fps 常驻提交，与「空闲不出帧」的承诺直接冲突。这三个
-窗口都没有周期动画，全部靠事件唤醒；在每个 `render()` 末尾把闹钟推到
-`+1h`（与 `tool_win` 停表时的做法一致）。
-
-### ② 稳定性：文件对话框的 COM 字符串泄漏
-
-`filedialog.rs` 写的是 `raw.to_string().ok()?` 再 `CoTaskMemFree`。
-`GetDisplayName` 返回的是 COM 堆上的 `PWSTR`，转换失败时 `?` 提前返回，
-释放被跳过。改成**先转、无条件释放、再判错**。NTFS 允许未配对代理项
-文件名，能稳定触发这条路径。
-
-### ③ 稳定性：磨砂抓屏线程在超时后无退避忙循环
-
-`frost.rs` 用 `interval.saturating_sub(started.elapsed())` 当
-`recv_timeout` 的等待时长。一次抓屏+模糊超过 interval 时（高分辨率 /
-弱 CPU）结果钳到 0，`recv_timeout(0)` 立刻返回 Timeout，后台线程以
-最高频率反复抓屏、单核满载。给等待加 1 ms 下限。
-
-### ④ 性能：每帧两次相同的 DWM 跨进程调用 + 一次注册表读
-
-`App::render()` 里 `runtime_accent` 与 `runtime_icon_accent` 各自调了一次
-`accent::resolve`（注释还写着「DWM 调用不重复」）；`dock_is_dark` 又每帧
-读一次注册表。改成**两个开关共用一次解析**；系统深浅模式缓存进
-`App::system_dark`，只在 `look_epoch` 变化（`WM_SETTINGCHANGE`）时重读，
-`cfg.dock_is_dark()` 仍每帧算（配置随时可能改）。画质与出帧条件都不变。
-
-### ⑤ 性能：图标请求 in-flight 去重
-
-网址、失效 `.lnk`、缺解码器的图片**永远取不到图标**，`has_icon()` 一直
-false，于是每次列表变更都会把它们再排一遍，后台线程反复跑
-`SHGetImageList`。`IconLoader` 加 `(下标, 路径)` 集合抑制在途请求，
-`drain()` 按 `ReadyIcon` 的这两个字段精确清除。
-
-**不能只用路径做键**：分组条目的 `path` 恒为空串，多个分组会互相抑制，
-只有第一个能拿到四宫格图标 —— 这条用单测钉死了。`change_icon` /
-`reset_icon` 调 `forget` 解绑，保证换图标仍能重新请求。
-
-### ⑥ 功能：控制中心识别有线网卡
-
-`control::tiles_ordered` 早有 `wired` 参数，调用方一直硬传 `false`。
-新增 `platform::adapter`（`GetAdaptersAddresses` 遍历链表，找处于 Up 的
-以太网接口；为此启用 3 个 `windows` feature），建窗与每次 `show_at()`
-都重查，中途插拔网线会生效。**任何失败降级为 `false`**（= 显示 WiFi），
-与改动前行为一致，零回归风险。链表判定抽成独立函数，用假链表做了
-4 条单测（空 / 纯无线 / 有线在第二位 / 有线但 Down）。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿；`cargo check --workspace --all-targets`
-通过（新 feature 编译正常）；`dock_shot` / `settings_shot` /
-`panels_shot` 四张图全部正常出帧，像素无回归。
-新增单测：`IconLoader` 去重 1 条、`platform::adapter` 链表 4 条 +
-1 条 `#[ignore]` 真机冒烟。
-
-### 仍未做 / 未实机验证
-
-Backlog 里的大项没动：磨砂玻璃默认值仍是渐变（`BgMode::Frost` 退化）、
-`Fan*` 扇形展开、`Sb*` 顶部状态栏、PNG/JPEG 图标解码（WIC）、
-OLE 网址/纯文本拖入、DWM 窗口预览。
-本轮的空闲出帧修复、有线网卡识别、真实中文输入与多文件拖入都还需要
-桌面会话确认；亮度控制仍缺。
-
----
-
-## 未发布 — 拖放改进：按落点插入 / 快捷方式 / 去重 / 落组（2026-11-08）
-
-### 依据
-
-旧实现只收 `WM_DROPFILES` 的路径，然后一律 `raw.push` 追加到末尾。
-拖到栏体任意位置没有区别、`.url` 被当成 exe、重复路径会加出两个图标。
-拖出栏体只有「松手移除」，提示也没说能反悔。
-
-### 改了什么
-
-| 项 | 做法 |
-|---|---|
-| 落点有意义 | `WM_DROPFILES` 用 `GetCursorPos + ScreenToClient` 取客户区落点，`Dock::drop_index_at` 换算成插入下标（四边停靠时纵向轴用 `y`），`step_drop` 用 `insert` 而不是 `push`。一批多条消息沿用第一条落点 |
-| 拖入落组 | 落点停在分组图标上时直接 `group::add_kid`；组不满足条件（满 / 嵌套）就退回插到栏体，不丢文件。加完清组图标缓存 |
-| 快捷方式 | `.url` 解析成 `ItemKind::Url`（`shortcut::parse_url_shortcut` 纯函数 + `read_url_shortcut`），保留 `.url` 本身作 `icon_src` 让 shell 取图标；`.lnk` 仍走 `File`，`ShellExecute` 与运行状态扫描各自解析目标 |
-| 去重 | 路径（`.url` 用网址）大小写不敏感比对，已存在的跳过并在回执里计数 |
-| 回执 | 说明「在第 N 位插入 X 个 / 归入分组 Y 个 / 跳过重复 Z 个」，不再只有一句「已添加」 |
-| 拖出保护 | 提示改成「松手移除 · 拖回栏体可取消」；`drop_outside` 本来就每帧重算、回撤即作废，补了单测钉死 |
-
-### 一个坐标系决定
-
-没用 `DragQueryPoint`：MSDN 只说坐标「相对于接收 `WM_DROPFILES` 的窗口」，
-没写死是屏幕还是客户区，不同来源说法不一。改走
-`GetCursorPos + ScreenToClient`，坐标系无歧义；取不到光标就退回追加末尾，
-绝不用 `(0,0)` 把新条目顶到最前面。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿；`dock_shot` 离屏出帧正常。
-新增单测：`Dock` 拖放批次 3 条（含"一批多条消息沿用首个落点"、
-"拖出后拖回取消删除"）、`bin/dock.rs` 条目构造 3 条（普通文件 / 真实目录 /
-`.url` 临时文件）、`platform::shortcut` `.url` 解析 3 条。
-
-### 已知限制
-
-- `DragAcceptFiles` 只在**松手**时给一条 `WM_DROPFILES`，拖拽过程中没有
-  `DragOver`，所以画不出「插入位置竖线」这类实时反馈。要做必须上 OLE
-  `IDropTarget`（PORTING.md 第 268 行的待办）。
-- 落在组上的判定复用 `hit_at(x, y)`；左/右停靠时既有命中实现没做坐标
-  转置，落组可能不准（但不会崩）。插入下标本身已按纵向轴处理。
-- **未实机验证**：真实资源管理器的多文件拖入、`.url` 拖入、竖排 Dock
-  落点。这几条需要桌面会话。
-- 仍未做：从 Dock 拖出到桌面创建快捷方式（见回复里的方向确认）、
-  OLE 网址/纯文本拖入、PNG/JPEG 图标解码。
-
----
-
-## 未发布 — 中文输入链路补齐：组合串回显 / 候选窗定位 / 多行键盘（2026-11-08）
-
-### 依据
-
-审查第三轮新增的编辑弹窗与设置窗口时发现：`Ime::handle` 收下了
-`GCS_COMPSTR`（组合中的拼音），但这两个窗口**从不读 `composing()`**，
-也不调 `set_caret`。结果是打中文时只有系统候选框在动、输入框里看不到
-正在打的字，候选窗还落在窗口左上角。起动台与计时器面板早已自己画组合串，
-新建的两个窗口漏了这一层。
-
-### 改了什么
-
-| 项 | 做法 |
-|---|---|
-| 组合串回显 | `Input::ime_preedit` / `ime_commit` 把 Win32 组合串映射成 egui 0.37 的 `ImeEvent::Preedit` / `Commit`。**上屏必须走 Commit**：它先删掉上一帧 preedit 再插入结果，用 `Event::Text` 会留下 "nihao你好" |
-| 事件顺序 | 一条 `WM_IME_COMPOSITION` 可能同时带 RESULTSTR 与下一轮 COMPSTR。固定「先 Commit、后 Preedit」，反序会把刚开始的新组合当旧 preedit 删掉 |
-| `WM_IME_SETCONTEXT` | 两个窗口补接；失焦时 `Ime::handle` 清掉组合态，同时发一条空 Preedit 清掉 egui 里的预编辑文本，不留半截拼音 |
-| 候选窗定位 | `paint` 把当前焦点字段的文字起点记进 `EditState::caret`，渲染后调 `ImmSetCompositionWindow`。多行框取第一行中心，不是 170px 框的中心 |
-| 多行键盘 | 多行时 `Ctrl+Enter` 提交（组合中不触发）；单行维持回车提交。IME 组合中的回车是「选词」，不再喂 `Event::Key{Enter}` —— 否则会在拼音中间插一个换行 |
-
-### 两个被源码推翻的假设
-
-1. 初判「多行回车会插两个换行」。查 egui 源码后确认：`Event::Text("\n")`
-   被 `TextEdit` **明确忽略**（`builder.rs` 注释 *Newlines are handled by
-   `Key::Enter`*），换行只来自 `WM_KEYDOWN` 喂的 `Event::Key{Enter}`。
-   原先 `WM_CHAR` 里 `\r → Event::Text("\n")` 是死代码，已删。
-2. 初判「Preedit 与 Commit 同帧会互相覆盖」。查事件循环确认 `if let` 在
-   `for event` **内部**，每个事件后立即更新 `cursor_range`，同帧可行。
-   已用真跑一帧 egui 的集成测试钉死，而不是停在推测。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿。新增单测：`Input` 4 条，其中
-`preedit_then_commit_leaves_only_the_final_text` 用 `Context::run_ui`
-真跑两帧 egui，断言 `Preedit("pinyin") → Commit("hi")` 后文本是 `"abhi"`
-（同时证明 `filtered_events(&event_filter)` 没有把 IME 事件过滤掉、
-`owns_ime_events` 的焦点条件成立）。
-
-`panels_shot` 增加第 4 张图 `panel_edit.bmp`（475×460）：速记的标题 +
-多行正文，可见两行中文、保存/取消按钮都在窗口内、无裁切。
-`settings_shot` 与 `dock_shot` 基线复核正常。
-
-### 已知限制
-
-仍是窗口级 IME 兜底，候选框由系统绘制（不自绘候选列表）。真机中文输入
-链路（尤其多行 IME 组合串的显示位置）仍待实机确认 —— 离屏渲染不含
-`ImmGetCompositionStringW` 的真实上下文。
-
----
-
-## 修复 — 操作回执在淡出边界下溢，拖应用进分组时崩溃（2026-11-07，实机报告）
-
-**现象**（用户实测提供截图）：把应用程序拖进分组，整个 Dock 弹出
-panic 窗口 —— `dock.rs: attempt to subtract with overflow`。
-
-**根因**：第三轮加的操作回执提示（归组成功会弹「已加入分组」）在
-`paint_notice` 里写的是 `NOTICE_MS - ms`（u128）。主循环判定
-「提示还活着」（`elapsed < 2200`）与真正绘制之间隔着几毫秒，
-`elapsed` 越过 2200 后这一行就下溢。触发链完全吻合用户操作：
-拖进组 → 归组成功 → 弹回执 → 2.2 s 后淡出边界 → 崩。
-
-**教训**：单帧离屏渲染（`dock_shot` / `panels_shot`）与单元测试都
-测不出**时间边界** —— 它们不含真实时间流逝。凡是 `elapsed()`
-参与减法的地方，必须用饱和减法并把边界抽成纯函数。
-
-**修复**：`Dock::notice_alpha(elapsed_ms)` 纯函数 +
-`saturating_sub`，`paint_notice` 只调它。新增边界单测
-`notice_alpha_saturates_at_the_deadline`（0 / 1900 / 2050 / 2199 /
-2200 / 5000 六个点，5000 就是当初下溢的位置）。全仓排查了一遍
-`elapsed()` 参与减法的地方，仅此一处（`tool_win` 那处是 i64 且有
-钳制，安全）。
-
-**验证**：`./scripts/build.sh --gate` 全绿；主程序已重新构建，
-用户重启 Dock 即生效。
-
----
-
-## 未发布 — 速记面板（2026-11-07，第三轮）
-
-按上一轮的建议继续：`ItemKind::Note` / `Key::Notes` / `Key::MN_NOTES` 是
-§9.7 空壳表里最后一组"开关能点、点了没反应"的东西。
-
-### ① 数据层：`core::note`
-
-`NoteBook` + `[Notes]` 段。**正文按转义后的单行存**（`\` → `\\`、
-`\n` → 字面 `\n`）：ini 的值区不能出现真实换行，一个 `\n` 会把后面
-所有行吞掉、整段作废。`escape` / `unescape` 是纯函数，往返有单测；
-不认识的转义组合原样保留，不吞字符。段写入时先整段删再写，条数
-变少不留旧的 `T{i}` / `B{i}`。上限 32 条 / 标题 64 字 / 正文 4096 字，
-`N` 被手改成天文数字时夹紧。
-
-`WriteJob` 加 `notes` 字段，与配置/条目共用同一个 400 ms 防抖窗口。
-
-### ② 面板：`gpu::note_win`
-
-列表 + 新建 / 编辑 / 删除 / 分页（每页 6 条）。**面板里没有输入框**：
-它是 NOACTIVATE 风格的分层窗口，拿键盘焦点很麻烦；文本录入全部走
-`gpu::edit_win` 的模态弹窗。为此给 `edit_win` 加了
-`EditField::multiline`：多行时窗口更高、用 `TextEdit::multiline`、
-回车由 `WM_CHAR` 插 `\n` 而不是提交（`WM_KEYDOWN` 的提交分支让位）。
-删除复用 0 字段的编辑弹窗做确认，避免误删丢数据。
-
-分页而不是 `ScrollArea`：滚动子 Ui 的坐标偏移会让 `ui.interact` 的
-矩形与 `RawInput` 窗口坐标错位，出现"看到 A、点到 B"。
-
-### ③ 三个空壳一起接通
-
-- `ItemKind::Note`：点图标开面板（`launch` 的 `Unsupported` 分支不再
-  可达，保留作防御）。`glyph::Builtin::Notes` 给矢量便签图标，不再
-  退化成「速」字首字占位。
-- `Key::Notes`：开关打开时补一个速记条目。做成**普通 `raw` 条目**
-  而不是虚拟条目，避免打乱 `dock.items` 与 `raw` 的下标对应；
-  运行中在设置页改开关也立即生效，不必重启。
-- `Key::MN_NOTES`：空白处右键「速记」。设置页「添加」加「添加速记」、
-  「附件」加「打开速记…」。
-
-### ④ 顺带修两处上轮漏写
-
-Bash 脚本静默漏写，编译和单测都发现不了：
-
-1. `step_click` 里点分组图标的分支根本没落地 —— 此前**只有右键「打开」
-   能开分组，点图标没反应**，正是"能用但不好用"的典型。
-2. `group_slot` 没进 `panels()` / `hide_panels()`：`panel_open()` 为假时
-   `dock_busy()` 不认为在操作 Dock，自动隐藏会收走栏体、把面板单独
-   悬在半空。现在 `panels()` 是 6 块（日历/控制中心/资源/计时器/分组/速记）。
-
-### ⑤ 验证工具
-
-新增 `examples/panels_shot.rs`：离屏渲染分组、速记、速记空态三张 BMP，
-走的是与真实窗口**同一份**绘制函数（`paint_preview`，与
-`settings_win::shell` 同一思路）。第一版图里立刻抓到「← → 箭头方向
-画反了」—— 编译和单测都发现不了的视觉错误。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿。新增单测：`core::note` 9 条、
-`note_win` 4 条、`edit_win` 多行 1 条、`menu` 的 `MnNotes` 1 条、
-kittest 速记入口 1 条。`panels_shot` 出图 560×350 / 525×570 ×2 正常。
-
-### 仍未实机验证 / 仍未做
-
-托盘图标注册、分组/速记面板与编辑弹窗的键盘焦点、多行 IME 组合串
-显示，都还只做了代码审查与离屏渲染，没在桌面会话里手工点过。
-仍未做：网址拖入（OLE `IDropTarget`）、PNG/JPEG 图标解码（WIC）、
-图标库浏览器、扇形展开、DWM 窗口预览。
-
----
-
-## 未发布 — 单项图标 / 组内排序 / 托盘入口（2026-11-07，第二轮）
-
-承接上一轮：分组能用了之后，剩下三个"看得见但点不动"的地方 —— 图标只能
-靠"同名 .ico 批量盲配"、分组里的顺序不能调、Dock 被误关后没有恢复入口
-（`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` 不进任务栏也不进 Alt+Tab）。
-
-### ① 单项图标选择
-
-条目右键与设置页编辑表单都加「更换… / 恢复默认」。`change_icon` 写
-`item.icon_src` 后调 `Dock::clear_icon(index)` —— `replace_items` 是按
-`path` 搬纹理的，而这里变的是 `icon_src`，不清就会一直显示旧图标；全量
-`clear_icons` 会让整条 Dock 闪一下，所以精确到下标。
-
-过滤器只列 `.ico` / `.exe` / `.dll`（shell 图像列表能取到图标的格式）。
-PNG/JPEG 要 WIC 解码，没做之前不把它们放进可选范围 —— 让用户挑到一个
-用不了的文件比不给入口更糟。
-
-### ② 分组内子项排序
-
-`core::group::move_kid` 交换相邻子项，首尾越界返回 `NoSuchItem` 且不改数据
-（单测覆盖）。设置页分组卡片用文字按钮「上移 / 下移」（刻意不与条目行的
-「↑ / ↓」重名）；`group_win` 面板悬停时在格子左上角显示 ← → 小箭头，
-与 × 一样**完全落在 `cell_rect` 内**，否则光标一移过去 hover 就丢、按钮
-自己消失。顺序变了重取四宫格组图标。
-
-### ③ 托盘图标
-
-`platform::tray` 封装 `Shell_NotifyIconW`：左键切显隐、右键弹菜单（显隐 /
-起动台 / Dock 设置 / 退出），RAII 注销；注册失败只留日志，不影响 Dock 启动。
-
-右键菜单**复用 `gpu::menu` 的自绘模态窗口**，不用 Win32 `TrackPopupMenu`：
-后者要求调用线程拥有前台窗口，Dock 从不去抢前台，实测会出现"菜单点不消失"。
-
-**一个静默 bug**：初版把 `WM_APP_TRAY` 定成 `WM_APP + 1`，与
-`worker::WM_APP_WAKE` 撞号 —— 托盘点击会被 `pump()` 当成后台唤醒，双方
-都失效且没有任何编译错误。已改 `WM_APP + 2`，加了单测钉死，并把消息号
-分配写进 `ARCHITECTURE.md` 的不变式。
-
-### ④ 顺带抓到两个真机 bug
-
-此前 kittest **从没打开过编辑表单**（只测了列表空态与单按钮），所以两条
-都藏着，真机点一下「编辑」就会崩：
-
-1. Grid 首帧列宽接近 0 时 `available_width() - 60` 变负，egui 0.37 直接
-   panic（`Negative child size: [-20.0 34.0]`）。改成 `.max(140.0)`，并把
-   图标行移出 Grid（一行塞路径文字 + 两个按钮会把第二列撑坏）。
-2. 「归组」ComboBox 没有 `labelled_by`，读屏软件看到的是无名下拉框，
-   kittest 的无障碍检查也直接拦下。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿；`dock_shot` 离屏出帧 1217×247 正常。
-新增单测：`core::group::move_kid` 2 条、`platform::tray` 3 条（含消息 ID
-不冲突）、`menu::tray` 1 条；kittest 3 条（编辑表单的图标按钮、子项排序
-按钮、命令下标）。kittest 总数 18 → 23。
-
-### 未实机验证 / 仍未做
-
-托盘图标注册需要真实 Explorer 会话，本轮没有在桌面会话里手工点过；
-分组面板与编辑弹窗的键盘焦点/IME 同样待实机确认。仍未做：网址拖入
-（OLE `IDropTarget`）、`ItemKind::Note` 速记面板、PNG/JPEG 图标解码（WIC）。
-
----
-
-## 未发布 — Dock 基础操作与分组（目录）补齐（2026-11-07）
-
-读了全部 md 与交互代码后确认：条目管理此前**只有"加 / 拖 / 删"三条路径**。
-名字由文件名定死、启动参数无处编辑、分组只有 ini 序列化却没有任何入口往里
-放东西；`launch` 对组明确返回 `Unsupported`，点上去毫无反应。空状态文案写着
-"将应用 / 文件夹 / 网址拖到这里"，但 `WM_DROPFILES` 根本没接。属于"能用但
-不好用"。本轮按"新建目录 → 归组 → 打开 → 解散"这条主线把基础操作补齐。
-
-### ① 新建目录（两种含义都做了）
-
-| 入口 | 行为 |
-|---|---|
-| 空白处右键 / 设置页「条目」 | **新建应用组…**：弹窗问名字，建一个 Dock 内部的"目录" |
-| 空白处右键「新建文件夹…」 | 先选父目录、再问名字，在磁盘上 `CreateDirectoryW` 后加为 `Folder` 条目 |
-
-`platform::filedialog::check_dir_name` 拦住 `..`、路径分隔符、Windows 保留
-字符与结尾的点/空格 —— 输入框里敲 `..\..\Windows` 不该在别处建出目录。
-
-### ② 分组交互（`core::group`，纯逻辑 + 单测）
-
-建组 / 归组 / 出组 / 解散集中成几个纯函数，硬约束：组不能嵌套、子项上限
-`MAX_KIDS=16`、出组时子项回到组的正后方、摊平后顺序保持。`add_kid` 失败会
-吃掉传入的条目，所以额外提供 `can_add_kid` 让调用方先问一遍。
-
-- 点组 → `gpu::group_win` 网格面板（自己的 `IconLoader`，纹理不能跨
-  egui 上下文复用，与起动台同一做法）；点子项启动、悬停的 × 移出、标题栏
-  解散、点外面收起。
-- 组图标：`core::icon::composite_quad` 把前 4 个子项按 1/2/4 格等比拼成
-  256×256，双线性 + alpha-over + 圆角；`worker::group_icon` 逐个取 shell
-  图标后合成。`process` 对组跳过 `fit_icon`（合成时已圆过角，再裁一次会糊）。
-
-### ③ 条目管理
-
-- 设置页新增第 12 页「条目」：列出全部条目，可改名 / 改目标 / 改参数 /
-  归组 / 上移下移 / 删除；分组单独一块，列子项、移出、解散。
-- Dock 右键补：重命名…、复制一份、打开（组）、解散分组、新建应用组、
-  新建文件夹。`gpu::edit_win` 是通用模态编辑弹窗（1–3 个字段），接
-  `WM_CHAR` + `WM_IME_COMPOSITION`，第一个字段自动聚焦。
-- **修了一个真 bug**：设置窗口此前没有 `WM_CHAR` 处理，egui 的 `TextEdit`
-  只认 `Event::Text`，所以网址输入框能拿到焦点却打不进任何字（kittest
-  直接注入文本，测不出来）。现在 `input::Input::text` 统一喂 `Event::Text`，
-  设置窗口与编辑弹窗都接了 `WM_KEYDOWN/UP`（退格、方向键、Ctrl+A）。
-  IME 上屏吃掉 `WM_IME_COMPOSITION` 后不会补发 `WM_CHAR`，故不设跨消息
-  的跳过标志 —— 那种标志会吞掉下一次普通按键的第一个字符。
-
-### ④ 拖拽与拖放语义
-
-- 拖到组图标上：目标组高亮、**暂停重排**（重排会把组挤走，用户永远瞄不准），
-  松手归组。
-- 拖出 Dock 窗口 24 px 外：显示"松手从 Dock 移除"，松手删除。
-- 拖文件/文件夹进 Dock：`DragAcceptFiles` + `WM_DROPFILES` → 条目。
-  窗口过程拿不到 `App`，路径先落在 `Dock` 里由主循环取走。
-- 空状态文案改成"将应用或文件夹拖到这里" —— 网址拖入要 OLE
-  `IDropTarget`，没做就别承诺。
-
-### ⑤ 反馈
-
-`App::status` 此前只写设置窗口的状态条；设置窗口没打开时，Dock 上的新建、
-重命名、归组**没有任何回执**。现在同时在栏体上方画一条 2.2 s 的短提示
-（末尾 300 ms 淡出），过期即清、空闲不提交。
-
-### 验证
-
-`./scripts/build.sh --gate` 全绿（fmt + `clippy -D warnings` + 全量测试）。
-新增单测：`core::group` 12 条、`core::icon::composite_quad` 5 条、
-`Dock` 拖拽状态机 4 条（归组/离组/拖出/拖放路径）、`group_win` 网格 4 条、
-`edit_win` 3 条、`filedialog::check_dir_name` 4 条；kittest 3 条用**带数据的**
-「条目」页断言控件与命令（原来的"每页都能渲染"走的是空列表分支）。
-`dock_shot` 离屏出帧 1217×247，栏体、图标与倒影正常。
-
-### 已知限制
-
-网址拖入、单项图标选择对话框、分组内子项排序、速记面板仍未做；
-`launch` 对 `ItemKind::Group` / `Note` 的 `Unsupported` 分支保留（组现在
-走 `step_click` 的专门分支，不会再到 `launch`）。
-
----
-
-## 未发布 — 图标渲染深度优化：线宽分档 / 分数 DPI / 视觉平衡（2026-11-06）
-
-承接上一轮纯调研（IBM Carbon / Material 3 / Figma / W3C / Microsoft Learn /
-Apple SF Symbols / epaint 0.37 一手源码），按优先级落地前三项：
-
-### ① 线宽分档
-
-- 旧 `sw = s * 0.085` 是纯比例：Dock 悬停 48→84px 时线宽从 4.1 涨到
-  7.1，肉眼发肿；24px 磁贴拿到 2.04px，而 IBM 建议 1.5px。
-- 换成 **IBM Carbon 分档表**（16→1.0 / 20→1.25 / 24→1.5 / 32→2.0
-  逻辑点）+ 档间线性插值；32px 以上走**平方根次线性增长并钳到 3.0**，
-  取 Lucide `absoluteStrokeWidth`（完全锁死）与纯比例之间的中间路线。
-  数值是逻辑点，GPU 按 `pixels_per_point` 换算物理像素。单测守分档值。
-
-### ② 分数 DPI 出图
-
-- `icon_sheet` 新增 `dpi=100/125/150`：逻辑画布不变，物理尺寸按 ppp
-  放大（780×520 → 975×650 → 1170×780），`RawInput` 带
-  `native_pixels_per_point`，`write_bmp` 按物理宽高写。
-- 同一蓝牙图标三档并排核对：125% 下线条连续、无断裂/发虚，
-  分档线宽随 ppp 正确换算；150% 依然锐利。
-
-### ③ 眯眼测试（视觉平衡量化）
-
-- 新增离线工具 `scratch/icon_balance.py`：对总览做高斯模糊（眯眼测试），
-  并按「每格墨量 Σ max(0, 底色亮度 − 像素亮度)」量化 9 枚同尺寸线稿
-  图标的视觉重量，排出偏离中位数的图标。
-- 首轮抓到 **Settings +95.8%（8 个实心齿太重）** 与
-  **Hotspot −35.7%（扇形太轻）**，主观模糊图与数值一致。
-- 微调：齿轮齿半径 0.075→0.045、轴孔 0.085→0.070；热点放大系数
-  1.15→1.28、弧角度加宽、中心点加大。复验后 9 枚全部落在
-  **−13.5% ~ +24.7%（±25% 内）**，齿轮仍是齿轮、热点靠大中心点与
-  Wifi 区分。浅/深两套总览与动态状态组复验通过。
-
-### 修复：DarkMode 月牙内弧错位
-
-- **根因一（端点根本不重合）**：旧版外弧 `0.80..5.50`、内弧
-  `1.40..4.90` 各写各的角度范围，内弧圆心还偏上 `(0.16,-0.10)`，
-  两段弧的端点差了几十像素 —— 这就是"内圆弧错位"。
-- **根因二（方向）**：月牙的凹口是小圆**落在大圆内部**的那段弧
-  （小圆左半），第一版误走右半，两段弧拼成了一个整圆。
-- **根因三（尖刺）**：拼成一条闭合路径后，epaint 的 miter join 在
-  锐角处顶出尖刺；`Shape::line` 末端的 butt cap 沿各自切线外伸，
-  半径只有 `sw/2` 的端点圆盖不住矩形两角，看着仍像没对齐。
-- 修法：两圆交点解析解 `x=(r1²-r2²+dx²)/(2dx), y=√(r1²-x²)`
-  求出精确接点，外弧走大圆左半、内弧走小圆左半，**各自画一条
-  平滑折线**（新增 `Canvas::arc_line`：整条 `Shape::line` + 只补
-  两个端点圆），端点圆半径 `0.85·sw > √2/2·sw` 完整包住 butt cap。
-  新增单测断言两组端点精确重合。
-- 100% / 125% 两档放大核对：上下尖端都是干净圆点，无钩子、断线
-  或半像素错位；月牙对称（旧版内弧偏上导致的歪斜一并消失）。
-  眯眼测试里 DarkMode 的视觉重量从 +19.2% 落到 **+2.8%**。
-
-### ④ 贝塞尔 / SDF 评估（本轮不改）
-
-epaint 提供 `CubicBezierShape` / `QuadraticBezierShape` 且
-`bezier_tolerance = 0.1` 只在真曲线上生效；换成真曲线能减少顶点、让
-弧段曲率精确，但 `PathShape.fill` 仍只支持凸多边形，闭合闪电/水滴
-改不了填充；当前「连续折线 + 圆头」已解决线条连续性，小尺寸下视觉
-收益有限。SDF/MSDF 需要另建 shader 与距离场图集、描边尖角还得用
-MSDF，工程量与收益不匹配。**结论：暂缓**，留作以后「任意缩放 /
-极高 DPI 极致锐利」需求时的候选。
-
-### 验证
-
-`nooksill-gpu` lib 102 条测试通过（新增线宽分档单测），
-clippy -D warnings / fmt --check / 门禁全绿。
-
-### 端点圆收回 / 弧线抗锯齿 / 自启动控件统一
-
-- **月牙端点圆收回**：上一版用 `0.85·sw` 的大端点圆遮 butt cap，
-  尖端变成圆球。改成 `Canvas::smooth_line`：首尾各沿切线内缩 `sw/2`，
-  `Shape::line` 的 butt cap 末端恰好落回两圆交点；月牙两条弧
-  `cap = None`，butt cap 交叠成**锐利干净的月牙尖**，无圆球、无外露
-  线头；开放弧（Wifi / Hotspot / 声波）用 `cap = Some(0.5·sw)` 保留
-  标准圆润端点。100% / 125% 两档放大核对。
-- **弧线自适应采样改善锯齿**：新增 `arc_steps(radius, sweep)`，按
-  `弧长 / (0.6·sw)` 算步数并钳在 12..64。旧版固定 18 段在 60px 图标上
-  每段跨 5px，圆弧有明显多边形折角；现在任何尺寸下相邻点间距都约
-  半个线宽。密采样点不补圆（不增加 shape 数），`arc` / 月牙两弧 /
-  水滴针上半圆全部受益。MSAA 4x 与官方 `feathering=1.0` 维持不动
-  （上轮已验证更大值反而发虚）。
-- **开机自启动控件统一**：常规页这一行仍是裸 `ui.checkbox`（AccessKit
-  里是 `CheckBox` 角色），和同卡片其它胶囊开关两套写法。新增
-  `widgets::switch_row`（与 `toggle` 同款 `switch_widget` + `row` 排版，
-  只回传新值、不碰 `Config`、不标脏），general 页改调它，注册表真值与
-  `Command::ToggleAutostart` 语义保持不变。新增 kittest 断言角色是
-  `Role::Switch`、右边缘与「锁定 Dock 布局」对齐、点击只发命令。
-- 视觉平衡复验：弧线改平滑线后中位数基准下降，齿轮一度显示 +27.5%，
-  齿再收 0.045→0.042 后回到 **+23.7%**，9 枚线稿全在 ±25% 内。
+`./scripts/build.sh --gate` 全绿。测试总数 547：
+`nooksill-core` 268、`nooksill-gpu` 165（+15 ignored，GPU/窗口类）
++ `nooksill-dock` 7、`nooksill-platform` 72（+6 ignored）、
+`nooksill-settings` 5 + 28 + 2。
+
+`crates/` 下 253 个 `.rs`、52243 行，最大 734 行（`bin/probe.rs`，诊断二进制），
+生产代码最大 594 行。离屏基线 `dock_shot` / `settings_shot` / `panels_shot` 出图正常。
 
 ---
 

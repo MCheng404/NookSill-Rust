@@ -62,7 +62,7 @@ nooksill-core        （无 Win32 依赖，纯逻辑）
 
 ## 三、渲染管线
 
-一帧的完整路径在 **`frame.rs::FrameRenderer::draw_frame`** 里，`render` 与
+一帧的完整路径在 **`frame/render.rs::FrameRenderer::draw_frame`** 里，`render` 与
 `render_rgba` 共用同一份实现 —— 这条链路原先两边各写一遍，逐行相同，任何
 API 变动都要改两处。
 
@@ -157,7 +157,7 @@ kittest 无头驱动。结构按"一页一个文件"拆开：
 crates/nooksill-settings/src/
   pages/
     mod.rs         Page 枚举、SettingsState、Command、两列骨架
-    widgets.rs     共享控件：card / row / toggle / slider / combo / 侧栏
+    widgets/       共享控件：card / row / toggle / slider / combo / 侧栏
     options.rs     下拉选项表（纯数据）
     items.rs       「条目」页：既有条目的改名/排序/归组/删除（数据由主程序同步快照）
     general.rs     常规      appearance.rs  外观     position.rs   位置
@@ -167,7 +167,7 @@ crates/nooksill-settings/src/
 ```
 
 加一页设置 = 加一个文件 + `Page` 枚举加一项；加一个设置项 = `core::config`
-加一个键 + 对应页面加一行。**控件长什么样、怎么排版只在 `widgets.rs` 里改**。
+加一个键 + 对应页面加一行。**控件长什么样、怎么排版只在 `widgets/` 里改**。
 
 布局不是 `SidePanel` 而是手工切两块 `Rect`（`ui.new_child(max_rect)`）：
 设置窗口外面还套着标题栏，`SidePanel` 按根 Ui 布局会跟标题抢地方。起点用
@@ -274,7 +274,7 @@ async 运行时带来的调度开销与栈占用都不划算。
     都要清空对应计时。两档按前台窗口是否最大化切换（`IsZoomed`，
     与 `is_fullscreen_foreground` 的无边框全屏判定互不等价）。
     默认值 450 / 0 必须保留旧行为，否则所有既有隐藏测试都要重写。
-13. **小组件卡片的视觉参数只有一个来源**：`dock.rs::WidgetStyle`
+13. **小组件卡片的视觉参数只有一个来源**：`dock/mod.rs::WidgetStyle`
     （深浅配色、内边距、图标/字号比例、最小文本宽度）。
     `argbc(a,r,g,b)` 是 **alpha 在前**，与 egui 的
     `from_rgba_unmultiplied(r,g,b,a)` 顺序相反 —— 混用会画出
@@ -358,9 +358,9 @@ async 运行时带来的调度开销与栈占用都不划算。
 | `BuildGroupIcon` | `core::icon::composite_quad` + `worker::group_icon` | ✅ 2×2 四宫格 |
 | 组展开 | `gpu::group_win`（独立分层窗口 + 自己的 `IconLoader`） | ✅ 网格面板 |
 | 重命名 / 新建对话框 | `gpu::edit_win`（模态弹窗，`WM_CHAR` + IME） | ✅ |
-| 单项图标 | `bin/dock.rs::change_icon` + `Dock::clear_icon` | ✅ 精确失效一张纹理 |
+| 单项图标 | `bin/dock/item_edit.rs::change_icon` + `Dock::clear_icon` | ✅ 精确失效一张纹理 |
 | 组内排序 | `core::group::move_kid` + `group_win` 悬停箭头 | ✅ |
-| 托盘 | `platform::tray`（`Shell_NotifyIconW`）+ `bin/dock.rs::step_tray` | ✅ 右键菜单复用 `gpu::menu`，不用 `TrackPopupMenu` |
+| 托盘 | `platform::tray`（`Shell_NotifyIconW`）+ `bin/dock/item_cmds.rs::step_tray` | ✅ 右键菜单复用 `gpu::menu`，不用 `TrackPopupMenu` |
 | 速记 | `core::note` + `gpu::note_win` + `gpu::edit_win`（多行） | ✅ 面板只做列表与动作分发，文本录入交给模态弹窗 |
 | `RenderFrame` / `DrawBar` / `DrawBubbleAt` | `gpu::dock`（待写） | ⏳ M1 |
 | `LoadItemIcon` / `HiconToGp` / `FitBitmap` | `platform::icons`（待写） | ⏳ M2 |
@@ -370,3 +370,37 @@ async 运行时带来的调度开销与栈占用都不划算。
 | `SetMinHook` / `AnimStep` | `platform::minimize` | ⏳ M4 |
 
 函数级台账与验收标准见 [`PORTING.md`](PORTING.md)。
+
+## 九、模块划分与文件规模
+
+一个 `.rs` 只放一个职责，生产代码单文件 ≤ 600 行；超过就按职责拆成子模块。
+规则与拆分手法见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 第六、七节。
+
+拆分的落法是稳定的：`foo.rs` → `foo/mod.rs`（类型、`use`、子模块声明）+
+`foo/{state,paint,input,...}.rs`。`impl` 块可以分散在同一 crate 的多个子模块里，
+跨子模块调用的私有项标 `pub(super)`。外部路径（`nooksill_gpu::dock::Dock`）
+不变，因此调用方无感。
+
+当前拆过的大文件：
+
+| 原文件 | 拆分后 |
+|---|---|
+| `gpu/dock.rs` | `dock/{mod,input,items,state,paint,paint_cards,chrome}.rs` |
+| `gpu/bin/dock.rs` | `bin/dock/{mod,boot,run_loop,wndproc,sys,sync,clicks,drag,auto_hide,render,menu_win,satellite,item_cmds,item_edit,settings_cmd,panels_state,panels_notes,resmon,update,misc}.rs` |
+| `gpu/launchpad_win.rs` | `launchpad_win/{win,nav,compose,paint,paint_folder,input,commands,lifecycle}.rs` |
+| `gpu/menu.rs` | `menu/{build,layout,paint}.rs` |
+| `gpu/frost.rs` | `frost/{capture,live,paint}.rs` |
+| `gpu/worker.rs` | `worker/{scan,icons,disk,open}.rs` |
+| `gpu/glyph.rs` | `glyph/{builtin,canvas,controls}.rs` |
+| `gpu/settings_win.rs` | `settings_win/{win,window,shell,render,input}.rs` |
+| `gpu/frame.rs` | `frame/{setup,render,frost_state}.rs` |
+| `gpu/widgets/*.rs` | 每个面板一个目录，`mod.rs` 只放类型与子模块声明 |
+| `core/config.rs` | `config/{mod,keys,key_query,apply,ini_io,migrate}.rs` |
+| `core/layout.rs` | `layout/{mod,metrics,slots,hit,window}.rs` |
+| `core/smoke.rs` | `smoke/{mod,fluid,noise,raster}.rs` |
+| `core/launchpad.rs` | `launchpad/{mod,order,tags,apps,persist}.rs` |
+| `settings/pages/widgets.rs` | `pages/widgets/{mod,card,row,button,toggle,slider,combo,pickers,sidebar,motion}.rs` |
+
+测试文件同样拆：`tests.rs` → `tests/{mod,分组}.rs`，共享辅助函数留在
+`tests/mod.rs`，子模块首行 `use super::*;` 继承父模块的导入。
+已拆：`gpu/dock/tests/`、`core/layout/tests/`、`core/config/tests/`。

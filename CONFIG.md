@@ -229,7 +229,7 @@ SmokeClouds=1
 ```
 
 栏体周围那层会上升、卷曲、随鼠标让开的烟（移植自 Windhawk 的 *Taskbar
-Smoke*，算法说明见 `crates/nooksill-core/src/smoke.rs` 与 ADR-048）。
+Smoke*，算法说明见 `crates/nooksill-core/src/smoke/` 与 ADR-048）。
 
 | 键 | 默认 | 取值 | 说明 |
 |---|---|---|---|

@@ -257,6 +257,21 @@ OpenGL 路径多 ~110 MB），以及一个独立项目把 wgpu-DX12 的空设备
 `core` 的测试**不依赖 Windows**，可以放到任意 CI runner 上跑；这是把纯逻辑
 单独拆 crate 的主要动机。
 
+排查用的两个 example，读一个 ini 或打印键表，不必启动 Dock：
+
+```bash
+cargo run -q -p nooksill-core --example read_ini -- <path/to/NookSill.ini>
+cargo run -q -p nooksill-core --example config_table     # 重新生成 CONFIG.md 的键表
+```
+
+### 自动化交互测试的已知坑
+
+- `PostMessage` 注入的鼠标坐标会被 DPI 虚拟化改写；注入前先把测试进程设成
+  per-monitor aware，否则坐标只能对上 100% 缩放。
+- 拖拽消息序列的有效窗口约 420 ms，慢了会被当成两次独立点击。
+- 窗口在 A 线程创建、B 线程跑消息泵时，控件拿不到焦点，结论一律不可信。
+- 点击前先跑一帧再断言，布局尚未提交时命中测试算的是旧矩形。
+
 ## 八、CI（`.github/workflows/build.yml`）
 
 三段式，跑在 `windows-latest`：
