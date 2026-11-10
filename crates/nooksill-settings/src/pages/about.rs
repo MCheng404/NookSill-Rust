@@ -18,76 +18,111 @@ const ROW_H: f32 = 44.0;
 const ART: f32 = 32.0;
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "NookSill", "Windows 桌面 Dock。", |ctx, ui| {
-        version_row(ctx, ui);
-        value_row(
-            ui,
-            "构建",
-            if cfg!(debug_assertions) {
-                "Debug"
-            } else {
-                "Release"
-            },
-        );
-    });
+    card(
+        ctx,
+        ui,
+        "NookSill",
+        nooksill_core::i18n::t("A desktop Dock for Windows."),
+        |ctx, ui| {
+            version_row(ctx, ui);
+            value_row(
+                ui,
+                nooksill_core::i18n::t("Build"),
+                if cfg!(debug_assertions) {
+                    "Debug"
+                } else {
+                    "Release"
+                },
+            );
+        },
+    );
 
     update_card(ctx, ui);
 
     card(
         ctx,
         ui,
-        "项目",
-        "源码、发行版与问题反馈。",
+        nooksill_core::i18n::t("Project"),
+        nooksill_core::i18n::t("Source, releases and issue reports."),
         |ctx, ui| {
-            link_row(ctx, ui, "项目地址", PROJECT_URL, paint_mark);
+            link_row(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Project URL"),
+                PROJECT_URL,
+                paint_mark,
+            );
         },
     );
 
-    card(ctx, ui, "作者", "", |ctx, ui| {
-        link_row(ctx, ui, "作者主页", AUTHOR_URL, paint_avatar);
+    card(ctx, ui, nooksill_core::i18n::t("Author"), "", |ctx, ui| {
+        link_row(
+            ctx,
+            ui,
+            nooksill_core::i18n::t("Author homepage"),
+            AUTHOR_URL,
+            paint_avatar,
+        );
     });
 
-    card(ctx, ui, "许可", "自由软件许可。", |ctx, ui| {
-        value_row(ui, "协议", "GNU GPL v3.0 or Later");
-        ui.label(
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Licence"),
+        nooksill_core::i18n::t("Free software licence."),
+        |ctx, ui| {
+            value_row(
+                ui,
+                nooksill_core::i18n::t("Agreement"),
+                "GNU GPL v3.0 or Later",
+            );
+            ui.label(
             RichText::new(
-                "可自由使用、修改与再分发；分发修改后的版本需同样以 GPL 授权，且不提供担保。",
+                nooksill_core::i18n::t("Use, modify and redistribute freely; derived versions must use the GPL too, with no warranty."),
             )
             .small()
             .weak(),
         );
-        ui.add_space(4.0);
-        super::widgets::button(ctx, ui, "查看许可全文", Command::OpenUrl(LICENSE_URL));
-    });
+            ui.add_space(4.0);
+            super::widgets::button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Read the full licence"),
+                Command::OpenUrl(LICENSE_URL),
+            );
+        },
+    );
 
     // Hidden entry: five version clicks unlock it, closing the window drops it.
     if ctx.state.advanced {
         card(
             ctx,
             ui,
-            "高级",
-            "网络、更新与实验性渲染，改动即时生效。",
+            nooksill_core::i18n::t("Advanced"),
+            nooksill_core::i18n::t(
+                "Network, updates and experimental rendering; changes apply immediately.",
+            ),
             |ctx, ui| {
                 super::widgets::toggle(
                     ctx,
                     ui,
                     Key::NET_SECURE_DNS,
-                    "使用安全的 DNS",
-                    "用 DoH 校验系统解析结果；发现被污染就不走直连，改走镜像",
+                    nooksill_core::i18n::t("Use secure DNS"),
+                    nooksill_core::i18n::t("Check system DNS with DoH; skip direct connections when poisoned and use mirrors"),
                 );
                 super::widgets::toggle(
                     ctx,
                     ui,
                     Key::NET_MIRROR_ALL,
-                    "镜像全部测速后再选",
-                    "关闭：某个镜像够快就先下，不再等其余测完",
+                    nooksill_core::i18n::t("Benchmark all mirrors before choosing"),
+                    nooksill_core::i18n::t("Off: download as soon as one mirror is fast enough"),
                 );
                 super::widgets::toggle(
                     ctx,
                     ui,
                     Key::FROST_ILLUSION,
-                    "实验性：轻量实时磨砂",
-                    "视觉欺骗式模糊：一次真高斯保留结构，之后只用低频色场跟着桌面实时变色；大幅降低抓屏与卷积开销。关闭即回到原高斯算法",
+                    nooksill_core::i18n::t("Experimental: lightweight live frost"),
+                    nooksill_core::i18n::t("A colour-reprojection blur: one real Gaussian keeps the structure, then a low-frequency colour field tracks the desktop; cuts capture and convolution cost. Off returns to the original Gaussian."),
                 );
             },
         );
@@ -100,12 +135,14 @@ fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     // Hand-painted widgets still need AccessKit info, for screen readers
     // and kittest.
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "版本"));
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, nooksill_core::i18n::t("Version"))
+    });
     let painter = ui.painter();
     painter.text(
         rect.left_center(),
         Align2::LEFT_CENTER,
-        "版本",
+        nooksill_core::i18n::t("Version"),
         FontId::proportional(14.0),
         ui.visuals().text_color(),
     );
@@ -130,12 +167,12 @@ fn update_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "更新",
-        "从 GitHub 检查新版本。",
+        nooksill_core::i18n::t("Update"),
+        nooksill_core::i18n::t("Check GitHub for a newer release."),
         |ctx, ui| {
             let view = ctx.state.update.clone();
             let text = if view.status.is_empty() {
-                "尚未检查".to_owned()
+                nooksill_core::i18n::t("Not checked yet").to_owned()
             } else {
                 view.status.clone()
             };
@@ -144,15 +181,30 @@ fn update_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
 
             ui.horizontal(|ui| {
                 if view.busy {
-                    ui.label(RichText::new("请稍候…").small());
+                    ui.label(RichText::new(nooksill_core::i18n::t("Please wait…")).small());
                     return;
                 }
-                super::widgets::button(ctx, ui, "检查更新", Command::CheckUpdate);
+                super::widgets::button(
+                    ctx,
+                    ui,
+                    nooksill_core::i18n::t("Check for updates"),
+                    Command::CheckUpdate,
+                );
                 if view.available && !view.ready {
-                    super::widgets::button(ctx, ui, "下载并校验", Command::DownloadUpdate);
+                    super::widgets::button(
+                        ctx,
+                        ui,
+                        nooksill_core::i18n::t("Download and verify"),
+                        Command::DownloadUpdate,
+                    );
                 }
                 if view.ready {
-                    super::widgets::button(ctx, ui, "重启并更新", Command::ApplyUpdate);
+                    super::widgets::button(
+                        ctx,
+                        ui,
+                        nooksill_core::i18n::t("Restart and update"),
+                        Command::ApplyUpdate,
+                    );
                 }
             });
         },

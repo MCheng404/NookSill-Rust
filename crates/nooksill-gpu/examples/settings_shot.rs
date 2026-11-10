@@ -28,6 +28,7 @@ use nooksill_gpu::settings_win::{shell_with_frost, LOGICAL_SIZE};
 use nooksill_settings::{Outcome, Page, SettingsState};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
     let mut args = std::env::args().skip(1);
     let out_path = args.next().unwrap_or_else(|| "settings.bmp".to_owned());
     let page_name = args.next();

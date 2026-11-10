@@ -28,11 +28,12 @@ impl CalendarWindow {
 
         let (pw, ph) = physical_size(ppp);
         let (x, y) = (0, 0);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Calendar"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 class_pcwstr(),
-                windows::core::w!("日历"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,

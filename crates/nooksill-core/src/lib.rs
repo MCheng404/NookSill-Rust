@@ -12,6 +12,7 @@ pub mod color;
 pub mod config;
 pub mod control;
 pub mod group;
+pub mod i18n;
 pub mod icon;
 pub mod ini;
 pub mod item;

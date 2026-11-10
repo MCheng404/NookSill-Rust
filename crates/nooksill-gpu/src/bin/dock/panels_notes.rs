@@ -61,19 +61,24 @@ impl App {
         };
         let fields = vec![
             EditField {
-                label: "标题".into(),
+                label: nooksill_core::i18n::t("Title").into(),
                 value: title,
-                hint: "留空则取正文第一行".into(),
+                hint: nooksill_core::i18n::t("Leave empty to use the first line of the body")
+                    .into(),
                 multiline: false,
             },
             EditField {
-                label: "正文".into(),
+                label: nooksill_core::i18n::t("Body").into(),
                 value: body,
-                hint: "想写什么就写什么，回车换行".into(),
+                hint: nooksill_core::i18n::t("Write anything; Enter starts a new line").into(),
                 multiline: true,
             },
         ];
-        let Some(out) = self.edit_dialog("速记", fields, "保存") else {
+        let Some(out) = self.edit_dialog(
+            nooksill_core::i18n::t("Notes"),
+            fields,
+            nooksill_core::i18n::t("Save"),
+        ) else {
             return;
         };
         if !out.accepted {
@@ -82,7 +87,7 @@ impl App {
         let title = out.value(0);
         let body = out.value(1);
         if title.trim().is_empty() && body.trim().is_empty() {
-            self.status("空白速记没有保存");
+            self.status(nooksill_core::i18n::t("An empty note was not saved"));
             return;
         }
         let ok = match index {
@@ -90,14 +95,16 @@ impl App {
             None => self.notes.add(title, body).is_some(),
         };
         if !ok {
-            self.status("速记已达上限或下标失效");
+            self.status(nooksill_core::i18n::t(
+                "Note limit reached or index out of range",
+            ));
             return;
         }
         self.touch_notes();
         if let Some(w) = self.note_slot.as_mut() {
             w.set_notes(&self.notes);
         }
-        self.status("已保存速记");
+        self.status(nooksill_core::i18n::t("Note saved"));
     }
 
     /// Remove a note, confirming through the edit dialog (0 fields = plain
@@ -107,7 +114,11 @@ impl App {
             return;
         };
         let label = n.display_title();
-        let out = self.edit_dialog(&format!("删除「{label}」？"), Vec::new(), "删除");
+        let out = self.edit_dialog(
+            &nooksill_core::i18n::fmt("Delete {0}?", &[label.to_string().as_str()]),
+            Vec::new(),
+            nooksill_core::i18n::t("Delete"),
+        );
         if !out.is_some_and(|o| o.accepted) {
             return;
         }
@@ -118,7 +129,10 @@ impl App {
         if let Some(w) = self.note_slot.as_mut() {
             w.set_notes(&self.notes);
         }
-        self.status(format!("已删除「{label}」"));
+        self.status(nooksill_core::i18n::fmt(
+            "Deleted {0}",
+            &[label.to_string().as_str()],
+        ));
     }
 
     /// Mark `[Notes]` dirty; shares the debounce window with config and items.
@@ -150,7 +164,7 @@ impl App {
             })
             .collect();
         let name = if item.name.is_empty() {
-            "分组".to_owned()
+            nooksill_core::i18n::t("Group").to_owned()
         } else {
             item.name.clone()
         };
@@ -217,11 +231,14 @@ impl App {
                     match group::extract_kid(&mut self.raw, gi, k) {
                         Ok(_) => {
                             self.apply_item_change();
-                            self.status("已移出分组");
+                            self.status(nooksill_core::i18n::t("Moved out of group"));
                             // Contents changed; reopen to stay in sync.
                             self.open_group(gi);
                         }
-                        Err(e) => self.status(format!("移出失败：{e}")),
+                        Err(e) => self.status(nooksill_core::i18n::fmt(
+                            "Could not move out: {0}",
+                            &[e.to_string().as_str()],
+                        )),
                     }
                 }
             }
@@ -230,9 +247,12 @@ impl App {
                     match group::dissolve_item(&mut self.raw, gi) {
                         Ok(_) => {
                             self.apply_item_change();
-                            self.status("已解散分组");
+                            self.status(nooksill_core::i18n::t("Group dissolved"));
                         }
-                        Err(e) => self.status(format!("解散失败：{e}")),
+                        Err(e) => self.status(nooksill_core::i18n::fmt(
+                            "Could not dissolve: {0}",
+                            &[e.to_string().as_str()],
+                        )),
                     }
                 }
                 if let Some(w) = self.group_slot.as_mut() {

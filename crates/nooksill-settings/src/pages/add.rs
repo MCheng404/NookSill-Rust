@@ -7,14 +7,44 @@ use super::Command;
 use crate::text_field::{text_field, FieldOpts, FIELD_H};
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "添加", "", |ctx, ui| {
+    card(ctx, ui, nooksill_core::i18n::t("Add"), "", |ctx, ui| {
         ui.horizontal_wrapped(|ui| {
-            button(ctx, ui, "添加应用 / 文件…", Command::AddFile);
-            button(ctx, ui, "添加文件夹…", Command::AddFolder);
-            button(ctx, ui, "新建应用组", Command::NewGroup);
-            button(ctx, ui, "添加速记", Command::AddNote);
-            button(ctx, ui, "添加回收站", Command::AddTrash);
-            button(ctx, ui, "添加分割线", Command::AddSeparator);
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Add app / file…"),
+                Command::AddFile,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Add folder…"),
+                Command::AddFolder,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("New app group"),
+                Command::NewGroup,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Add Notes"),
+                Command::AddNote,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Add Recycle Bin"),
+                Command::AddTrash,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Add separator"),
+                Command::AddSeparator,
+            );
         });
     });
 
@@ -23,8 +53,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "添加网页应用",
-        "地址会以应用窗口或默认浏览器打开。",
+        nooksill_core::i18n::t("Add web app"),
+        nooksill_core::i18n::t("The URL opens in an app window or the default browser."),
         |ctx, ui| {
             ui.horizontal(|ui| {
                 let width = (ui.available_width() - 92.0).max(160.0);
@@ -42,7 +72,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 );
                 let ready = !ctx.state.url_input.trim().is_empty();
                 if ready {
-                    button(ctx, ui, "添加", Command::AddUrl);
+                    button(ctx, ui, nooksill_core::i18n::t("Add"), Command::AddUrl);
                 }
                 let entered = rect
                     .contains(ui.input(|i| i.pointer.hover_pos().unwrap_or_default()))
@@ -62,17 +92,32 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "导入与导出",
-        "导出的是整份 ini（含条目与分组）。",
+        nooksill_core::i18n::t("Import & export"),
+        nooksill_core::i18n::t("Exports the whole ini, including items and groups."),
         |ctx, ui| {
             ui.horizontal(|ui| {
-                button(ctx, ui, "导出完整配置…", Command::ExportAll);
-                button(ctx, ui, "导入配置…", Command::Import);
+                button(
+                    ctx,
+                    ui,
+                    nooksill_core::i18n::t("Export full config…"),
+                    Command::ExportAll,
+                );
+                button(
+                    ctx,
+                    ui,
+                    nooksill_core::i18n::t("Import config…"),
+                    Command::Import,
+                );
             });
         },
     );
 
-    card(ctx, ui, "重置", "", |ctx, ui| {
-        button(ctx, ui, "恢复默认设置", Command::ResetDefaults);
+    card(ctx, ui, nooksill_core::i18n::t("Reset"), "", |ctx, ui| {
+        button(
+            ctx,
+            ui,
+            nooksill_core::i18n::t("Restore defaults"),
+            Command::ResetDefaults,
+        );
     });
 }

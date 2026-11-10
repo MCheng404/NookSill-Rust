@@ -28,9 +28,12 @@ git config core.autocrlf false
 
 | 时机 | 命令 | 跑什么 | 耗时量级 |
 |---|---|---|---|
-| 每次提交（自动） | `.githooks/pre-commit` | `fmt --check` + `clippy -D warnings` | 秒 |
-| 提交前 / 合并前 | `./scripts/build.sh --gate` | 上面两项 + `cargo test` | 十几秒 |
+| 每次提交（自动） | `.githooks/pre-commit` | 注释语言 + 单文件规模 + `fmt --check` + `clippy -D warnings` | 秒 |
+| 提交前 / 合并前 | `./scripts/build.sh --gate` | 上面四项 + `cargo test` | 十几秒 |
 | 发版 | `./scripts/build.sh --release` | release 构建（LTO + `opt-level=z`） | 一分钟 |
+
+两个文本门禁是纯扫描，不依赖 MSVC，本地钩子、CI 的 `gate` job 与
+`--gate` 跑的是同一批脚本（都先跑 `--self-test` 再扫仓库）。
 
 `pre-commit` **故意不含测试**：全量测试要链接 7 个 crate 的测试二进制，
 放进提交钩子的结果一定是被 `--no-verify` 绕过，那还不如不放。
@@ -101,6 +104,9 @@ fix: 时钟开启时栏体右端被裁
   ADR/CHANGELOG 编号、"为什么这么设计"的长篇论证、强调性修辞。
 - 原因只写一句，直接陈述，不加"这是因为""必须注意"之类的引导语。
 - 模块头 `//!` 一到三行：这个文件负责什么、边界在哪。
+- 门禁 `scripts/check-comments.sh` 扫 `crates/` 的行注释（含行尾）、文档注释
+  与块注释；字符串里的 `http://` 不当注释。`--self-test` 用固定样例守住
+  门禁本身，新增注释形态时先补样例。
 
 ## 七、单文件规模
 
@@ -110,6 +116,9 @@ fix: 时钟开启时栏体右端被裁
 - 跨子模块调用的私有方法标 `pub(super)`，不要为了省事把整个类型改 `pub`。
 - 测试超过 400 行独立成 `tests.rs`，再多按被测模块拆。
 - 这条对**所有** Rust 项目生效，不限于本仓库。
+- 门禁 `scripts/check-size.sh` 按「排除末尾 `#[cfg(test)]` 模块后的行数」判定，
+  生产代码与独立测试文件上限都是 600 行；`--self-test` 守住 600 / 601 的边界。
+  拆完仍需 `cargo check --workspace --all-targets` 验证公开路径没变。
 
 ## 八、文档与版本
 

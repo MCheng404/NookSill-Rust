@@ -27,11 +27,12 @@ impl ToolWindow {
 
         let (pw, ph) = physical_size(ppp, panel_h(state.todos.len()));
         let (x, y) = centered_origin(pw, ph);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Timer · To-do"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("计时器 · 待办"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,

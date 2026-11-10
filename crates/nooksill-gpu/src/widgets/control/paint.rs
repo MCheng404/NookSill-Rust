@@ -37,7 +37,7 @@ pub(super) fn draw_panel(
     painter.text(
         egui::pos2(rect.left() + PANEL_W * 0.5, rect.top() + PM + 14.0),
         Align2::CENTER_CENTER,
-        "控制中心",
+        nooksill_core::i18n::t("Control Center"),
         FontId::proportional(15.0),
         tc,
     );

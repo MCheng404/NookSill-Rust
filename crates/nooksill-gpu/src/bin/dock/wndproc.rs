@@ -203,7 +203,14 @@ pub(super) unsafe extern "system" fn wndproc(
             let ptr = dock_ptr(hwnd);
             if !ptr.is_null() {
                 let hidden = unsafe { (*ptr).toggle_force_hide() };
-                eprintln!("[hotkey] {}", if hidden { "已收起" } else { "已恢复" });
+                eprintln!(
+                    "[hotkey] {}",
+                    if hidden {
+                        nooksill_core::i18n::t("Hidden")
+                    } else {
+                        nooksill_core::i18n::t("Restored")
+                    }
+                );
             }
             LRESULT(0)
         }

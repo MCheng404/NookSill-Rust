@@ -8,88 +8,193 @@ use super::widgets::{button, card, combo, slider, toggle, Ctx};
 use super::Command;
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "Dock 附件", "", |ctx, ui| {
-        toggle(
-            ctx,
-            ui,
-            Key::Clock,
-            "在 Dock 右侧显示时间与日期",
-            "每 30 秒刷新一次，占用极低",
-        );
-        toggle(ctx, ui, Key::Reflect, "图标倒影", "仅底部停靠时有效");
-        slider(ctx, ui, Key::REFL_SIZE, "倒影大小", " %");
-        slider(ctx, ui, Key::REFL_GAP, "倒影与 Dock 的距离", " px");
-        slider(ctx, ui, Key::REFL_OPACITY, "倒影不透明度", " %");
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Dock extras"),
+        "",
+        |ctx, ui| {
+            toggle(
+                ctx,
+                ui,
+                Key::Clock,
+                nooksill_core::i18n::t("Show time and date on the right of the Dock"),
+                nooksill_core::i18n::t("Refreshes every 30 seconds at almost no cost"),
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Reflect,
+                nooksill_core::i18n::t("Icon reflection"),
+                nooksill_core::i18n::t("Only effective when docked at the bottom"),
+            );
+            slider(
+                ctx,
+                ui,
+                Key::REFL_SIZE,
+                nooksill_core::i18n::t("Reflection size"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::REFL_GAP,
+                nooksill_core::i18n::t("Reflection gap"),
+                " px",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::REFL_OPACITY,
+                nooksill_core::i18n::t("Reflection opacity"),
+                " %",
+            );
+        },
+    );
 
     card(
         ctx,
         ui,
-        "小组件",
-        "Dock 右侧的条带。每个小组件都能单独开关。",
+        nooksill_core::i18n::t("Widgets"),
+        nooksill_core::i18n::t(
+            "The strip on the right of the Dock. Each widget has its own switch.",
+        ),
         |ctx, ui| {
-            toggle(ctx, ui, Key::NOTIFY_W, "通知", "");
-            toggle(ctx, ui, Key::CTRL_CENTER, "控制中心", "");
-            toggle(ctx, ui, Key::CC_ENERGY, "控制中心 · 节能磁贴", "");
-            toggle(ctx, ui, Key::CC_HOTSPOT, "控制中心 · 移动热点磁贴", "");
-            toggle(ctx, ui, Key::RES_MON, "资源监视器", "");
-            toggle(ctx, ui, Key::TOOL_W, "计时器 / 待办", "");
+            toggle(
+                ctx,
+                ui,
+                Key::NOTIFY_W,
+                nooksill_core::i18n::t("Notifications"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::CTRL_CENTER,
+                nooksill_core::i18n::t("Control Center"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::CC_ENERGY,
+                nooksill_core::i18n::t("Control Center · power saver tile"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::CC_HOTSPOT,
+                nooksill_core::i18n::t("Control Center · mobile hotspot tile"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::RES_MON,
+                nooksill_core::i18n::t("Resource Monitor"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::TOOL_W,
+                nooksill_core::i18n::t("Timer / To-do"),
+                "",
+            );
             toggle(
                 ctx,
                 ui,
                 Key::PANEL_DISMISS,
-                "点面板外面收起",
-                "日历 / 控制中心 / 资源监视器 / 计时器都适用；关掉后改为再点一次卡片收起",
+                nooksill_core::i18n::t("Dismiss by clicking outside"),
+                nooksill_core::i18n::t("Applies to Calendar, Control Center, Resource Monitor and Timer; off means clicking the card again"),
             );
-            super::widgets::row(ui, ctx.state, "小组件位置", "", |ui, id| {
-                let mut cur = ctx.cfg.get_i32(Key::W_SIDE);
-                egui::ComboBox::from_id_salt(Key::W_SIDE.name())
-                    .selected_text(if cur == 0 { "右侧" } else { "左侧" })
-                    .width(168.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut cur, 0, "右侧");
-                        ui.selectable_value(&mut cur, 1, "左侧");
-                    })
-                    .response
-                    .labelled_by(id);
-                if cur != ctx.cfg.get_i32(Key::W_SIDE) {
-                    ctx.cfg.apply_i32(Key::W_SIDE, cur);
-                    ctx.out.changed = true;
-                }
-            });
-            super::widgets::row(ui, ctx.state, "小组件顺序", "", |ui, id| {
-                let mut cur = ctx.cfg.get_i32(Key::W_ORDER);
-                egui::ComboBox::from_id_salt(Key::W_ORDER.name())
-                    .selected_text(if cur == 0 {
-                        "时钟在前"
-                    } else {
-                        "通知在前"
-                    })
-                    .width(168.0)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut cur, 0, "时钟在前");
-                        ui.selectable_value(&mut cur, 1, "通知在前");
-                    })
-                    .response
-                    .labelled_by(id);
-                if cur != ctx.cfg.get_i32(Key::W_ORDER) {
-                    ctx.cfg.apply_i32(Key::W_ORDER, cur);
-                    ctx.out.changed = true;
-                }
-            });
+            super::widgets::row(
+                ui,
+                ctx.state,
+                nooksill_core::i18n::t("Widget side"),
+                "",
+                |ui, id| {
+                    let mut cur = ctx.cfg.get_i32(Key::W_SIDE);
+                    egui::ComboBox::from_id_salt(Key::W_SIDE.name())
+                        .selected_text(if cur == 0 {
+                            nooksill_core::i18n::t("Right")
+                        } else {
+                            nooksill_core::i18n::t("Left")
+                        })
+                        .width(168.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut cur, 0, nooksill_core::i18n::t("Right"));
+                            ui.selectable_value(&mut cur, 1, nooksill_core::i18n::t("Left"));
+                        })
+                        .response
+                        .labelled_by(id);
+                    if cur != ctx.cfg.get_i32(Key::W_SIDE) {
+                        ctx.cfg.apply_i32(Key::W_SIDE, cur);
+                        ctx.out.changed = true;
+                    }
+                },
+            );
+            super::widgets::row(
+                ui,
+                ctx.state,
+                nooksill_core::i18n::t("Widget order"),
+                "",
+                |ui, id| {
+                    let mut cur = ctx.cfg.get_i32(Key::W_ORDER);
+                    egui::ComboBox::from_id_salt(Key::W_ORDER.name())
+                        .selected_text(if cur == 0 {
+                            nooksill_core::i18n::t("Clock first")
+                        } else {
+                            nooksill_core::i18n::t("Notifications first")
+                        })
+                        .width(168.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut cur, 0, nooksill_core::i18n::t("Clock first"));
+                            ui.selectable_value(
+                                &mut cur,
+                                1,
+                                nooksill_core::i18n::t("Notifications first"),
+                            );
+                        })
+                        .response
+                        .labelled_by(id);
+                    if cur != ctx.cfg.get_i32(Key::W_ORDER) {
+                        ctx.cfg.apply_i32(Key::W_ORDER, cur);
+                        ctx.out.changed = true;
+                    }
+                },
+            );
         },
     );
 
-    card(ctx, ui, "小工具", "", |ctx, ui| {
-        combo(ctx, ui, Key::BROWSER, "网页使用的浏览器", BROWSER_OPTS);
-        toggle(
-            ctx,
-            ui,
-            Key::Notes,
-            "速记（点击即可记录文字）",
-            "开启后 Dock 上出现「速记」图标",
-        );
-        // Shortcut next to the switch: the dock icon alone is hard to find.
-        button(ctx, ui, "打开速记…", Command::OpenNotes);
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Utilities"),
+        "",
+        |ctx, ui| {
+            combo(
+                ctx,
+                ui,
+                Key::BROWSER,
+                nooksill_core::i18n::t("Browser for web pages"),
+                BROWSER_OPTS,
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Notes,
+                nooksill_core::i18n::t("Notes (click to jot down text)"),
+                nooksill_core::i18n::t("Adds a Notes icon to the Dock"),
+            );
+            // Shortcut next to the switch: the dock icon alone is hard to find.
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Open Notes…"),
+                Command::OpenNotes,
+            );
+        },
+    );
 }

@@ -334,7 +334,7 @@ fn widget_side_does_not_change_extra() {
 #[test]
 fn widget_widths_follow_upstream_formulas() {
     let c = cfg96();
-    let bar_h = 76.0_f32; // 默认栏高（48 + 2*8 + 4）
+    let bar_h = 76.0_f32;
     assert_eq!(WidgetKind::Notify.width(&c, bar_h), (bar_h * 0.92) as i32);
     assert_eq!(
         WidgetKind::CtrlCenter.width(&c, bar_h),

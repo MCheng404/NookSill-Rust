@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
-# NookSill-rs 构建入口。
+# Build entry point. scripts/env.sh injects MSVC and SDK paths; this script
+# only picks which cargo command to run.
 #
-# 环境变量由 scripts/env.sh 统一注入（MSVC / Windows SDK），本脚本只负责
-# 「决定跑哪条 cargo 命令」。两者分开，才能在一个已 source 过环境的 shell
-# 里直接跑 `cargo clippy` / `cargo install` 这类一次性命令。
+# Usage:
+#   ./scripts/build.sh                # debug build
+#   ./scripts/build.sh --release      # release build (size + LTO)
+#   ./scripts/build.sh --run          # build and run
+#   ./scripts/build.sh --test         # all unit and integration tests
+#   ./scripts/build.sh --test config  # tests whose name contains config
+#   ./scripts/build.sh --check        # cargo check (fastest feedback)
+#   ./scripts/build.sh --clippy       # clippy -D warnings
+#   ./scripts/build.sh --fmt          # format check
+#   ./scripts/build.sh --gate         # comments, size, fmt, clippy, tests
+#   ./scripts/build.sh --exe          # print the binary path
+#   ./scripts/build.sh --version      # print the pinned build version
+#   ./scripts/package.sh [--release]  # build and package into dist/
 #
-# 用法：
-#   ./scripts/build.sh                # debug 构建
-#   ./scripts/build.sh --release      # release 构建（体积优化 + LTO）
-#   ./scripts/build.sh --run          # 构建并运行
-#   ./scripts/build.sh --test         # 跑全部单元/集成测试
-#   ./scripts/build.sh --test config  # 只跑名字含 config 的测试
-#   ./scripts/build.sh --check        # cargo check（最快反馈）
-#   ./scripts/build.sh --clippy       # clippy（-D warnings）
-#   ./scripts/build.sh --fmt          # 格式化
-#   ./scripts/build.sh --gate         # 完整门禁：注释语言 + fmt + clippy + test（提交前跑这个）
-#   ./scripts/build.sh --exe          # 打印产物路径
-#   ./scripts/build.sh --version      # 打印本次构建钉住的版本号
-#   ./scripts/package.sh [--release]  # 构建 + 按版本号打包到 dist/
-#
-# 其余参数原样透传给 cargo（如 -p <crate>、--nocapture）。
+# Other arguments are passed through to cargo (e.g. -p <crate>, --nocapture).
 
 set -euo pipefail
 
@@ -77,16 +74,17 @@ case "$ACTION" in
         cargo fmt --all -- --check
         ;;
     gate)
-        # 完整门禁。三步**都跑完再汇总**，而不是第一步失败就退出 ——
-        # 一次看清全部问题，比"修一个跑一次"快得多。
+        # All steps run before reporting, so one pass shows every problem.
         status=0
-        echo "== 1/4 comments =="
-        ./scripts/check-comments.sh || status=1
-        echo "== 2/4 fmt =="
+        echo "== 1/5 comments =="
+        ./scripts/check-comments.sh --self-test && ./scripts/check-comments.sh || status=1
+        echo "== 2/5 size =="
+        ./scripts/check-size.sh --self-test && ./scripts/check-size.sh || status=1
+        echo "== 3/5 fmt =="
         cargo fmt --all -- --check || status=1
-        echo "== 3/4 clippy =="
+        echo "== 4/5 clippy =="
         cargo clippy --target "$TARGET" --workspace --all-targets -- -D warnings ${EXTRA[@]+"${EXTRA[@]}"} || status=1
-        echo "== 4/4 test =="
+        echo "== 5/5 test =="
         cargo test --target "$TARGET" --workspace --lib --tests ${EXTRA[@]+"${EXTRA[@]}"} || status=1
         echo
         if [ "$status" -eq 0 ]; then

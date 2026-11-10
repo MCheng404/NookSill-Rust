@@ -35,7 +35,9 @@ impl App {
                     self.raw.insert(at, item);
                 } else if item.kind == ItemKind::Group {
                     // Groups cannot nest.
-                    self.status("分组不能放进另一个分组");
+                    self.status(nooksill_core::i18n::t(
+                        "A group cannot contain another group",
+                    ));
                     let at = index.min(self.raw.len());
                     self.raw.insert(at, item);
                 } else {
@@ -43,7 +45,10 @@ impl App {
                     // `can_add_kid` first.
                     match group::can_add_kid(&self.raw[g], &item) {
                         Err(e) => {
-                            self.status(format!("归组失败：{e}"));
+                            self.status(nooksill_core::i18n::fmt(
+                                "Could not group: {0}",
+                                &[e.to_string().as_str()],
+                            ));
                             let at = index.min(self.raw.len());
                             self.raw.insert(at, item);
                         }
@@ -55,7 +60,7 @@ impl App {
             }
         }
         self.apply_item_change();
-        self.status("已保存");
+        self.status(nooksill_core::i18n::t("Saved"));
     }
 
     /// Move an item by `delta` (-1 or +1).
@@ -82,11 +87,17 @@ impl App {
         }
         let owner = self.settings_hwnd();
         let filters = [
-            ("图标与可执行文件", "*.ico;*.exe;*.dll"),
-            ("所有文件", "*.*"),
+            (
+                nooksill_core::i18n::t("Icons and executables"),
+                "*.ico;*.exe;*.dll",
+            ),
+            (nooksill_core::i18n::t("All files"), "*.*"),
         ];
-        let Some(path) = nooksill_platform::filedialog::open_file("更换图标", owner, &filters)
-        else {
+        let Some(path) = nooksill_platform::filedialog::open_file(
+            nooksill_core::i18n::t("Change icon"),
+            owner,
+            &filters,
+        ) else {
             return;
         };
         self.raw[index].icon_src = path.to_string_lossy().into_owned();
@@ -97,7 +108,10 @@ impl App {
         // suppression, or `request_missing_icons` assumes a request is pending.
         self.icons.forget(index, &self.raw[index].path);
         self.apply_item_change();
-        self.status(format!("已更换「{}」的图标", self.raw[index].name));
+        self.status(nooksill_core::i18n::fmt(
+            "Icon changed for {0}",
+            &[self.raw[index].name.to_string().as_str()],
+        ));
     }
 
     /// Restore the default icon.
@@ -114,7 +128,10 @@ impl App {
         // Same as above: allow the default icon to be queued again.
         self.icons.forget(index, &self.raw[index].path);
         self.apply_item_change();
-        self.status(format!("已恢复「{name}」的默认图标"));
+        self.status(nooksill_core::i18n::fmt(
+            "Default icon restored for {0}",
+            &[name.to_string().as_str()],
+        ));
     }
 
     /// Move a child inside its group; returns whether it moved.
@@ -129,7 +146,10 @@ impl App {
         // A group icon tiles its first 4 children, so a new order needs a refetch.
         self.dock.clear_icon(gi);
         self.apply_item_change();
-        self.status(format!("已调整「{name}」内的顺序"));
+        self.status(nooksill_core::i18n::fmt(
+            "Reordered children of {0}",
+            &[name.to_string().as_str()],
+        ));
         true
     }
 
@@ -199,27 +219,42 @@ impl App {
 
         if added == 0 && grouped == 0 {
             if dup > 0 {
-                self.status(format!("{dup} 个条目已在 Dock 中"));
+                self.status(nooksill_core::i18n::fmt(
+                    "{0} items already on the Dock",
+                    &[dup.to_string().as_str()],
+                ));
             } else if failed > 0 {
-                self.status(format!("{failed} 个路径无法识别"));
+                self.status(nooksill_core::i18n::fmt(
+                    "{0} paths could not be recognised",
+                    &[failed.to_string().as_str()],
+                ));
             }
             return dup > 0 || failed > 0;
         }
         self.apply_item_change();
         let mut parts = Vec::new();
         if added > 0 {
-            parts.push(format!(
-                "在第 {} 位插入 {added} 个",
-                at.saturating_sub(added) + 1
+            parts.push(nooksill_core::i18n::fmt(
+                "Inserted {1} items at position {0}",
+                &[
+                    (at.saturating_sub(added) + 1).to_string().as_str(),
+                    added.to_string().as_str(),
+                ],
             ));
         }
         if grouped > 0 {
-            parts.push(format!("归入分组 {grouped} 个"));
+            parts.push(nooksill_core::i18n::fmt(
+                "Added {0} items to groups",
+                &[grouped.to_string().as_str()],
+            ));
         }
         if dup > 0 {
-            parts.push(format!("跳过重复 {dup} 个"));
+            parts.push(nooksill_core::i18n::fmt(
+                "Skipped {0} duplicates",
+                &[dup.to_string().as_str()],
+            ));
         }
-        self.status(parts.join("，"));
+        self.status(parts.join(nooksill_core::i18n::t(", ")));
         true
     }
 }

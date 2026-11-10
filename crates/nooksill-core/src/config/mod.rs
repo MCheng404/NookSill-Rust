@@ -174,6 +174,8 @@ pub struct Config {
     ///
     /// Empty means never dragged; ids are validated by `control::parse_order`.
     pub cc_order: String,
+    /// UI language tag; empty means follow the OS display language.
+    pub language: String,
     /// Runtime accent color (RGB 0..=255) resolved from the system accent.
     ///
     /// Not persisted: `None` means the theme default.

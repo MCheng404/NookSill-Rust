@@ -17,7 +17,9 @@ pub(super) fn ensure_launchpad<'a>(
         let dat = paths.dir.join("launchpad.dat");
         *slot = Some(LaunchpadWindow::new(gpu, ppp, dark, &dat)?);
     }
-    Ok(slot.as_mut().expect("上面刚保证过"))
+    // An error points at the logic bug better than a panic.
+    let lp = slot.as_mut().ok_or("launchpad window not initialised")?;
+    Ok(&mut **lp)
 }
 
 pub(super) fn ensure_settings<'a>(
@@ -35,9 +37,9 @@ pub(super) fn ensure_settings<'a>(
                 .enumerate()
                 .map(|(i, _)| {
                     if i == 0 {
-                        "主显示器".to_owned()
+                        nooksill_core::i18n::t("Primary monitor").to_owned()
                     } else {
-                        format!("显示器 {}", i + 1)
+                        nooksill_core::i18n::fmt("Monitor {0}", &[(i + 1).to_string().as_str()])
                     }
                 })
                 .collect(),
@@ -57,9 +59,8 @@ pub(super) fn ensure_settings<'a>(
         // must never move.
         *slot = Some(SettingsWindow::new(gpu, state, ppp)?);
     }
-    // Same as above: failing to take it means a logic bug, and an error points
-    // at it better than a panic.
-    let sw = slot.as_mut().ok_or("设置窗口未初始化")?;
+    // An error points at the logic bug better than a panic.
+    let sw = slot.as_mut().ok_or("settings window not initialised")?;
     Ok(&mut **sw)
 }
 
@@ -84,9 +85,12 @@ pub(super) fn tick_settings(
     let active = gpu.info.name.clone();
     let note = if !gpu.selection.matches_config(&dock.cfg.adapter, &active) {
         if dock.cfg.adapter.is_empty() {
-            "已改为自动选择，重启后生效".to_owned()
+            nooksill_core::i18n::t("Switched to automatic; applies on next start").to_owned()
         } else {
-            format!("已选择「{}」，重启后生效", dock.cfg.adapter)
+            nooksill_core::i18n::fmt(
+                "Selected {0}; applies on next start",
+                &[dock.cfg.adapter.to_string().as_str()],
+            )
         }
     } else if gpu.selection.fell_back() {
         gpu.selection.describe()

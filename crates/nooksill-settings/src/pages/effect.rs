@@ -13,42 +13,41 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "环境烟雾",
-        "移植自 Windhawk 的 Taskbar Smoke：真实流体模拟，烟会上升、卷曲、随鼠标让开。\
-         只在底部停靠时启用 —— 原版就是照底部任务栏调的，顶端停靠时烟会往屏幕外冒。",
+        nooksill_core::i18n::t("Ambient smoke"),
+        nooksill_core::i18n::t("Ported from Windhawk's Taskbar Smoke: a real fluid simulation that rises, curls and yields to the cursor. Only enabled while docked at the bottom, as the original was tuned for the taskbar; at the top edge the smoke would rise off-screen."),
         |ctx, ui| {
-            toggle(ctx, ui, Key::SMOKE, "启用环境烟雾", "");
-            combo(ctx, ui, Key::SMOKE_COLOR, "主色", SMOKE_COLOR_OPTS);
-            combo(ctx, ui, Key::SMOKE_COLOR2, "第二色", SMOKE_COLOR2_OPTS);
-            combo(ctx, ui, Key::SMOKE_OPACITY, "不透明度", SMOKE_OPACITY_OPTS);
+            toggle(ctx, ui, Key::SMOKE, nooksill_core::i18n::t("Enable ambient smoke"), "");
+            combo(ctx, ui, Key::SMOKE_COLOR, nooksill_core::i18n::t("Primary colour"), SMOKE_COLOR_OPTS);
+            combo(ctx, ui, Key::SMOKE_COLOR2, nooksill_core::i18n::t("Second colour"), SMOKE_COLOR2_OPTS);
+            combo(ctx, ui, Key::SMOKE_OPACITY, nooksill_core::i18n::t("Opacity"), SMOKE_OPACITY_OPTS);
             combo(
                 ctx,
                 ui,
                 Key::SMOKE_TONE,
-                "色调",
-                &[(0, "烟（暗）"), (1, "辉光（亮）")],
+                nooksill_core::i18n::t("Tone"),
+                &[(0, "Smoke (dark)"), (1, "Glow (bright)")],
             );
-            toggle(ctx, ui, Key::SMOKE_CLOUDS, "上升的小烟团", "");
+            toggle(ctx, ui, Key::SMOKE_CLOUDS, nooksill_core::i18n::t("Rising puffs"), "");
         },
     );
 
     card(
         ctx,
         ui,
-        "烟雾手感",
-        "浓度与速度直接改流体参数；厚度同时决定光晕往栏体外延伸多远。",
+        nooksill_core::i18n::t("Smoke feel"),
+        nooksill_core::i18n::t("Density and speed drive the fluid directly; thickness also sets how far the glow reaches past the bar."),
         |ctx, ui| {
-            combo(ctx, ui, Key::SMOKE_DENSITY, "浓度", SMOKE_DENSITY_OPTS);
-            combo(ctx, ui, Key::SMOKE_SPEED, "速度", SMOKE_SPEED_OPTS);
-            combo(ctx, ui, Key::SMOKE_THICK, "光晕厚度", SMOKE_THICK_OPTS);
+            combo(ctx, ui, Key::SMOKE_DENSITY, nooksill_core::i18n::t("Density"), SMOKE_DENSITY_OPTS);
+            combo(ctx, ui, Key::SMOKE_SPEED, nooksill_core::i18n::t("Speed"), SMOKE_SPEED_OPTS);
+            combo(ctx, ui, Key::SMOKE_THICK, nooksill_core::i18n::t("Glow thickness"), SMOKE_THICK_OPTS);
             combo(
                 ctx,
                 ui,
                 Key::SMOKE_MOUSE,
-                "鼠标反应",
-                &[(0, "关闭"), (1, "柔和"), (2, "明显")],
+                nooksill_core::i18n::t("Mouse response"),
+                &[(0, "Off"), (1, "Soft"), (2, "Strong")],
             );
-            combo(ctx, ui, Key::SMOKE_REACH, "鼠标范围", SMOKE_REACH_OPTS);
+            combo(ctx, ui, Key::SMOKE_REACH, nooksill_core::i18n::t("Mouse reach"), SMOKE_REACH_OPTS);
         },
     );
 }

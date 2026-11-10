@@ -54,6 +54,7 @@ impl Config {
 
             adapter: String::new(),
             cc_order: String::new(),
+            language: String::new(),
             runtime_accent: None,
             runtime_icon_accent: None,
         }
@@ -79,8 +80,15 @@ impl Config {
             .collect()
     }
 
+    /// Normalize a language tag; "auto" and unknown tags mean follow the OS.
+    #[must_use]
+    pub fn sanitize_language(raw: &str) -> String {
+        crate::i18n::Language::from_tag(raw).map_or_else(String::new, |lang| lang.tag().to_owned())
+    }
+
     /// Clamp every field into its legal range. Idempotent.
     pub fn clamp(&mut self) {
+        self.language = Self::sanitize_language(&self.language);
         for key in Key::all_keys() {
             let v = self.get_i32(key);
             self.apply_i32(key, v);
@@ -90,10 +98,8 @@ impl Config {
     /// Read one key (enums return their code, bools 0/1, colors the raw value).
     #[must_use]
     pub fn get_i32(&self, key: Key) -> i32 {
-        if let Key::Numeric(i) = key {
-            return self.numeric[i as usize];
-        }
         match key {
+            Key::Numeric(i) => self.numeric[i as usize],
             Key::IconSize => self.icon_size,
             Key::ZoomSize => self.zoom_size,
             Key::Spacing => self.spacing,
@@ -129,25 +135,12 @@ impl Config {
             Key::MinAnim => i32::from(self.min_anim),
             Key::Notes => i32::from(self.notes),
             Key::UiTheme => self.ui_theme.code(),
-            // Numeric keys returned above.
-            Key::Numeric(_) => unreachable!("数值键已提前处理"),
         }
     }
 
     /// Write one key, clamped immediately. Every source (ini, settings UI,
     /// presets) goes through here so no field is left unclamped.
     pub fn apply_i32(&mut self, key: Key, v: i32) {
-        if let Key::Numeric(i) = key {
-            let idx = i as usize;
-            let v = if key.is_bool() {
-                i32::from(v != 0)
-            } else {
-                let (lo, hi) = key.range();
-                v.clamp(lo, hi)
-            };
-            self.numeric[idx] = v;
-            return;
-        }
         let v = if key.is_bool() {
             i32::from(v != 0)
         } else if key.is_enum() {
@@ -160,6 +153,7 @@ impl Config {
             v.clamp(lo, hi)
         };
         match key {
+            Key::Numeric(i) => self.numeric[i as usize] = v,
             Key::IconSize => self.icon_size = v,
             Key::ZoomSize => self.zoom_size = v,
             Key::Spacing => self.spacing = v,
@@ -195,8 +189,6 @@ impl Config {
             Key::MinAnim => self.min_anim = v != 0,
             Key::Notes => self.notes = v != 0,
             Key::UiTheme => self.ui_theme = UiTheme::from_code(v),
-            // Numeric keys returned above.
-            Key::Numeric(_) => unreachable!("数值键已提前处理"),
         }
     }
 

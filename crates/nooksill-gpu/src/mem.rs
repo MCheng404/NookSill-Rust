@@ -58,11 +58,13 @@ impl MemStats {
     /// Single-line summary shared by logs and probe output.
     #[must_use]
     pub fn summary(self) -> String {
-        format!(
-            "WS {:.1} MB / 峰值 {:.1} MB / 私有 {:.1} MB",
-            self.ws_mb(),
-            self.peak_ws_mb(),
-            self.private_mb()
+        nooksill_core::i18n::fmt(
+            "WS {0} MB / peak {1} MB / private {2} MB",
+            &[
+                format!("{:.1}", self.ws_mb()).as_str(),
+                format!("{:.1}", self.peak_ws_mb()).as_str(),
+                format!("{:.1}", self.private_mb()).as_str(),
+            ],
         )
     }
 }
@@ -89,7 +91,13 @@ impl Delta {
 
     #[must_use]
     pub fn summary(self) -> String {
-        format!("+{:.1} MB WS / +{:.1} MB 私有", self.ws_mb, self.private_mb)
+        nooksill_core::i18n::fmt(
+            "+{0} MB WS / +{1} MB private",
+            &[
+                format!("{:.1}", self.ws_mb).as_str(),
+                format!("{:.1}", self.private_mb).as_str(),
+            ],
+        )
     }
 }
 
@@ -109,8 +117,9 @@ mod tests {
     fn 摘要包含三个口径() {
         let s = MemStats::now();
         let text = s.summary();
-        assert!(text.contains("WS"));
-        assert!(text.contains("峰值"));
-        assert!(text.contains("私有"));
+        let lower = text.to_lowercase();
+        assert!(lower.contains("ws"));
+        assert!(lower.contains(&nooksill_core::i18n::t("Peak").to_lowercase()));
+        assert!(lower.contains(&nooksill_core::i18n::t("Private").to_lowercase()));
     }
 }

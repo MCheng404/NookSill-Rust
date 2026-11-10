@@ -54,12 +54,17 @@ impl App {
             }
         }
         let cfg = Config::from_ini(&ini);
+        nooksill_core::i18n::configure(&cfg.language, nooksill_platform::locale::ui_language_id());
         // Mutable: drag-reordering edits this list alongside the dock.
         let mut raw: Vec<Item> = store::load_items(&ini);
         // The notes switch appends a real item rather than a virtual one, so
         // `dock.items` and `raw` keep their index correspondence.
         if cfg.notes && !raw.iter().any(|i| i.kind == ItemKind::Note) {
-            raw.push(Item::new(ItemKind::Note, "速记", "nooksill:notes"));
+            raw.push(Item::new(
+                ItemKind::Note,
+                nooksill_core::i18n::t("Notes"),
+                "nooksill:notes",
+            ));
         }
         let notes = nooksill_core::note::NoteBook::load(&ini);
         let items: Vec<DockItem> = raw.iter().map(DockItem::from_item).collect();

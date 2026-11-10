@@ -64,6 +64,7 @@ fn missing_and_garbage_values_fall_back() {
     ini.set("Settings", "Opacity", "abc");
     ini.set("Settings", "IconSize", "");
     let c = Config::from_ini(&ini);
-    assert_eq!(c.opacity, 0); // 与 GetPrivateProfileInt 一致：非数字 -> 0
-    assert_eq!(c.icon_size, 16); // 0 被夹到下限
+    // GetPrivateProfileInt maps a non-numeric value to 0.
+    assert_eq!(c.opacity, 0);
+    assert_eq!(c.icon_size, 16);
 }

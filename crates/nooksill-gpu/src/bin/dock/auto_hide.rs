@@ -55,7 +55,11 @@ impl App {
         if trace::geom() {
             eprintln!(
                 "[fullscreen] {}",
-                if fs { "隐藏 Dock" } else { "恢复 Dock" }
+                if fs {
+                    nooksill_core::i18n::t("Hide Dock")
+                } else {
+                    nooksill_core::i18n::t("Restore Dock")
+                }
             );
         }
         // Paint at once when showing again, otherwise the window stays blank

@@ -36,11 +36,12 @@ impl CcWindow {
             nooksill_platform::adapter::wired_connected(),
         );
         let (pw, ph) = physical_size(ppp, tiles.len());
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Control Center"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 class_pcwstr(),
-                windows::core::w!("控制中心"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 0,
                 0,

@@ -181,9 +181,9 @@ impl App {
                         sw.state.auto_start = real;
                     }
                     self.status(if real {
-                        "已设置开机自启动"
+                        nooksill_core::i18n::t("Autostart enabled")
                     } else {
-                        "已取消开机自启动"
+                        nooksill_core::i18n::t("Autostart disabled")
                     });
                 }
             } else if matches!(cmd, MenuCmd::AddFile | MenuCmd::AddFolder) {
@@ -246,6 +246,17 @@ impl App {
         let mut need_frame = false;
 
         if changed {
+            // Language is the only config value read by the text lookup itself.
+            let before = nooksill_core::i18n::language();
+            nooksill_core::i18n::configure(
+                &self.dock.cfg.language,
+                nooksill_platform::locale::ui_language_id(),
+            );
+            if nooksill_core::i18n::language() != before {
+                if let Some(sw) = &self.settings_slot {
+                    sw.refresh_title();
+                }
+            }
             // Config is shared by the dock and the settings window; `update()`
             // recomputes geometry next frame, so only mark dirty and schedule
             // a save here.
@@ -255,10 +266,13 @@ impl App {
             // `Notes` switch: add the note item immediately. Turning it off
             // never deletes, since the user may have added their own.
             if self.dock.cfg.notes && !self.raw.iter().any(|i| i.kind == ItemKind::Note) {
-                self.raw
-                    .push(Item::new(ItemKind::Note, "速记", "nooksill:notes"));
+                self.raw.push(Item::new(
+                    ItemKind::Note,
+                    nooksill_core::i18n::t("Notes"),
+                    "nooksill:notes",
+                ));
                 self.apply_item_change();
-                self.status("已添加速记图标");
+                self.status(nooksill_core::i18n::t("Notes icon added"));
             }
             if trace::geom() {
                 eprintln!("[settings] 配置有改动，排定写盘");
@@ -389,7 +403,9 @@ impl App {
                 // The last entry may not be removed: the dock would be empty
                 // with nothing left to drag onto.
                 if self.raw.len() <= 1 {
-                    self.status("这是最后一项，不能移除。");
+                    self.status(nooksill_core::i18n::t(
+                        "This is the last item and cannot be removed.",
+                    ));
                     return;
                 }
                 self.raw.remove(i);
@@ -413,7 +429,10 @@ impl App {
                 copy.kids.clear();
                 self.raw.insert(i + 1, copy);
                 self.apply_item_change();
-                self.status(format!("已复制「{}」", item.name));
+                self.status(nooksill_core::i18n::fmt(
+                    "Copied {0}",
+                    &[item.name.to_string().as_str()],
+                ));
             }
             MenuCmd::DissolveGroup => {
                 let Some(i) = hit else { return };
@@ -423,9 +442,14 @@ impl App {
                 match group::dissolve_item(&mut self.raw, i) {
                     Ok(_) => {
                         self.apply_item_change();
-                        self.status("已解散分组，子项放回栏体");
+                        self.status(nooksill_core::i18n::t(
+                            "Group dissolved; children returned to the bar",
+                        ));
                     }
-                    Err(e) => self.status(format!("解散失败：{e}")),
+                    Err(e) => self.status(nooksill_core::i18n::fmt(
+                        "Could not dissolve: {0}",
+                        &[e.to_string().as_str()],
+                    )),
                 }
             }
             MenuCmd::OpenGroup => {

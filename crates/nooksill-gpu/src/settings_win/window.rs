@@ -30,6 +30,7 @@ impl SettingsWindow {
 
         let (pw, ph) = physical_size(ppp);
         let (x, y) = centered_origin(pw, ph);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Settings"));
         let hwnd = unsafe {
             CreateWindowExW(
                 // `WS_EX_LAYERED` is required by `UpdateLayeredWindow`,
@@ -37,7 +38,7 @@ impl SettingsWindow {
                 // `WS_EX_TOPMOST` keeps it above the Dock.
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("NookSill 设置"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,
@@ -145,6 +146,18 @@ impl SettingsWindow {
             self.renderer.start_live_frost(self.hwnd, spec, self.ppp);
         }
         Ok(())
+    }
+
+    /// Re-apply the localized title after the UI language changes.
+    pub fn refresh_title(&self) {
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Settings"));
+        // SAFETY: the HSTRING outlives the call, and Win32 copies the text.
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+                self.hwnd,
+                windows::core::PCWSTR(title.as_ptr()),
+            );
+        }
     }
 
     /// Shows and activates the window.

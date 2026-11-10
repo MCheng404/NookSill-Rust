@@ -132,7 +132,7 @@ impl Dock {
             painter.text(
                 bar.center(),
                 Align2::CENTER_CENTER,
-                "将应用、文件夹或网址拖到这里",
+                nooksill_core::i18n::t("Drop apps, folders or URLs here"),
                 FontId::proportional(13.0),
                 Color32::from_rgba_unmultiplied(255, 255, 255, 190),
             );
@@ -184,7 +184,7 @@ impl Dock {
         if !self.drag_outside() {
             return;
         }
-        let text = "松手移除 · 拖回栏体可取消";
+        let text = nooksill_core::i18n::t("Release to remove · drag back to cancel");
         let font = FontId::proportional(13.0);
         let galley = painter.layout_no_wrap(text.to_owned(), font, Color32::WHITE);
         let size = galley.size() + egui::vec2(22.0, 12.0);

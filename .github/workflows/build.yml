@@ -1,7 +1,7 @@
 name: build
 
 # 三段式：
-#   gate     每次 push / PR 都跑，格式 + lint + 测试
+#   gate     每次 push / PR 都跑，注释 + 规模 + 格式 + lint + 测试
 #   debug    任何分支的提交都出调试包（版本 X.Y.Z-dev.<run>），默认再发一条
 #            rolling Pre-Release（tag = dev）；可以关掉只留 Actions 产物
 #   release  打 v* 标签时出稳定版，发正式 Release
@@ -52,6 +52,16 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: ilammy/msvc-dev-cmd@v1
+
+      # Same two text gates as scripts/build.sh --gate; bash ships grep -P on
+      # the Windows runner, so no extra toolchain is needed.
+      - name: source gates
+        shell: bash
+        run: |
+          ./scripts/check-comments.sh --self-test
+          ./scripts/check-comments.sh
+          ./scripts/check-size.sh --self-test
+          ./scripts/check-size.sh
 
       - name: fmt
         run: cargo fmt --all -- --check

@@ -46,24 +46,28 @@ impl LaunchpadWindow {
         match self.menu {
             Some(MenuState::Cell(idx)) => match self.lp.top().get(idx) {
                 Some(Top::Folder(_)) => {
-                    out = vec!["打开".into(), "重命名…".into(), "解散文件夹".into()];
+                    out = vec![
+                        nooksill_core::i18n::t("Open").into(),
+                        nooksill_core::i18n::t("Rename…").into(),
+                        nooksill_core::i18n::t("Dissolve folder").into(),
+                    ];
                 }
                 Some(Top::App(_)) => {
                     out = vec![
-                        "打开".into(),
-                        "重命名…".into(),
-                        "移动到标签组…".into(),
-                        "添加到 Dock 栏".into(),
-                        "从起动台移除".into(),
+                        nooksill_core::i18n::t("Open").into(),
+                        nooksill_core::i18n::t("Rename…").into(),
+                        nooksill_core::i18n::t("Move to tag group…").into(),
+                        nooksill_core::i18n::t("Add to Dock").into(),
+                        nooksill_core::i18n::t("Remove from Launchpad").into(),
                     ];
                 }
                 None => {}
             },
             Some(MenuState::App(_)) => {
                 out = vec![
-                    "打开".into(),
-                    "移动到标签组…".into(),
-                    "添加到 Dock 栏".into(),
+                    nooksill_core::i18n::t("Open").into(),
+                    nooksill_core::i18n::t("Move to tag group…").into(),
+                    nooksill_core::i18n::t("Add to Dock").into(),
                 ];
             }
             Some(MenuState::Category(ai)) => {
@@ -73,20 +77,20 @@ impl LaunchpadWindow {
                     // than a checkmark: the font has no glyph for it and
                     // would draw a tofu box.
                     out.push(if i + 1 == cur {
-                        format!("{t}（当前）")
+                        nooksill_core::i18n::fmt("{0} (current)", &[t.to_string().as_str()])
                     } else {
                         t.to_string()
                     });
                 }
-                out.push("自动分类（清除）".into());
-                out.push("（返回）".into());
+                out.push(nooksill_core::i18n::t("Auto category (clear)").into());
+                out.push(nooksill_core::i18n::t("(Back)").into());
             }
             Some(MenuState::Tag(_)) => {
-                out.push("重命名…".into());
+                out.push(nooksill_core::i18n::t("Rename…").into());
                 // The last group is not offered for deletion: without it the
                 // launchpad would have no category bar left.
                 if self.lp.tags().len() > 1 {
-                    out.push("删除这一组".into());
+                    out.push(nooksill_core::i18n::t("Delete this group").into());
                 }
             }
             None => {}
@@ -107,13 +111,15 @@ impl LaunchpadWindow {
         // The menu of a tag group.
         if let MenuState::Tag(ti) = state {
             match label {
-                "重命名…" => {
+                _ if label == nooksill_core::i18n::t("Rename…") => {
                     self.rename_buf = self.lp.tags().get(ti).cloned().unwrap_or_default();
                     self.renaming = Some(RenameTarget::Tag(ti));
                 }
                 // The guard is equivalent to the if body (a false guard falls
                 // through to `_` as well), and `remove_tag` only runs once.
-                "删除这一组" if self.lp.remove_tag(ti) => {
+                _ if label == nooksill_core::i18n::t("Delete this group")
+                    && (self.lp.remove_tag(ti)) =>
+                {
                     self.dirty_save = true;
                     // Category numbers start at 1, so removing group `ti+1`
                     // shifts the later ones down; if the removed group was
@@ -136,16 +142,18 @@ impl LaunchpadWindow {
         // Submenu: pick a tag group for the app.
         if let MenuState::Category(ai) = state {
             match label {
-                "自动分类（清除）" => self.lp.set_category(ai, None),
-                "（返回）" => {
+                _ if label == nooksill_core::i18n::t("Auto category (clear)") => {
+                    self.lp.set_category(ai, None)
+                }
+                _ if label == nooksill_core::i18n::t("(Back)") => {
                     self.menu = Some(MenuState::App(ai));
                     self.next_repaint = Instant::now();
                     return;
                 }
                 _ => {
-                    // The current group may carry a CJK suffix, so strip it
-                    // before comparing.
-                    let bare = label.trim_end_matches("（当前）");
+                    // The current group carries a localized suffix; strip the very
+                    // same suffix used when the label was built.
+                    let bare = label.trim_end_matches(nooksill_core::i18n::t(" (current)"));
                     if let Some(pos) = self.lp.tags().iter().position(|t| t == bare) {
                         self.lp.set_category(ai, Some(pos + 1));
                     }
@@ -159,13 +167,15 @@ impl LaunchpadWindow {
         // The menu of an app in the filtered view.
         if let MenuState::App(ai) = state {
             match label {
-                "打开" => {
+                _ if label == nooksill_core::i18n::t("Open") => {
                     let path = self.lp.apps()[ai].path.clone();
                     nooksill_platform::sysact::open_uri(&path);
                     self.close();
                 }
-                "移动到标签组…" => self.menu = Some(MenuState::Category(ai)),
-                "添加到 Dock 栏" => {
+                _ if label == nooksill_core::i18n::t("Move to tag group…") => {
+                    self.menu = Some(MenuState::Category(ai))
+                }
+                _ if label == nooksill_core::i18n::t("Add to Dock") => {
                     self.menu = None;
                     let app = &self.lp.apps()[ai];
                     self.cmds.push(LaunchpadCmd::AddToDock {
@@ -182,12 +192,12 @@ impl LaunchpadWindow {
             return;
         };
         match label {
-            "打开" => self.activate_top(idx),
-            "重命名…" => {
+            _ if label == nooksill_core::i18n::t("Open") => self.activate_top(idx),
+            _ if label == nooksill_core::i18n::t("Rename…") => {
                 self.rename_buf = self.lp.name_of(self.lp.top()[idx]).to_owned();
                 self.renaming = Some(RenameTarget::Cell(idx));
             }
-            "添加到 Dock 栏" => {
+            _ if label == nooksill_core::i18n::t("Add to Dock") => {
                 if let Some(Top::App(ai)) = self.lp.top().get(idx).copied() {
                     let app = &self.lp.apps()[ai];
                     self.cmds.push(LaunchpadCmd::AddToDock {
@@ -196,18 +206,18 @@ impl LaunchpadWindow {
                     });
                 }
             }
-            "移动到标签组…" => {
+            _ if label == nooksill_core::i18n::t("Move to tag group…") => {
                 if let Some(Top::App(ai)) = self.lp.top().get(idx).copied() {
                     self.menu = Some(MenuState::Category(ai));
                 }
             }
-            "从起动台移除" => {
+            _ if label == nooksill_core::i18n::t("Remove from Launchpad") => {
                 if self.lp.remove_top(idx) {
                     self.dirty_save = true;
                     self.clamp_page();
                 }
             }
-            "解散文件夹" => {
+            _ if label == nooksill_core::i18n::t("Dissolve folder") => {
                 let changed = self.lp.dissolve(idx);
                 if changed {
                     self.dirty_save = true;

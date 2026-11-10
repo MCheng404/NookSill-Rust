@@ -20,12 +20,12 @@ pub enum AdapterKind {
 
 impl AdapterKind {
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Discrete => "独显",
-            Self::Integrated => "核显",
-            Self::Software => "软件",
-            Self::Other => "其它",
+            Self::Discrete => nooksill_core::i18n::t("Discrete"),
+            Self::Integrated => nooksill_core::i18n::t("Integrated"),
+            Self::Software => nooksill_core::i18n::t("Software"),
+            Self::Other => nooksill_core::i18n::t("Other"),
         }
     }
 }

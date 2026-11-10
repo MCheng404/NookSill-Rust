@@ -17,16 +17,24 @@ pub(crate) fn accent_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     row(
         ui,
         ctx.state,
-        "来源",
-        "跟随 Windows 强调色，或指定自己的颜色",
+        nooksill_core::i18n::t("Source"),
+        nooksill_core::i18n::t("Follow the Windows accent or pick your own colour"),
         |ui, id| {
             egui::ComboBox::from_id_salt("ui-accent-mode")
-                .selected_text(if custom { "自定义" } else { "跟随系统" })
+                .selected_text(if custom {
+                    nooksill_core::i18n::t("Custom")
+                } else {
+                    nooksill_core::i18n::t("Follow system")
+                })
                 .width(112.0)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut custom, false, "跟随系统")
-                        .labelled_by(id);
-                    ui.selectable_value(&mut custom, true, "自定义")
+                    ui.selectable_value(
+                        &mut custom,
+                        false,
+                        nooksill_core::i18n::t("Follow system"),
+                    )
+                    .labelled_by(id);
+                    ui.selectable_value(&mut custom, true, nooksill_core::i18n::t("Custom"))
                         .labelled_by(id);
                 })
                 .response
@@ -59,7 +67,7 @@ pub(crate) fn color_row(ctx: &mut Ctx<'_>, ui: &mut Ui, key: Key, label: &str) {
         [color::red(c), color::green(c), color::blue(c)]
     };
     row(ui, ctx.state, label, "", |ui, id| {
-        let resp = ui.checkbox(&mut enabled, "启用");
+        let resp = ui.checkbox(&mut enabled, nooksill_core::i18n::t("Enable"));
         resp.labelled_by(id);
         if enabled {
             ui.color_edit_button_srgb(&mut arr).labelled_by(id);

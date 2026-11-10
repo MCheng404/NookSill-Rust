@@ -75,7 +75,7 @@ pub(super) fn paint(
         painter.text(
             br.center(),
             Align2::CENTER_CENTER,
-            "解散分组",
+            nooksill_core::i18n::t("Dissolve group"),
             FontId::proportional(12.0),
             ink,
         );

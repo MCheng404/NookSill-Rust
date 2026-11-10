@@ -11,7 +11,10 @@ impl App {
             Command::OpenConfigDir => {
                 let dir = self.paths.dir.display().to_string();
                 if let Err(e) = launch::open_folder(&dir) {
-                    self.status(format!("打开配置目录失败：{e}"));
+                    self.status(nooksill_core::i18n::fmt(
+                        "Could not open the config folder: {0}",
+                        &[e.to_string().as_str()],
+                    ));
                 }
                 false
             }
@@ -39,9 +42,12 @@ impl App {
                 match group::extract_kid(&mut self.raw, group, kid) {
                     Ok(_) => {
                         self.apply_item_change();
-                        self.status("已移出分组");
+                        self.status(nooksill_core::i18n::t("Moved out of group"));
                     }
-                    Err(e) => self.status(format!("移出失败：{e}")),
+                    Err(e) => self.status(nooksill_core::i18n::fmt(
+                        "Could not move out: {0}",
+                        &[e.to_string().as_str()],
+                    )),
                 }
                 false
             }
@@ -49,9 +55,14 @@ impl App {
                 match group::dissolve_item(&mut self.raw, index) {
                     Ok(_) => {
                         self.apply_item_change();
-                        self.status("已解散分组，子项放回栏体");
+                        self.status(nooksill_core::i18n::t(
+                            "Group dissolved; children returned to the bar",
+                        ));
                     }
-                    Err(e) => self.status(format!("解散失败：{e}")),
+                    Err(e) => self.status(nooksill_core::i18n::fmt(
+                        "Could not dissolve: {0}",
+                        &[e.to_string().as_str()],
+                    )),
                 }
                 false
             }
@@ -68,10 +79,13 @@ impl App {
                 false
             }
             Command::AddNote => {
-                self.raw
-                    .push(Item::new(ItemKind::Note, "速记", "nooksill:notes"));
+                self.raw.push(Item::new(
+                    ItemKind::Note,
+                    nooksill_core::i18n::t("Notes"),
+                    "nooksill:notes",
+                ));
                 self.apply_item_change();
-                self.status("已添加速记条目");
+                self.status(nooksill_core::i18n::t("Notes item added"));
                 false
             }
             Command::OpenNotes => {
@@ -96,9 +110,9 @@ impl App {
                     // report success.
                     let real = theme::get_autostart();
                     let text = if real {
-                        "已设置开机自启动"
+                        nooksill_core::i18n::t("Autostart enabled")
                     } else {
-                        "已取消开机自启动"
+                        nooksill_core::i18n::t("Autostart disabled")
                     };
                     if let Some(sw) = self.settings_slot.as_mut() {
                         sw.state.auto_start = real;
@@ -108,7 +122,10 @@ impl App {
                     let err = theme::last_registry_error();
                     let real = theme::get_autostart();
                     if let Some(sw) = self.settings_slot.as_mut() {
-                        sw.state.status = format!("写入注册表失败（错误码 {err}）");
+                        sw.state.status = nooksill_core::i18n::fmt(
+                            "Registry write failed (code {0})",
+                            &[err.to_string().as_str()],
+                        );
                         sw.state.auto_start = real;
                     }
                 }
@@ -116,17 +133,19 @@ impl App {
             }
             Command::ResetDefaults => {
                 self.dock.cfg = Config::defaults();
-                self.status("已恢复默认设置");
+                self.status(nooksill_core::i18n::t("Defaults restored"));
                 true
             }
             Command::Recommended => {
                 apply_recommended(&mut self.dock.cfg);
-                self.status("已套用推荐设置（尺寸与停靠边没动）");
+                self.status(nooksill_core::i18n::t(
+                    "Recommended settings applied (size and edge unchanged)",
+                ));
                 true
             }
             Command::LowPower => {
                 apply_low_power(&mut self.dock.cfg);
-                self.status("已关闭高开销视觉效果");
+                self.status(nooksill_core::i18n::t("Costly visual effects disabled"));
                 true
             }
             // Shares the right-click menu path: edit `raw`, swap the list,
@@ -137,7 +156,11 @@ impl App {
                 false
             }
             Command::AddTrash => {
-                self.raw.push(Item::new(ItemKind::Trash, "回收站", ""));
+                self.raw.push(Item::new(
+                    ItemKind::Trash,
+                    nooksill_core::i18n::t("Recycle Bin"),
+                    "",
+                ));
                 self.apply_item_change();
                 false
             }
@@ -160,23 +183,34 @@ impl App {
                     sw.state.url_input.clear();
                 }
                 self.apply_item_change();
-                self.status(format!("已添加 {name}"));
+                self.status(nooksill_core::i18n::fmt(
+                    "Added {0}",
+                    &[name.to_string().as_str()],
+                ));
                 false
             }
             Command::AddFile => {
                 let owner = self.settings_hwnd();
-                let filters = [("应用与快捷方式", "*.exe;*.lnk"), ("所有文件", "*.*")];
-                if let Some(path) =
-                    nooksill_platform::filedialog::open_file("添加应用或文件", owner, &filters)
-                {
+                let filters = [
+                    (nooksill_core::i18n::t("Apps and shortcuts"), "*.exe;*.lnk"),
+                    (nooksill_core::i18n::t("All files"), "*.*"),
+                ];
+                if let Some(path) = nooksill_platform::filedialog::open_file(
+                    nooksill_core::i18n::t("Add app or file"),
+                    owner,
+                    &filters,
+                ) {
                     let name = path
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "新条目".to_owned());
+                        .unwrap_or_else(|| nooksill_core::i18n::t("New item").to_owned());
                     self.raw
                         .push(Item::new(ItemKind::File, &name, path.to_string_lossy()));
                     self.apply_item_change();
-                    self.status(format!("已添加 {name}"));
+                    self.status(nooksill_core::i18n::fmt(
+                        "Added {0}",
+                        &[name.to_string().as_str()],
+                    ));
                 }
                 false
             }
@@ -187,30 +221,43 @@ impl App {
                     let name = path
                         .file_name()
                         .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "新文件夹".to_owned());
+                        .unwrap_or_else(|| nooksill_core::i18n::t("Untitled folder").to_owned());
                     self.raw
                         .push(Item::new(ItemKind::Folder, &name, path.to_string_lossy()));
                     self.apply_item_change();
-                    self.status(format!("已添加 {name}"));
+                    self.status(nooksill_core::i18n::fmt(
+                        "Added {0}",
+                        &[name.to_string().as_str()],
+                    ));
                 }
                 false
             }
             Command::NewGroup => {
-                self.raw.push(Item::new(ItemKind::Group, "新建分组", ""));
+                self.raw.push(Item::new(
+                    ItemKind::Group,
+                    nooksill_core::i18n::t("New group"),
+                    "",
+                ));
                 self.apply_item_change();
-                self.status("已新建分组：把图标拖进去即可归组");
+                self.status(nooksill_core::i18n::t(
+                    "Group created; drop icons onto it to add them",
+                ));
                 false
             }
             Command::PickIconDir => {
                 let owner = self.settings_hwnd();
-                if let Some(dir) =
-                    nooksill_platform::filedialog::open_folder("选择图标文件夹", owner)
-                {
+                if let Some(dir) = nooksill_platform::filedialog::open_folder(
+                    nooksill_core::i18n::t("Choose icon folder"),
+                    owner,
+                ) {
                     let text = dir.display().to_string();
                     if let Some(sw) = self.settings_slot.as_mut() {
                         sw.state.icon_dir = text.clone();
                     }
-                    self.status(format!("图标文件夹：{text}"));
+                    self.status(nooksill_core::i18n::fmt(
+                        "Icon folder: {0}",
+                        &[text.to_string().as_str()],
+                    ));
                 }
                 false
             }
@@ -221,7 +268,7 @@ impl App {
                     .map(|sw| sw.state.icon_dir.clone())
                     .unwrap_or_default();
                 if dir.is_empty() {
-                    self.status("先选一个图标文件夹");
+                    self.status(nooksill_core::i18n::t("Choose an icon folder first"));
                     return false;
                 }
                 let mut matched = 0usize;
@@ -236,21 +283,26 @@ impl App {
                     }
                 }
                 if matched == 0 {
-                    self.status("没有找到同名 .ico");
+                    self.status(nooksill_core::i18n::t("No matching .ico found"));
                     return false;
                 }
                 // The icon source changed; without clearing the cache
                 // `replace_items` keeps the old icons by path.
                 self.dock.clear_icons();
                 self.apply_item_change();
-                self.status(format!("匹配到 {matched} 个图标"));
+                self.status(nooksill_core::i18n::fmt(
+                    "Matched {0} icons",
+                    &[matched.to_string().as_str()],
+                ));
                 false
             }
             Command::ExportAll => {
                 let owner = self.settings_hwnd();
-                if let Some(path) =
-                    nooksill_platform::filedialog::save_file("导出完整配置", owner, "NookSill.ini")
-                {
+                if let Some(path) = nooksill_platform::filedialog::save_file(
+                    nooksill_core::i18n::t("Export full config"),
+                    owner,
+                    "NookSill.ini",
+                ) {
                     // Start from the on-disk ini to keep unknown keys; items and
                     // settings overwrite on top.
                     let mut ini =
@@ -258,18 +310,29 @@ impl App {
                     store::save_items(&self.raw, &mut ini);
                     self.dock.cfg.write_ini(&mut ini);
                     match ini.save(&path) {
-                        Ok(()) => self.status(format!("已导出到 {}", path.display())),
-                        Err(e) => self.status(format!("导出失败：{e}")),
+                        Ok(()) => self.status(nooksill_core::i18n::fmt(
+                            "Exported to {0}",
+                            &[path.display().to_string().as_str()],
+                        )),
+                        Err(e) => self.status(nooksill_core::i18n::fmt(
+                            "Export failed: {0}",
+                            &[e.to_string().as_str()],
+                        )),
                     }
                 }
                 false
             }
             Command::Import => {
                 let owner = self.settings_hwnd();
-                let filters = [("NookSill 配置", "*.ini"), ("所有文件", "*.*")];
-                if let Some(path) =
-                    nooksill_platform::filedialog::open_file("导入配置", owner, &filters)
-                {
+                let filters = [
+                    (nooksill_core::i18n::t("NookSill config"), "*.ini"),
+                    (nooksill_core::i18n::t("All files"), "*.*"),
+                ];
+                if let Some(path) = nooksill_platform::filedialog::open_file(
+                    nooksill_core::i18n::t("Import config"),
+                    owner,
+                    &filters,
+                ) {
                     match nooksill_core::ini::Ini::load(&path) {
                         Ok(ini) => {
                             self.dock.cfg = Config::from_ini(&ini);
@@ -277,9 +340,15 @@ impl App {
                             self.dock.clear_icons();
                             self.apply_item_change();
                             self.touch_cfg();
-                            self.status(format!("已导入 {}", path.display()));
+                            self.status(nooksill_core::i18n::fmt(
+                                "Imported {0}",
+                                &[path.display().to_string().as_str()],
+                            ));
                         }
-                        Err(e) => self.status(format!("导入失败：{e}")),
+                        Err(e) => self.status(nooksill_core::i18n::fmt(
+                            "Import failed: {0}",
+                            &[e.to_string().as_str()],
+                        )),
                     }
                 }
                 false

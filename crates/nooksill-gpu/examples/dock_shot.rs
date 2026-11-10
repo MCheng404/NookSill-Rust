@@ -24,6 +24,7 @@ use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::present::mirror_rows;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "dock.bmp".to_owned());
     let dark = args.next().as_deref() != Some("light");

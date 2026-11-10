@@ -44,6 +44,10 @@ impl Config {
         }
         cfg.adapter = Self::sanitize_adapter(ini.get("Graphics", "Adapter").unwrap_or_default());
         cfg.cc_order = ini.get("widgets", "Order").unwrap_or_default().to_owned();
+        cfg.language = ini
+            .get("general", "Language")
+            .unwrap_or_default()
+            .to_owned();
         cfg.clamp();
         cfg
     }
@@ -67,5 +71,7 @@ impl Config {
         if !self.cc_order.is_empty() {
             ini.set("widgets", "Order", &self.cc_order);
         }
+        // An explicit empty line keeps "follow the system" visible in the file.
+        ini.set("general", "Language", &self.language);
     }
 }

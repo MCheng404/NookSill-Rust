@@ -53,10 +53,22 @@
 - 补齐 10 个从未进读写列表的键（`HideDelay/ShowDelay/Widget*/Panel*`），新增 `every_numeric_key_is_persisted` 守住同类漏配。
 - 新增 `PanelOpacity / PanelOverlay / WidgetOpacity / WidgetRadius / WidgetGap / WidgetBlur`，全部 `0` = 跟随。
 
+### 界面语言（i18n）
+
+- 新增 `core::i18n`：`t()` / `fmt()` 集中查表，**英文文案同时是键与底层语言**；每种语言一个独立 `.rs`（`en` / `zh_cn` / `zh_tw`），按英文键排序、二分查找，未翻译条目逐键回退英文。依据：四个 crate 都能用、不引第三方翻译框架，新增文案只需改「调用点 + 英文表 + 中文表」三处。
+- 默认跟随系统显示语言：`platform::locale::ui_language_id()`（`GetUserDefaultUILanguage`）在启动时注入；`[general] Language` 可覆盖，空值 / `auto` / 未知 tag 一律跟随系统。设置 → 常规 → 语言即时生效，已打开的设置窗口标题同步刷新。
+- 约 540 处硬编码文案改走 `t()`，58 个动态模板改走 `fmt()` 的 `{0}` 占位；下拉选项常量表统一存英文、由 `combo` 一处翻译；九个窗口标题改成动态 `HSTRING`。起动台菜单分派由 `match` 文案改为 guard 比较，翻译后命令不会失配；时钟日期按语言分支（英文用月份名与周缩写）。
+- 门禁：`en::TEXT` 有序且无重复、翻译表只含已登记键、源码里每个 `t("…")` / `fmt("…")` 都已登记、下拉选项标签全部有键；kittest 固定简体中文，断言不依赖宿主机语言。
+- 边界：农历、节气与干支的**名称**属文化数据，不随 UI 语言切换（日历面板的标签已本地化）；控制台日志、Win32 诊断串与测试断言消息保留中文；繁体表有意只覆盖 49 条常用词，其余按约定回退英文。
+
 ### 修复
 
 - 启动即 panic：空条目 + 多个小组件时 `bar_w` 为负，`f32::clamp(min > max)` 直接 panic。`place_slots` 先夹非负再取 `min`，`rounded_gradient` 的尺寸检查移到 `clamp` 之前。
 - 操作回执下溢 panic：`NOTICE_MS - elapsed` 在淡出边界 u128 下溢。改为 `notice_alpha()` 纯函数 + 饱和减法。
+- `Config::get_i32` / `apply_i32` 两处 `unreachable!` 改为正常的 `Key::Numeric(i)` 分支，两处夹紧逻辑合并成一处。依据：生产代码不留 panic，重复的夹紧分支会各自漂移。
+- 起动台、设置窗口与 illusion 三处 `expect` 改为 `ok_or` / `get_or_insert_with`，失败返回错误而不是 panic；两条内部诊断串从翻译表移除。依据：Win32 诊断串不属于 UI 文案。
+- `i18n::fmt` 的越界占位符由「静默删除」改为保留字面 `{n}`，新增 `translations_keep_every_placeholder` 守译文与英文键的占位符集合一致。依据：漏传参数或译文漏占位原本会静默丢字。
+- 4 处中文行尾注释：平台相关的两条改英文（DIB 负高度、`GetPrivateProfileInt` 的非数字值），复述代码的两条直接删。
 
 ### 工程
 
@@ -81,30 +93,42 @@
 | `gpu/src/frame.rs` | 723 | `frame/` 4 文件 |
 | `gpu/src/widgets/{timer,group,control,calendar,editor}.rs` | 761–916 | 各 5–6 文件 |
 | `settings/tests/settings_ui.rs` | 750 | 7 文件 |
+| `gpu/widgets/notes.rs` | 706 | `notes.rs` + `notes/paint.rs` |
+| `gpu/dock/input.rs` | 635 | `input/{events,hit,drag}.rs` |
+| `gpu/bin/probe.rs` | 734 | `probe/{wgpu_device,d3d11_device,gl_device}.rs` |
 
 测试文件同样收口：`dock/tests.rs`(1391) → 5、`layout/tests.rs`(1034) → 5、
 `config/tests.rs`(1120) → 7，共享辅助函数留在 `tests/mod.rs`。
 副作用：`nooksill-gpu/src/widgets.rs` → `widgets/mod.rs`（避免与 `widgets/` 同名
-产生 `widgets/widgets.rs`）。
+产生 `widgets/widgets.rs`）。后三行由规模门禁发现，不给诊断二进制留白名单；
+公开路径（`note_win::paint_preview`、`Dock` 方法、probe 的 `super::` 引用）
+由 `cargo check --workspace --all-targets` 验证。
 
 - 全部 7205 行中文注释改写为纯英文，删掉改动历史、踩坑叙事、设计论证长段落与
   横幅注释，只留读代码看不出来的东西（Win32 消息怪癖、单位与 DPI 换算、
   行对齐、`WM_APP` 号段、执行顺序、性能约束、不变量）。
-- `scripts/check-comments.sh`：扫 `crates/` 里非 ASCII 的 `//` 注释，有则退出码 1。
+- 注释门禁从「只扫行首 `//`」补成扫行尾注释、`///` / `//!` 与跨行块注释，字符串里的
+  `http://` 不误报。依据：原规则漏掉 4 处中文行尾注释，等于没有生效。
+  新增 `scripts/check-size.sh`，按「排除末尾 `#[cfg(test)]` 模块后的行数」判定，
+  生产代码与独立测试文件上限 600 行。两个门禁都带 `--self-test`，用固定样例守住
+  检查器本身（行尾 / 文档 / 块注释、600 / 601 边界）。
 - `CONTRIBUTING.md` 新增「代码备注」「单文件规模」两节；`scripts/build.sh --gate`
-  从三步改为四步：注释语言 → fmt → `clippy -D warnings` → 全量测试。
+  为五步：注释 → 规模 → fmt → `clippy -D warnings` → 全量测试；
+  `.githooks/pre-commit` 与 CI 的 `gate` job 跑同一批检查。依据：CI 原先只跑
+  fmt / clippy / test，注释规则只能在本地生效。
 - `DECISIONS.md` 74 条 ADR 压成「决定 / 依据 / 代价」（3578 → 984 行），
   删掉调试过程、重复实测表与前后对比叙事。
+- `BUILD.md` 删掉重复两遍的「冷启动 3–6 分钟」段落，补齐五步门禁与两个独立脚本的命令。
 
 ### 验证
 
-`./scripts/build.sh --gate` 全绿。测试总数 547：
-`nooksill-core` 268、`nooksill-gpu` 165（+15 ignored，GPU/窗口类）
+`./scripts/build.sh --gate` 五步全绿。测试总数 561：
+`nooksill-core` 281、`nooksill-gpu` 165（+15 ignored，GPU/窗口类）
 + `nooksill-dock` 7、`nooksill-platform` 72（+6 ignored）、
-`nooksill-settings` 5 + 28 + 2。
+`nooksill-settings` 6 + 28 + 2。
 
-`crates/` 下 253 个 `.rs`、52243 行，最大 734 行（`bin/probe.rs`，诊断二进制），
-生产代码最大 594 行。离屏基线 `dock_shot` / `settings_shot` / `panels_shot` 出图正常。
+`crates/` 下 267 个 `.rs`、55188 行，生产代码最大 599 行（`i18n/en.rs`），
+无文件超过 600 行门禁。离屏基线 `dock_shot` / `settings_shot` / `panels_shot` 出图正常。
 
 ---
 

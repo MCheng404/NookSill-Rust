@@ -107,11 +107,21 @@ pub fn now_ms() -> i64 {
 /// Text of the panel's summary line (used by tests).
 #[must_use]
 pub fn summary(state: &ToolState, now_ms: i64) -> String {
-    format!(
-        "{} {}  待办 {}/{}",
-        state.mode.title(),
-        format_ms(state.display_ms(now_ms), state.mode),
-        state.todos.iter().filter(|t| t.done).count(),
-        state.todos.len()
+    nooksill_core::i18n::fmt(
+        "{0} {1}  To-do {2}/{3}",
+        &[
+            state.mode.title().to_string().as_str(),
+            format_ms(state.display_ms(now_ms), state.mode)
+                .to_string()
+                .as_str(),
+            state
+                .todos
+                .iter()
+                .filter(|t| t.done)
+                .count()
+                .to_string()
+                .as_str(),
+            state.todos.len().to_string().as_str(),
+        ],
     )
 }

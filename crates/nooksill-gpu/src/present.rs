@@ -116,7 +116,8 @@ impl LayeredPresenter {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: width,
-                biHeight: -height, // 自上而下
+                // A negative biHeight makes the DIB top-down.
+                biHeight: -height,
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: 0, // BI_RGB

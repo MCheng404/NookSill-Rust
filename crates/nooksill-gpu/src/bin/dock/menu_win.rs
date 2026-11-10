@@ -219,7 +219,7 @@ pub(super) fn show_menu(
     // `Some` was just assigned above. `ok_or` rather than `expect`: a broken
     // invariant should error out, not abort the process.
     let Some((hwnd, renderer)) = slot.as_mut() else {
-        return Err("菜单窗口未初始化".into());
+        return Err(nooksill_core::i18n::t("Menu window not initialised").into());
     };
     renderer.resize(gpu, pw as u32, ph as u32)?;
 

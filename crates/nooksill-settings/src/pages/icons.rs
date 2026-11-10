@@ -10,29 +10,97 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "图标底盘（macOS 风格圆角方块）",
+        nooksill_core::i18n::t("Icon plate (macOS-style rounded square)"),
         "",
         |ctx, ui| {
-            combo(ctx, ui, Key::PLATE_MODE, "底盘类型", PLATE_OPTS);
-            combo(ctx, ui, Key::PLATE_THEME, "底盘配色", PLATE_THEME_OPTS);
-            slider(ctx, ui, Key::PLATE_OPACITY, "底盘不透明度", " %");
-            slider(ctx, ui, Key::PlateRadius, "底盘圆角", " %");
+            combo(
+                ctx,
+                ui,
+                Key::PLATE_MODE,
+                nooksill_core::i18n::t("Plate type"),
+                PLATE_OPTS,
+            );
+            combo(
+                ctx,
+                ui,
+                Key::PLATE_THEME,
+                nooksill_core::i18n::t("Plate colour"),
+                PLATE_THEME_OPTS,
+            );
+            slider(
+                ctx,
+                ui,
+                Key::PLATE_OPACITY,
+                nooksill_core::i18n::t("Plate opacity"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::PlateRadius,
+                nooksill_core::i18n::t("Plate corner radius"),
+                " %",
+            );
         },
     );
 
-    card(ctx, ui, "分割线", "", |ctx, ui| {
-        slider(ctx, ui, Key::SEP_WIDTH, "分割线宽度", " px");
-        slider(ctx, ui, Key::SEP_GAP, "分割线间距", " px");
-        ui.label(
-            RichText::new("圆角 0% = 方形，22% = 默认圆角方块，50% = 圆形。")
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Separator"),
+        "",
+        |ctx, ui| {
+            slider(
+                ctx,
+                ui,
+                Key::SEP_WIDTH,
+                nooksill_core::i18n::t("Separator width"),
+                " px",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::SEP_GAP,
+                nooksill_core::i18n::t("Separator gap"),
+                " px",
+            );
+            ui.label(
+                RichText::new(nooksill_core::i18n::t(
+                    "0% is square, 22% is the default rounded square, 50% is a circle.",
+                ))
                 .small()
                 .weak(),
-        );
-    });
+            );
+        },
+    );
 
-    card(ctx, ui, "运行指示与标签", "", |ctx, ui| {
-        toggle(ctx, ui, Key::Dots, "显示运行中指示", "");
-        combo(ctx, ui, Key::DotStyle, "指示样式", DOT_OPTS);
-        toggle(ctx, ui, Key::Labels, "悬停显示名称标签", "");
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Running dot & labels"),
+        "",
+        |ctx, ui| {
+            toggle(
+                ctx,
+                ui,
+                Key::Dots,
+                nooksill_core::i18n::t("Show running indicator"),
+                "",
+            );
+            combo(
+                ctx,
+                ui,
+                Key::DotStyle,
+                nooksill_core::i18n::t("Indicator style"),
+                DOT_OPTS,
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Labels,
+                nooksill_core::i18n::t("Show name label on hover"),
+                "",
+            );
+        },
+    );
 }

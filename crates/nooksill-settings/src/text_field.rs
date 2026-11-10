@@ -129,7 +129,13 @@ pub fn text_field(
             [egui::pos2(c.x + d, c.y - d), egui::pos2(c.x - d, c.y + d)],
             stroke,
         );
-        clear_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "清空输入"));
+        clear_resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                true,
+                nooksill_core::i18n::t("Clear input"),
+            )
+        });
         if clear_resp.clicked() {
             text.clear();
             cleared = true;
@@ -187,8 +193,17 @@ mod tests {
 
     #[test]
     fn 焦点且空值时收起提示() {
-        assert_eq!(hint_for(true, true, "搜索设置…"), "");
-        assert_eq!(hint_for(false, true, "搜索设置…"), "搜索设置…");
-        assert_eq!(hint_for(true, false, "搜索设置…"), "搜索设置…");
+        assert_eq!(
+            hint_for(true, true, nooksill_core::i18n::t("Search settings…")),
+            ""
+        );
+        assert_eq!(
+            hint_for(false, true, nooksill_core::i18n::t("Search settings…")),
+            nooksill_core::i18n::t("Search settings…")
+        );
+        assert_eq!(
+            hint_for(true, false, nooksill_core::i18n::t("Search settings…")),
+            nooksill_core::i18n::t("Search settings…")
+        );
     }
 }

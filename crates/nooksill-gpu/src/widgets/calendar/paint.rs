@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// English weekday names; the Chinese names come from core::calendar.
+const WEEKDAY_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 /// Paints navigation, weekday header, grid and the selected day's details.
 ///
 /// Everything is positioned explicitly. Returns the frame's hit rects.
@@ -89,21 +92,21 @@ pub(super) fn draw_panel(
     painter.text(
         egui::pos2(nx[0] + bw + 31.0, y0 + nav_h * 0.5),
         Align2::CENTER_CENTER,
-        format!("{}年", state.year),
+        nooksill_core::i18n::fmt("Year {0}", &[(state.year).to_string().as_str()]),
         FontId::proportional(14.0),
         tc,
     );
     painter.text(
         egui::pos2(nx[2] + bw + 24.0, y0 + nav_h * 0.5),
         Align2::CENTER_CENTER,
-        format!("{}月", state.month),
+        nooksill_core::i18n::fmt("Month {0}", &[(state.month).to_string().as_str()]),
         FontId::proportional(14.0),
         tc,
     );
     painter.text(
         hits.nav[4].center(),
         Align2::CENTER_CENTER,
-        "今天",
+        nooksill_core::i18n::t("Today"),
         FontId::proportional(13.0),
         if matches!(hover, Some(Hit::Nav(4))) {
             Color32::WHITE
@@ -204,22 +207,53 @@ pub(super) fn draw_panel(
     let (sy, sm, sd) = sel;
     let weekday = calendar::weekday_of(sy, sm, sd);
     let is_today = sel == today;
-    let line1 = format!(
-        "{sy}年{sm}月{sd}日  星期{}{}",
-        calendar::weekday_name(weekday),
-        if is_today { "  · 今天" } else { "" }
+    let weekday_text = if nooksill_core::i18n::language() == nooksill_core::i18n::Language::En {
+        WEEKDAY_EN
+            .get(weekday as usize)
+            .copied()
+            .unwrap_or("Sun")
+            .to_owned()
+    } else {
+        calendar::weekday_name(weekday).to_owned()
+    };
+    let line1 = nooksill_core::i18n::fmt(
+        "{0}-{1}-{2}  {3}{4}",
+        &[
+            (sy).to_string().as_str(),
+            (sm).to_string().as_str(),
+            (sd).to_string().as_str(),
+            weekday_text.as_str(),
+            (if is_today {
+                nooksill_core::i18n::t("  · Today")
+            } else {
+                ""
+            })
+            .to_string()
+            .as_str(),
+        ],
     );
     let line2 = match calendar::solar_to_lunar(sy, sm, sd) {
-        Some(l) => format!("农历  {}", calendar::lunar_text(l)),
-        None => "农历  （仅支持 1901–2099 年）".to_owned(),
+        Some(l) => nooksill_core::i18n::fmt(
+            "Lunar  {0}",
+            &[(calendar::lunar_text(l)).to_string().as_str()],
+        ),
+        None => nooksill_core::i18n::t("Lunar  (1901-2099 only)").to_owned(),
     };
-    let line3 = format!("干支历  {}", calendar::ganzhi_text(sy, sm, sd));
+    let line3 = nooksill_core::i18n::fmt(
+        "Ganzhi  {0}",
+        &[(calendar::ganzhi_text(sy, sm, sd)).to_string().as_str()],
+    );
     let line4 = match calendar::next_term(sy, sm, sd) {
         Some((y, n, days)) => {
             let (tm, td) = calendar::term_date(y, n);
-            format!(
-                "下一个节气  {}  {tm}月{td}日（还有 {days} 天）",
-                calendar::term_name(n)
+            nooksill_core::i18n::fmt(
+                "Next solar term  {0}  {1}/{2} ({3} days left)",
+                &[
+                    (calendar::term_name(n)).to_string().as_str(),
+                    (tm).to_string().as_str(),
+                    (td).to_string().as_str(),
+                    (days).to_string().as_str(),
+                ],
             )
         }
         None => String::new(),

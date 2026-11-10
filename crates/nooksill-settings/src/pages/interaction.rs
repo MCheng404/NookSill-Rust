@@ -7,55 +7,93 @@ use super::options::MIN_STYLE_OPTS;
 use super::widgets::{card, combo, slider, toggle, Ctx};
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "交互", "", |ctx, ui| {
-        toggle(ctx, ui, Key::Zoom, "悬停放大图标", "");
-        toggle(
-            ctx,
-            ui,
-            Key::FolderFan,
-            "点击文件夹时弧形堆叠展开",
-            "像 macOS 一样列出最近的文件，点击即可打开",
-        );
-        toggle(
-            ctx,
-            ui,
-            Key::SEP_SCALE,
-            "上下拖动分割线缩放 Dock",
-            "按住图标之间的竖线上下拖，按比例调整图标与放大尺寸",
-        );
-    });
-
-    card(ctx, ui, "动画", "", |ctx, ui| {
-        combo(ctx, ui, Key::MIN_STYLE, "最小化动画风格", MIN_STYLE_OPTS);
-        toggle(ctx, ui, Key::Bounce, "启动应用时弹跳", "");
-        toggle(
-            ctx,
-            ui,
-            Key::MinAnim,
-            "最小化缩入 Dock 动画",
-            "窗口最小化时缩小飞入对应图标",
-        );
-        toggle(ctx, ui, Key::Preview, "悬停运行中应用显示窗口预览", "");
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Interaction"),
+        "",
+        |ctx, ui| {
+            toggle(
+                ctx,
+                ui,
+                Key::Zoom,
+                nooksill_core::i18n::t("Zoom icons on hover"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::FolderFan,
+                nooksill_core::i18n::t("Fan folders out on click"),
+                nooksill_core::i18n::t("List recent files like macOS; click one to open it"),
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::SEP_SCALE,
+                nooksill_core::i18n::t("Drag a separator vertically to resize the Dock"),
+                nooksill_core::i18n::t(
+                    "Drag the line between icons to scale icon and zoom sizes together",
+                ),
+            );
+        },
+    );
 
     card(
         ctx,
         ui,
-        "显示 / 隐藏灵敏度 · 普通场景",
-        "光标移开后延迟收起；隐藏时光标要连续停留才展开。数值越大越不容易因边缘抖动反复显隐，单位 ms",
+        nooksill_core::i18n::t("Animation"),
+        "",
         |ctx, ui| {
-            slider(ctx, ui, Key::HIDE_DELAY, "移开光标后收起延迟", "ms");
-            slider(ctx, ui, Key::SHOW_DELAY, "隐藏时唤醒显示延迟", "ms");
+            combo(
+                ctx,
+                ui,
+                Key::MIN_STYLE,
+                nooksill_core::i18n::t("Minimise animation style"),
+                MIN_STYLE_OPTS,
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Bounce,
+                nooksill_core::i18n::t("Bounce when launching an app"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::MinAnim,
+                nooksill_core::i18n::t("Minimise-into-Dock animation"),
+                nooksill_core::i18n::t("Shrink a minimised window into its icon"),
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Preview,
+                nooksill_core::i18n::t("Preview windows on hover"),
+                "",
+            );
+        },
+    );
+
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Show / hide sensitivity · normal"),
+        nooksill_core::i18n::t("Hiding waits for the cursor to leave; showing waits for it to stay. Higher values stop edge flicker; milliseconds"),
+        |ctx, ui| {
+            slider(ctx, ui, Key::HIDE_DELAY, nooksill_core::i18n::t("Hide delay after leaving"), "ms");
+            slider(ctx, ui, Key::SHOW_DELAY, nooksill_core::i18n::t("Show delay when hidden"), "ms");
         },
     );
     card(
         ctx,
         ui,
-        "显示 / 隐藏灵敏度 · 应用最大化时",
-        "最大化窗口贴着屏幕边缘，光标更容易误触；这一档建议设得比普通场景更长，单位 ms",
+        nooksill_core::i18n::t("Show / hide sensitivity · maximised windows"),
+        nooksill_core::i18n::t("A maximised window sits on the screen edge and is easy to hit by accident; use longer delays here, in milliseconds"),
         |ctx, ui| {
-            slider(ctx, ui, Key::HIDE_DELAY_MAX, "移开光标后收起延迟", "ms");
-            slider(ctx, ui, Key::SHOW_DELAY_MAX, "隐藏时唤醒显示延迟", "ms");
+            slider(ctx, ui, Key::HIDE_DELAY_MAX, nooksill_core::i18n::t("Hide delay after leaving"), "ms");
+            slider(ctx, ui, Key::SHOW_DELAY_MAX, nooksill_core::i18n::t("Show delay when hidden"), "ms");
         },
     );
 }

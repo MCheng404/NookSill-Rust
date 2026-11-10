@@ -60,39 +60,51 @@ impl Page {
     ];
 
     #[must_use]
-    pub const fn title(self) -> &'static str {
+    pub fn title(self) -> &'static str {
         match self {
-            Page::General => "常规",
-            Page::Appearance => "外观",
-            Page::Position => "位置",
-            Page::Icons => "图标",
-            Page::Interaction => "交互",
-            Page::Extras => "附件",
-            Page::Effect => "效果",
-            Page::Performance => "性能",
-            Page::Items => "条目",
-            Page::Library => "图标库",
-            Page::Add => "添加",
-            Page::About => "关于",
+            Page::General => nooksill_core::i18n::t("General"),
+            Page::Appearance => nooksill_core::i18n::t("Appearance"),
+            Page::Position => nooksill_core::i18n::t("Position"),
+            Page::Icons => nooksill_core::i18n::t("Icons"),
+            Page::Interaction => nooksill_core::i18n::t("Interaction"),
+            Page::Extras => nooksill_core::i18n::t("Extras"),
+            Page::Effect => nooksill_core::i18n::t("Effects"),
+            Page::Performance => nooksill_core::i18n::t("Performance"),
+            Page::Items => nooksill_core::i18n::t("Items"),
+            Page::Library => nooksill_core::i18n::t("Icon Library"),
+            Page::Add => nooksill_core::i18n::t("Add"),
+            Page::About => nooksill_core::i18n::t("About"),
         }
     }
 
     /// One-line description under the page header.
     #[must_use]
-    pub const fn subtitle(self) -> &'static str {
+    pub fn subtitle(self) -> &'static str {
         match self {
-            Page::General => "启动行为、锁定与全局快捷键。",
-            Page::Appearance => "栏体尺寸、背景材质与配色。",
-            Page::Position => "停靠边、显示器与显示模式。",
-            Page::Icons => "底盘、分割线、运行指示与标签。",
-            Page::Interaction => "悬停放大、文件夹展开与动画。",
-            Page::Extras => "时钟、倒影、小组件与浏览器。",
-            Page::Effect => "栏体周围的环境烟雾。",
-            Page::Performance => "显卡选择、实时占用与高耗能功能开关。",
-            Page::Items => "Dock 上的条目：改名、排序、分组。",
-            Page::Library => "从文件夹批量设置图标。",
-            Page::Add => "往 Dock 里加东西，以及配置的导入导出。",
-            Page::About => "版本、项目地址、作者与许可。",
+            Page::General => {
+                nooksill_core::i18n::t("Startup behaviour, layout lock and global hotkeys.")
+            }
+            Page::Appearance => {
+                nooksill_core::i18n::t("Bar size, background material and colours.")
+            }
+            Page::Position => nooksill_core::i18n::t("Dock edge, monitor and visibility mode."),
+            Page::Icons => {
+                nooksill_core::i18n::t("Icon plates, separators, running dots and labels.")
+            }
+            Page::Interaction => {
+                nooksill_core::i18n::t("Hover zoom, folder fan-out and animation.")
+            }
+            Page::Extras => nooksill_core::i18n::t("Clock, reflection, widgets and browser."),
+            Page::Effect => nooksill_core::i18n::t("Ambient smoke around the bar."),
+            Page::Performance => {
+                nooksill_core::i18n::t("GPU selection, live usage and costly feature switches.")
+            }
+            Page::Items => nooksill_core::i18n::t("Items on the Dock: rename, reorder and group."),
+            Page::Library => nooksill_core::i18n::t("Apply icons in bulk from a folder."),
+            Page::Add => {
+                nooksill_core::i18n::t("Add things to the Dock, import and export the config.")
+            }
+            Page::About => nooksill_core::i18n::t("Version, project URL, author and licence."),
         }
     }
 }
@@ -176,10 +188,10 @@ impl Default for SettingsState {
     fn default() -> Self {
         Self {
             page: Page::General,
-            monitors: vec!["主显示器".to_owned()],
+            monitors: vec![nooksill_core::i18n::t("Primary monitor").to_owned()],
             auto_start: false,
             config_dir: String::new(),
-            stats: "尚无采样".to_owned(),
+            stats: nooksill_core::i18n::t("No samples yet").to_owned(),
             adapters: Vec::new(),
             active_adapter: String::new(),
             adapter_note: String::new(),

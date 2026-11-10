@@ -19,8 +19,6 @@
 use std::pin::Pin;
 use std::time::Instant;
 
-use crate::widgets::style::PanelStyle;
-use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect, Stroke};
 use nooksill_core::note::{Note, NoteBook};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
@@ -36,19 +34,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::frame::FrameRenderer;
 use crate::gpu::{Gpu, GpuError};
 
+mod paint;
+pub use paint::paint_preview;
+
 const CLASS_NAME: &str = "NookSillNotePanel";
 
 /// Notes shown per page.
 pub const PAGE_SIZE: usize = 6;
 /// Panel logical size.
-const W: f32 = 420.0;
-const H: f32 = 456.0;
-const PAD: f32 = 16.0;
-const HEADER_H: f32 = 40.0;
-const ROW_H: f32 = 56.0;
-const FOOTER_H: f32 = 34.0;
-const BTN_W: f32 = 56.0;
-const BTN_H: f32 = 24.0;
+pub(super) const W: f32 = 420.0;
+pub(super) const H: f32 = 456.0;
+pub(super) const PAD: f32 = 16.0;
+pub(super) const HEADER_H: f32 = 40.0;
+pub(super) const ROW_H: f32 = 56.0;
+pub(super) const FOOTER_H: f32 = 34.0;
+pub(super) const BTN_W: f32 = 56.0;
+pub(super) const BTN_H: f32 = 24.0;
 
 /// Panel logical size (offscreen previews).
 pub const SIZE: (f32, f32) = (W, H);
@@ -112,11 +113,12 @@ impl NoteWindow {
         let pw = (W * ppp).round() as i32;
         let ph = (H * ppp).round() as i32;
         let (x, y) = centered_origin(pw, ph);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Notes"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("NookSill 速记"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,
@@ -226,7 +228,7 @@ impl NoteWindow {
     /// Number of pages (at least 1, so an empty panel can still show "new").
     #[must_use]
     pub fn pages(&self) -> usize {
-        page_count(self.notes.len())
+        paint::page_count(self.notes.len())
     }
 
     fn turn_page(&mut self, delta: i32) {
@@ -271,7 +273,7 @@ impl NoteWindow {
         let raw = self.input.take(self.renderer.size(), self.ppp);
         let mut action = None;
         self.renderer.render(gpu, raw, hwnd, pos, |ui| {
-            action = paint(ui, dark, frosted, &notes, page, pages, hover);
+            action = paint::paint(ui, dark, frosted, &notes, page, pages, hover);
         })?;
         match action {
             // Paging only changes the panel's own state and does not use the
@@ -298,7 +300,7 @@ impl NoteWindow {
             WM_MOUSEMOVE => {
                 let (x, y) = client_pos(lparam, self.ppp);
                 self.input.pointer_moved(x, y);
-                let h = row_at(x, y, self.notes.len(), self.page);
+                let h = paint::row_at(x, y, self.notes.len(), self.page);
                 if h != self.hover {
                     self.hover = h;
                     self.next_repaint = Some(Instant::now());
@@ -341,268 +343,6 @@ impl NoteWindow {
         }
     }
 }
-
-/// Rect of row `k` in the window (logical coords).
-fn row_rect(k: usize) -> EguiRect {
-    EguiRect::from_min_size(
-        egui::pos2(PAD, PAD + HEADER_H + k as f32 * ROW_H),
-        egui::vec2(W - PAD * 2.0, ROW_H - 4.0),
-    )
-}
-
-/// Which row is hit (footer buttons excluded).
-fn row_at(x: f32, y: f32, total: usize, page: usize) -> Option<usize> {
-    let start = page * PAGE_SIZE;
-    let shown = total.saturating_sub(start).min(PAGE_SIZE);
-    (0..shown).find(|&k| row_rect(k).contains(egui::pos2(x, y)))
-}
-
-/// Paints the panel. Returns the action of this frame.
-fn paint(
-    ui: &mut egui::Ui,
-    dark: bool,
-    frosted: bool,
-    notes: &[Note],
-    page: usize,
-    pages: usize,
-    hover: Option<usize>,
-) -> Option<NoteAction> {
-    let rect = ui.max_rect();
-    // Same base fill, overlay and text tiers as the other four panels.
-    let style = PanelStyle::current(dark, frosted);
-    let (bg, ink, faint, border, field) = palette(&style);
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(PanelStyle::R_PANEL),
-        style.overlay(),
-    );
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(PanelStyle::R_PANEL),
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
-    painter.text(
-        egui::pos2(rect.left() + PAD, rect.top() + PAD + 2.0),
-        Align2::LEFT_TOP,
-        "速记",
-        FontId::proportional(15.0),
-        ink,
-    );
-
-    let mut action = None;
-    // "New" button, top right of the header.
-    let new_rect = EguiRect::from_min_size(
-        egui::pos2(rect.right() - PAD - BTN_W, rect.top() + PAD),
-        egui::vec2(BTN_W, BTN_H),
-    );
-    let new_resp = ui.interact(new_rect, egui::Id::unique("note-new"), egui::Sense::click());
-    painter.rect_filled(new_rect, CornerRadius::same(PanelStyle::R_SMALL), field);
-    painter.text(
-        new_rect.center(),
-        Align2::CENTER_CENTER,
-        "＋ 新建",
-        FontId::proportional(12.0),
-        ink,
-    );
-    if new_resp.clicked() {
-        action = Some(NoteAction::New);
-    }
-
-    // List.
-    let start = page * PAGE_SIZE;
-    let shown = notes.len().saturating_sub(start).min(PAGE_SIZE);
-    if shown == 0 {
-        painter.text(
-            egui::pos2(rect.center().x, rect.top() + HEADER_H + 80.0),
-            Align2::CENTER_CENTER,
-            "还没有速记，点右上角「＋ 新建」",
-            FontId::proportional(13.0),
-            faint,
-        );
-    }
-    for k in 0..shown {
-        let note = &notes[start + k];
-        let r = row_rect(k);
-        if hover == Some(k) {
-            painter.rect_filled(r, CornerRadius::same(PanelStyle::R_CARD), field);
-        }
-        let row_resp = ui.interact(r, egui::Id::unique(("note-row", k)), egui::Sense::click());
-        painter.text(
-            egui::pos2(r.left() + 10.0, r.top() + 8.0),
-            Align2::LEFT_TOP,
-            fit_text(painter, &note.display_title(), r.width() - 140.0, 13.0),
-            FontId::proportional(13.0),
-            ink,
-        );
-        painter.text(
-            egui::pos2(r.left() + 10.0, r.top() + 30.0),
-            Align2::LEFT_TOP,
-            fit_text(painter, &note.preview(), r.width() - 140.0, 11.0),
-            FontId::proportional(11.0),
-            faint,
-        );
-
-        // In-row buttons. Registered after the whole row, so egui's hit
-        // order lets the buttons win.
-        let del_rect = EguiRect::from_min_size(
-            egui::pos2(r.right() - BTN_W - 6.0, r.center().y - BTN_H / 2.0),
-            egui::vec2(BTN_W, BTN_H),
-        );
-        let edit_rect = EguiRect::from_min_size(
-            egui::pos2(del_rect.left() - BTN_W - 6.0, del_rect.top()),
-            egui::vec2(BTN_W, BTN_H),
-        );
-        for (br, label, act) in [
-            (edit_rect, "编辑", NoteAction::Edit(start + k)),
-            (del_rect, "删除", NoteAction::Remove(start + k)),
-        ] {
-            let resp = ui.interact(
-                br,
-                egui::Id::unique(("note-btn", k, label)),
-                egui::Sense::click(),
-            );
-            painter.rect_filled(br, PanelStyle::pill(br.height()), field);
-            painter.text(
-                br.center(),
-                Align2::CENTER_CENTER,
-                label,
-                FontId::proportional(11.5),
-                if label == "删除" {
-                    Color32::from_rgb(230, 110, 110)
-                } else {
-                    ink
-                },
-            );
-            if resp.clicked() {
-                action = Some(act);
-            }
-        }
-        // When no button was hit, clicking the row means edit.
-        if row_resp.clicked() && action.is_none() {
-            action = Some(NoteAction::Edit(start + k));
-        }
-    }
-
-    // Footer: paging and the item count.
-    let fy = rect.bottom() - PAD - FOOTER_H;
-    painter.text(
-        egui::pos2(rect.left() + PAD, fy + FOOTER_H / 2.0),
-        Align2::LEFT_CENTER,
-        format!("{} 条 · 第 {} / {} 页", notes.len(), page + 1, pages),
-        FontId::proportional(11.0),
-        faint,
-    );
-    let prev_rect = EguiRect::from_min_size(
-        egui::pos2(rect.right() - PAD - BTN_W * 2.0 - 8.0, fy + 5.0),
-        egui::vec2(BTN_W, BTN_H),
-    );
-    let next_rect = EguiRect::from_min_size(
-        egui::pos2(rect.right() - PAD - BTN_W, fy + 5.0),
-        egui::vec2(BTN_W, BTN_H),
-    );
-    let prev = ui.interact(
-        prev_rect,
-        egui::Id::unique("note-prev"),
-        egui::Sense::click(),
-    );
-    let next = ui.interact(
-        next_rect,
-        egui::Id::unique("note-next"),
-        egui::Sense::click(),
-    );
-    for (r, label, enabled) in [
-        (prev_rect, "上一页", page > 0),
-        (next_rect, "下一页", page + 1 < pages),
-    ] {
-        painter.rect_filled(r, CornerRadius::same(PanelStyle::R_SMALL), field);
-        painter.text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            label,
-            FontId::proportional(11.0),
-            if enabled { ink } else { faint },
-        );
-    }
-    if prev.clicked() && page > 0 {
-        return Some(NoteAction::Page(-1));
-    }
-    if next.clicked() && page + 1 < pages {
-        return Some(NoteAction::Page(1));
-    }
-    action
-}
-
-/// Total number of pages. Pure function so it can be tested without a window.
-fn page_count(total: usize) -> usize {
-    total.div_ceil(PAGE_SIZE).max(1)
-}
-
-/// Offscreen entry point (`examples/panels_shot.rs`).
-///
-/// Screenshots must use the real window's painting code; a hand-built
-/// approximation would not catch anything. This builds no window and touches
-/// no Win32 API, it only paints the panel into the caller's `Ui`.
-pub fn paint_preview(
-    ui: &mut egui::Ui,
-    dark: bool,
-    frosted: bool,
-    book: &NoteBook,
-    page: usize,
-    hover: Option<usize>,
-) {
-    let _ = paint(
-        ui,
-        dark,
-        frosted,
-        &book.notes,
-        page,
-        page_count(book.notes.len()),
-        hover,
-    );
-}
-
-fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) {
-    // Keeps five semantic names so the drawing code below stays unchanged;
-    // all values come from the shared style.
-    (
-        style.bg(),
-        style.ink(),
-        style.ink_sub(),
-        style.border(),
-        style.card(),
-    )
-}
-
-/// Truncates overlong text and appends an ellipsis.
-fn fit_text(painter: &egui::Painter, text: &str, max_w: f32, size: f32) -> String {
-    let font = FontId::proportional(size);
-    if painter
-        .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
-        .size()
-        .x
-        <= max_w
-    {
-        return text.to_owned();
-    }
-    let mut out: Vec<char> = text.chars().collect();
-    while !out.is_empty() {
-        out.pop();
-        let s: String = out.iter().collect();
-        if painter
-            .layout_no_wrap(format!("{s}…"), font.clone(), Color32::WHITE)
-            .size()
-            .x
-            <= max_w
-        {
-            return format!("{s}…");
-        }
-    }
-    String::new()
-}
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut NoteWindow;
     if ptr.is_null() {
@@ -648,43 +388,4 @@ fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {
     let x = (lparam.0 & 0xFFFF) as i16 as f32;
     let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
     (x / ppp, y / ppp)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rows_are_laid_out_sequentially() {
-        let a = row_rect(0);
-        let b = row_rect(1);
-        assert!(b.top() > a.top());
-        assert_eq!(a.left(), b.left());
-        assert_eq!(a.width(), b.width());
-    }
-
-    #[test]
-    fn row_at_matches_the_visible_page() {
-        let a = row_rect(0).center();
-        assert_eq!(row_at(a.x, a.y, 3, 0), Some(0));
-        let b = row_rect(1).center();
-        assert_eq!(row_at(b.x, b.y, 3, 0), Some(1));
-        // Row 0 of page 2 is also index 0 within the page; the global index
-        // is `page * PAGE_SIZE` plus it.
-        assert_eq!(row_at(a.x, a.y, 10, 1), Some(0));
-        assert_eq!(row_at(5.0, 5.0, 3, 0), None, "标题栏不算行");
-    }
-
-    #[test]
-    fn page_count_has_a_floor_of_one() {
-        assert_eq!(page_count(0), 1);
-        assert_eq!(page_count(1), 1);
-        assert_eq!(page_count(PAGE_SIZE), 1);
-        assert_eq!(page_count(PAGE_SIZE + 1), 2);
-    }
-
-    #[test]
-    fn max_notes_divides_into_pages() {
-        assert_eq!(page_count(nooksill_core::note::MAX_NOTES), 6);
-    }
 }

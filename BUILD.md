@@ -25,6 +25,9 @@ source scripts/env.sh              # 必须。注入 INCLUDE/LIB/PATH + CC/CXX/A
 ./scripts/build.sh --test          # 全部测试（跳过 doctest）
 ./scripts/build.sh --clippy        # -D warnings
 ./scripts/build.sh --fmt           # 仅检查格式
+./scripts/build.sh --gate          # 五步门禁：注释 + 规模 + fmt + clippy + 测试
+./scripts/check-comments.sh        # 只跑注释门禁
+./scripts/check-size.sh            # 只跑单文件规模门禁
 ./scripts/build.sh --exe           # 打印产物路径
 ./scripts/build.sh --version       # 打印本次构建钉住的版本号
 ./scripts/package.sh [--release]   # 构建 + 按版本号打包到 dist/（CI 用同一脚本）
@@ -55,6 +58,9 @@ SDK 版本**自动取最新的**，不写死小版本号——写死是换机后
 | `pollster` | 1.0 | 启动时同步等 `request_device` / `enumerate_adapters` |
 | `glass-backdrop` | git rev `747457c` | 只用 capture / blur / glass_sdf 三个数据模块（ADR-057） |
 | `winresource` | 0.1.34 | 仅 build-dependency，把 `assets/nooksill.ico` 编进 exe |
+
+`windows` 的 feature 并集在 workspace `Cargo.toml` 一次声明；i18n 只多用了
+`Win32_Globalization::GetUserDefaultUILanguage`（读系统显示语言，返回 LANGID）。
 
 **没有 eframe、没有 winit**。理由见 [`DECISIONS.md`](DECISIONS.md) ADR-002。
 
@@ -124,9 +130,6 @@ dist/NookSill-1.1.0-66-fe678af-win64-debug.exe.sha256
   代价：`--pdb` 出来的 `.pdb` 与 exe 不同名，调试器不会自动找到它，
   需要手动加载（所以 pdb 默认不进包，它本来就是本地排查用的）。
 - Debug 的 pdb 有 200 MB 量级，默认不打包。
-
-首次 `cargo build` 要编译 wgpu（naga、wgpu-hal、DX12 后端），**冷启动 3–6 分钟**属正常；
-之后增量在 10–30 秒。release 首次更久（fat LTO）。
 
 首次 `cargo build` 要编译 wgpu（naga、wgpu-hal、DX12 后端），**冷启动 3–6 分钟**属正常；
 之后增量在 10–30 秒。release 首次更久（fat LTO）。
@@ -278,7 +281,7 @@ cargo run -q -p nooksill-core --example config_table     # 重新生成 CONFIG.m
 
 | job | 触发 | 干什么 |
 |---|---|---|
-| `gate` | 每次 push（任意分支）/ PR | `fmt --check` → `clippy -D warnings` → `--lib --tests`，与本地 `--gate` 同一批命令 |
+| `gate` | 每次 push（任意分支）/ PR | 注释 / 规模两个文本门禁（bash）→ `fmt --check` → `clippy -D warnings` → `--lib --tests`，与本地 `--gate` 同一批命令 |
 | `debug` | 每次 push（任意分支）/ 手动触发 | `package.sh`（构建号 = `git rev-list --count HEAD`，与本地同一套）→ 上传 Actions 产物（`NookSill-<ver>-win64-debug.exe` + `.sha256`，保留 14 天）；默认**再发一条 rolling Pre-Release** |
 | `release` | 推 `v*` 标签 | 校验标签与 `Cargo.toml` 一致 → `package.sh --release` → 发**正式 Release**（资产是裸 exe + `.sha256`；非草稿、非预发布、抢 `Latest`） |
 

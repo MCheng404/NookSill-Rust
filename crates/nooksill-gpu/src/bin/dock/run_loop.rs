@@ -198,7 +198,10 @@ impl App {
                 // `apply_item_change` rebuilds `dock.items`; otherwise the
                 // removed slot stays and clicks land on nothing.
                 self.apply_item_change();
-                self.status(format!("已从 Dock 移除「{name}」"));
+                self.status(nooksill_core::i18n::fmt(
+                    "Removed {0} from the Dock",
+                    &[name.to_string().as_str()],
+                ));
                 return;
             }
             // A transient running item is not in the config and cannot be
@@ -212,16 +215,21 @@ impl App {
             match group::merge_item(&mut self.raw, from, to) {
                 Ok(()) => {
                     self.apply_item_change();
-                    self.status("已加入分组");
+                    self.status(nooksill_core::i18n::t("Added to group"));
                     return;
                 }
                 Err(e) => {
                     // Dropping a running app on a group also lands here: it has
                     // no config entry. Rebuild to the config order.
                     if from >= self.raw.len() {
-                        self.status("运行中的应用不能加入分组");
+                        self.status(nooksill_core::i18n::t(
+                            "A running app cannot be added to a group",
+                        ));
                     } else {
-                        self.status(format!("归组失败：{e}"));
+                        self.status(nooksill_core::i18n::fmt(
+                            "Could not group: {0}",
+                            &[e.to_string().as_str()],
+                        ));
                     }
                     self.sync_items();
                 }
@@ -246,7 +254,7 @@ impl App {
             // The pinned range grew, so drag bounds must follow now; `sync_items`
             // is suspended for the duration of the drag.
             self.dock.set_pinned(self.raw.len());
-            self.status("已固定到 Dock");
+            self.status(nooksill_core::i18n::t("Pinned to Dock"));
         }
         if trace::geom() {
             eprintln!(
@@ -280,6 +288,9 @@ impl App {
         // icon jumps to the tail, but only when pinning from the menu.
         self.raw.push(item);
         self.apply_item_change();
-        self.status(format!("已固定「{name}」"));
+        self.status(nooksill_core::i18n::fmt(
+            "Pinned {0}",
+            &[name.to_string().as_str()],
+        ));
     }
 }

@@ -46,14 +46,10 @@ impl FrameRenderer {
     }
 
     pub(super) fn ensure_illusion(&mut self) -> &mut crate::shaders::illusion::Illusion {
-        if self.illusion.is_none() {
-            let device = self.device.clone();
-            let queue = self.queue.clone();
-            self.illusion = Some(crate::shaders::illusion::Illusion::new(&device, &queue));
-        }
+        let device = &self.device;
+        let queue = &self.queue;
         self.illusion
-            .as_mut()
-            .expect("illusion was just created above")
+            .get_or_insert_with(|| crate::shaders::illusion::Illusion::new(device, queue))
     }
 
     /// CPU fallback: reuse the texture handle when the size is unchanged.

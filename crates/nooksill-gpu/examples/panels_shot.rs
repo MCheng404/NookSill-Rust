@@ -24,6 +24,7 @@ use nooksill_gpu::group_win::{self, GroupKid};
 use nooksill_gpu::note_win;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
     let mut args = std::env::args().skip(1);
     let dir = args.next().unwrap_or_else(|| "scratch".to_owned());
     let dark = args.next().as_deref() != Some("light");

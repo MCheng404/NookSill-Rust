@@ -14,25 +14,27 @@ use crate::text_field::{text_field, FieldOpts, FIELD_H};
 /// Badge text for an item kind.
 fn kind_tag(kind: ItemKind) -> &'static str {
     match kind {
-        ItemKind::File => "应用",
-        ItemKind::Folder => "文件夹",
-        ItemKind::Url => "网页",
-        ItemKind::Separator => "分割线",
-        ItemKind::Group => "分组",
-        ItemKind::Trash => "回收站",
-        ItemKind::Note => "速记",
+        ItemKind::File => nooksill_core::i18n::t("App"),
+        ItemKind::Folder => nooksill_core::i18n::t("Folder"),
+        ItemKind::Url => nooksill_core::i18n::t("Web page"),
+        ItemKind::Separator => nooksill_core::i18n::t("Separator"),
+        ItemKind::Group => nooksill_core::i18n::t("Group"),
+        ItemKind::Trash => nooksill_core::i18n::t("Recycle Bin"),
+        ItemKind::Note => nooksill_core::i18n::t("Notes"),
     }
 }
 
 /// Second line of an item row: path or child count.
 fn detail(item: &Item) -> String {
     match item.kind {
-        ItemKind::Separator => "分隔栏体".to_owned(),
-        ItemKind::Group => format!("{} 个子项", item.kids.len()),
-        ItemKind::Trash => "系统回收站".to_owned(),
+        ItemKind::Separator => nooksill_core::i18n::t("Bar separator").to_owned(),
+        ItemKind::Group => {
+            nooksill_core::i18n::fmt("{0} items", &[item.kids.len().to_string().as_str()])
+        }
+        ItemKind::Trash => nooksill_core::i18n::t("System Recycle Bin").to_owned(),
         _ => {
             if item.path.is_empty() {
-                "（没有目标）".to_owned()
+                nooksill_core::i18n::t("(No target)").to_owned()
             } else {
                 item.path.clone()
             }
@@ -51,14 +53,18 @@ fn items_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "Dock 条目",
-        "栏体上的东西都在这里。改完立刻生效并写盘。",
+        nooksill_core::i18n::t("Dock items"),
+        nooksill_core::i18n::t(
+            "Everything on the bar is here. Changes apply and save immediately.",
+        ),
         |ctx, ui| {
             if ctx.state.items.is_empty() {
                 ui.label(
-                    RichText::new("还没有条目。到「添加」页加几个，或直接把文件拖到 Dock 上。")
-                        .small()
-                        .weak(),
+                    RichText::new(nooksill_core::i18n::t(
+                        "No items yet. Add some on the Add page or drop files onto the Dock.",
+                    ))
+                    .small()
+                    .weak(),
                 );
                 return;
             }
@@ -87,7 +93,7 @@ fn item_row(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                         .weak(),
                 );
                 let name = if item.name.is_empty() {
-                    "（未命名）"
+                    nooksill_core::i18n::t("(Untitled)")
                 } else {
                     item.name.as_str()
                 };
@@ -96,16 +102,24 @@ fn item_row(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
             ui.label(RichText::new(detail(item)).small().weak());
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if small_button(ui, "删除", "从 Dock 移除这个条目") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Delete"),
+                nooksill_core::i18n::t("Remove this item from the Dock"),
+            ) {
                 ctx.out.command = Some(Command::RemoveItem(index));
             }
-            if small_button(ui, "编辑", "改名、改路径与启动参数") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Edit"),
+                nooksill_core::i18n::t("Rename, change the target and arguments"),
+            ) {
                 begin_edit(ctx, index, item);
             }
-            if small_button(ui, "↓", "往后移一位") {
+            if small_button(ui, "↓", nooksill_core::i18n::t("Move down")) {
                 ctx.out.command = Some(Command::MoveItem(index, 1));
             }
-            if small_button(ui, "↑", "往前移一位") {
+            if small_button(ui, "↑", nooksill_core::i18n::t("Move up")) {
                 ctx.out.command = Some(Command::MoveItem(index, -1));
             }
         });
@@ -142,7 +156,7 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
             .num_columns(2)
             .spacing([10.0, 8.0])
             .show(ui, |ui| {
-                ui.label("名称");
+                ui.label(nooksill_core::i18n::t("Name"));
                 let w = ui.available_width().max(140.0);
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(w, FIELD_H), Sense::hover());
                 text_field(
@@ -151,19 +165,19 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                     Id::unique("item-edit-name"),
                     &mut ctx.state.edit_name,
                     &FieldOpts {
-                        hint: "显示在气泡与分组面板里的名字",
+                        hint: nooksill_core::i18n::t("Shown in the hover bubble and group panel"),
                         ..FieldOpts::default()
                     },
                 );
                 ui.end_row();
 
-                ui.label("目标");
+                ui.label(nooksill_core::i18n::t("Target"));
                 let w = ui.available_width().max(140.0);
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(w, FIELD_H), Sense::hover());
                 let path_hint = match item.kind {
                     ItemKind::Url => "https://example.com",
-                    ItemKind::Trash => "回收站不需要目标",
-                    _ => "程序路径、文件夹路径",
+                    ItemKind::Trash => nooksill_core::i18n::t("The Recycle Bin needs no target"),
+                    _ => nooksill_core::i18n::t("Program path or folder path"),
                 };
                 text_field(
                     ui,
@@ -177,7 +191,7 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                 );
                 ui.end_row();
 
-                ui.label("参数");
+                ui.label(nooksill_core::i18n::t("Arguments"));
                 let w = ui.available_width().max(140.0);
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(w, FIELD_H), Sense::hover());
                 text_field(
@@ -186,23 +200,27 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                     Id::unique("item-edit-args"),
                     &mut ctx.state.edit_args,
                     &FieldOpts {
-                        hint: "启动时附加的命令行参数（可留空）",
+                        hint: nooksill_core::i18n::t("Extra command-line arguments (optional)"),
                         ..FieldOpts::default()
                     },
                 );
                 ui.end_row();
 
-                let group_label = ui.label("归组");
+                let group_label = ui.label(nooksill_core::i18n::t("Assign to group"));
                 egui::ComboBox::from_id_salt("item-edit-group")
                     .selected_text(match ctx.state.edit_group {
-                        None => "留在栏体上".to_owned(),
-                        Some(g) => groups
-                            .iter()
-                            .find(|(i, _)| *i == g)
-                            .map_or_else(|| "留在栏体上".to_owned(), |(_, n)| n.clone()),
+                        None => nooksill_core::i18n::t("Keep on the bar").to_owned(),
+                        Some(g) => groups.iter().find(|(i, _)| *i == g).map_or_else(
+                            || nooksill_core::i18n::t("Keep on the bar").to_owned(),
+                            |(_, n)| n.clone(),
+                        ),
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut ctx.state.edit_group, None, "留在栏体上");
+                        ui.selectable_value(
+                            &mut ctx.state.edit_group,
+                            None,
+                            nooksill_core::i18n::t("Keep on the bar"),
+                        );
                         for (i, name) in &groups {
                             ui.selectable_value(&mut ctx.state.edit_group, Some(*i), name);
                         }
@@ -221,9 +239,9 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
         // Only formats the shell can decode are offered: there is no PNG or
         // JPEG decoder, so listing them would let the user pick a dead path.
         ui.horizontal(|ui| {
-            ui.label("图标：");
+            ui.label(nooksill_core::i18n::t("Icon:"));
             let shown = if item.icon_src.is_empty() {
-                "默认图标".to_owned()
+                nooksill_core::i18n::t("Default icon").to_owned()
             } else {
                 let short: String = item
                     .icon_src
@@ -237,17 +255,30 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                 format!("…{short}")
             };
             ui.label(RichText::new(shown).small().weak());
-            if small_button(ui, "更换…", "选一个 .ico / .exe / .dll 作为图标") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Change…"),
+                nooksill_core::i18n::t("Pick an .ico / .exe / .dll as the icon"),
+            ) {
                 ctx.out.command = Some(Command::PickIcon(index));
             }
-            if !item.icon_src.is_empty() && small_button(ui, "恢复默认", "清掉自定义图标")
+            if !item.icon_src.is_empty()
+                && small_button(
+                    ui,
+                    nooksill_core::i18n::t("Reset to default"),
+                    nooksill_core::i18n::t("Clear the custom icon"),
+                )
             {
                 ctx.out.command = Some(Command::ResetIcon(index));
             }
         });
 
         ui.horizontal(|ui| {
-            if small_button(ui, "保存", "写回这个条目") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Save"),
+                nooksill_core::i18n::t("Write this item back"),
+            ) {
                 let edit = ItemEdit {
                     name: ctx.state.edit_name.trim().to_owned(),
                     path: ctx.state.edit_path.trim().to_owned(),
@@ -257,7 +288,11 @@ fn edit_form(ctx: &mut Ctx<'_>, ui: &mut Ui, index: usize, item: &Item) {
                 ctx.out.command = Some(Command::EditItem(index, edit));
                 ctx.state.editing = None;
             }
-            if small_button(ui, "取消", "放弃改动") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Cancel"),
+                nooksill_core::i18n::t("Discard changes"),
+            ) {
                 ctx.state.editing = None;
             }
         });
@@ -270,8 +305,10 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
         ctx,
         ui,
-        "分组",
-        "把散落的条目收进一个组，组可以当成一个图标放在栏体上。",
+        nooksill_core::i18n::t("Group"),
+        nooksill_core::i18n::t(
+            "Collect scattered items into a group; a group occupies one icon on the bar.",
+        ),
         |ctx, ui| {
             let groups: Vec<(usize, Item)> = ctx
                 .state
@@ -283,9 +320,11 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 .collect();
             if groups.is_empty() {
                 ui.label(
-                    RichText::new("还没有分组。下面的「新建」里可以建一个。")
-                        .small()
-                        .weak(),
+                    RichText::new(nooksill_core::i18n::t(
+                        "No groups yet. Create one in New below.",
+                    ))
+                    .small()
+                    .weak(),
                 );
                 return;
             }
@@ -293,20 +332,28 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&group.name).strong());
                     ui.label(
-                        RichText::new(format!("{} 个子项", group.kids.len()))
-                            .small()
-                            .weak(),
+                        RichText::new(nooksill_core::i18n::fmt(
+                            "{0} items",
+                            &[group.kids.len().to_string().as_str()],
+                        ))
+                        .small()
+                        .weak(),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if small_button(ui, "解散", "子项全部放回栏体，分组本身消失")
-                        {
+                        if small_button(
+                            ui,
+                            nooksill_core::i18n::t("Dissolve"),
+                            nooksill_core::i18n::t(
+                                "Put all children back on the bar and remove the group",
+                            ),
+                        ) {
                             ctx.out.command = Some(Command::DissolveGroup(gi));
                         }
                     });
                 });
                 if group.kids.is_empty() {
                     ui.label(
-                        RichText::new("空分组。在上面选一个条目，编辑时把「归组」改成它。")
+                        RichText::new(nooksill_core::i18n::t("Empty group. Select an item above and set its Group field to this one."))
                             .small()
                             .weak(),
                     );
@@ -315,18 +362,33 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(format!("· {}", display_name(kid))).small());
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if small_button(ui, "移出", "把这个子项放回栏体") {
+                                if small_button(
+                                    ui,
+                                    nooksill_core::i18n::t("Move out"),
+                                    nooksill_core::i18n::t("Put this child back on the bar"),
+                                ) {
                                     ctx.out.command = Some(Command::ExtractKid(gi, ki));
                                 }
                                 // Words instead of arrows: the item rows above
                                 // already use arrows, and both lists share the
                                 // page.
                                 if ki + 1 < group.kids.len()
-                                    && small_button(ui, "下移", "在分组里往后移一位")
+                                    && small_button(
+                                        ui,
+                                        nooksill_core::i18n::t("Move later"),
+                                        nooksill_core::i18n::t("Move one slot later in the group"),
+                                    )
                                 {
                                     ctx.out.command = Some(Command::MoveKid(gi, ki, 1));
                                 }
-                                if ki > 0 && small_button(ui, "上移", "在分组里往前移一位")
+                                if ki > 0
+                                    && small_button(
+                                        ui,
+                                        nooksill_core::i18n::t("Move earlier"),
+                                        nooksill_core::i18n::t(
+                                            "Move one slot earlier in the group",
+                                        ),
+                                    )
                                 {
                                     ctx.out.command = Some(Command::MoveKid(gi, ki, -1));
                                 }
@@ -342,15 +404,27 @@ fn groups_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
 
 /// Creation: group, separator, trash.
 fn create_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "新建", "", |ctx, ui| {
+    card(ctx, ui, nooksill_core::i18n::t("New"), "", |ctx, ui| {
         ui.horizontal_wrapped(|ui| {
-            if small_button(ui, "新建分组…", "建一个空分组，再把条目放进去") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("New group…"),
+                nooksill_core::i18n::t("Create an empty group, then move items into it"),
+            ) {
                 ctx.out.command = Some(Command::NewGroup);
             }
-            if small_button(ui, "添加分割线", "在栏体末尾加一条分隔线") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Add separator"),
+                nooksill_core::i18n::t("Append a separator to the bar"),
+            ) {
                 ctx.out.command = Some(Command::AddSeparator);
             }
-            if small_button(ui, "添加回收站", "加一个系统回收站入口") {
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Add Recycle Bin"),
+                nooksill_core::i18n::t("Add a Recycle Bin entry"),
+            ) {
                 ctx.out.command = Some(Command::AddTrash);
             }
         });

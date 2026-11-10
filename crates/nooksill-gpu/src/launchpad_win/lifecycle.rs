@@ -25,6 +25,7 @@ impl LaunchpadWindow {
         let (pw, ph) = (mon.right - mon.left, mon.bottom - mon.top);
         let size = (pw as f32 / ppp, ph as f32 / ppp);
 
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Launchpad"));
         let hwnd = unsafe {
             // `WS_EX_LAYERED` is mandatory: presentation goes through
             // `UpdateLayeredWindow` (see `present::LayeredPresenter`), which
@@ -32,7 +33,7 @@ impl LaunchpadWindow {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("起动台"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP | WS_VISIBLE,
                 mon.left,
                 mon.top,

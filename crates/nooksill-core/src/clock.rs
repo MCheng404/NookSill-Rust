@@ -10,6 +10,7 @@
 //! lines are ~21 px wide, so the year is dropped there.
 
 use crate::config::{Config, Key};
+use crate::i18n::Language;
 
 /// One time snapshot. Fields mirror `SYSTEMTIME` without the Win32 dependency.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -33,14 +34,101 @@ pub struct ClockLine {
 }
 
 const WEEKDAY: [&str; 7] = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAY_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_EN: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
-fn weekday_name(w: u8) -> &'static str {
-    WEEKDAY.get(w as usize).copied().unwrap_or("日")
+fn weekday_name(w: u8, lang: Language) -> &'static str {
+    match lang {
+        Language::En => WEEKDAY_EN.get(w as usize).copied().unwrap_or("Sun"),
+        _ => WEEKDAY.get(w as usize).copied().unwrap_or("日"),
+    }
 }
 
-/// Build the card lines in draw order.
+fn month_name(m: u8) -> &'static str {
+    MONTH_EN
+        .get(m.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or("January")
+}
+
+fn localized_date(
+    fmt: i32,
+    vertical: bool,
+    week: bool,
+    t: &ClockParts,
+    lang: Language,
+) -> Vec<String> {
+    let mut dates = Vec::new();
+    if lang == Language::En {
+        if vertical {
+            dates.push(match fmt {
+                1 => format!("{:02}/{:02}", t.month, t.day),
+                2 => format!("{:02}-{:02}", t.month, t.day),
+                _ => format!("{} {}", &month_name(t.month)[..3], t.day),
+            });
+            if week {
+                dates.push(weekday_name(t.weekday, lang).to_owned());
+            }
+        } else {
+            let mut d = match fmt {
+                1 => format!("{:04}/{:02}/{:02}", t.year, t.month, t.day),
+                2 => format!("{:04}-{:02}-{:02}", t.year, t.month, t.day),
+                _ => format!("{} {}, {}", month_name(t.month), t.day, t.year),
+            };
+            if week {
+                d.push(' ');
+                d.push_str(weekday_name(t.weekday, lang));
+            }
+            dates.push(d);
+        }
+        return dates;
+    }
+    if vertical {
+        dates.push(match fmt {
+            1 => format!("{:02}/{:02}", t.month, t.day),
+            2 => format!("{:02}-{:02}", t.month, t.day),
+            _ => format!("{}月{}日", t.month, t.day),
+        });
+        if week {
+            dates.push(format!("周{}", weekday_name(t.weekday, lang)));
+        }
+    } else {
+        let mut d = match fmt {
+            1 => format!("{:04}/{:02}/{:02}", t.year, t.month, t.day),
+            2 => format!("{:04}-{:02}-{:02}", t.year, t.month, t.day),
+            _ => format!("{}年{}月{}日", t.year, t.month, t.day),
+        };
+        if week {
+            d.push_str(" 周");
+            d.push_str(weekday_name(t.weekday, lang));
+        }
+        dates.push(d);
+    }
+    dates
+}
+
+/// Build the card lines using the process-wide UI language.
 #[must_use]
 pub fn clock_lines(cfg: &Config, t: &ClockParts) -> Vec<ClockLine> {
+    clock_lines_with(cfg, t, crate::i18n::language())
+}
+
+/// Language-explicit variant; keeps the tests independent of global state.
+#[must_use]
+pub fn clock_lines_with(cfg: &Config, t: &ClockParts, lang: Language) -> Vec<ClockLine> {
     // CLOCK_SHOW: 0 = both, 1 = time only, 2 = date only.
     let has_time = cfg.get_i32(Key::CLOCK_SHOW) != 2;
     let has_date = cfg.get_i32(Key::CLOCK_SHOW) != 1;
@@ -52,31 +140,11 @@ pub fn clock_lines(cfg: &Config, t: &ClockParts) -> Vec<ClockLine> {
         format!("{:02}:{:02}", t.hour, t.minute)
     };
 
-    let mut dates: Vec<String> = Vec::new();
+    let mut dates = Vec::new();
     if has_date {
         let fmt = cfg.get_i32(Key::DATE_FMT);
         let week = cfg.get_i32(Key::CLOCK_WEEK) != 0;
-        if vertical {
-            dates.push(match fmt {
-                1 => format!("{:02}/{:02}", t.month, t.day),
-                2 => format!("{:02}-{:02}", t.month, t.day),
-                _ => format!("{}月{}日", t.month, t.day),
-            });
-            if week {
-                dates.push(format!("周{}", weekday_name(t.weekday)));
-            }
-        } else {
-            let mut d = match fmt {
-                1 => format!("{:04}/{:02}/{:02}", t.year, t.month, t.day),
-                2 => format!("{:04}-{:02}-{:02}", t.year, t.month, t.day),
-                _ => format!("{}年{}月{}日", t.year, t.month, t.day),
-            };
-            if week {
-                d.push_str(" 周");
-                d.push_str(weekday_name(t.weekday));
-            }
-            dates.push(d);
-        }
+        dates = localized_date(fmt, vertical, week, t, lang);
     }
 
     let mut out = Vec::with_capacity(dates.len() + 1);
@@ -129,10 +197,14 @@ mod tests {
         c
     }
 
+    fn zh(c: &Config, t: &ClockParts) -> Vec<ClockLine> {
+        clock_lines_with(c, t, Language::ZhCn)
+    }
+
     /// Horizontal default: one time line, one date line with the year.
     #[test]
     fn horizontal_default_includes_year() {
-        let lines = clock_lines(&cfg(), &at(2026, 10, 30, 5));
+        let lines = zh(&cfg(), &at(2026, 10, 30, 5));
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "09:05");
         assert!(!lines[0].is_date);
@@ -140,17 +212,40 @@ mod tests {
         assert!(lines[1].is_date);
     }
 
+    /// English uses month names rather than CJK date markers.
+    #[test]
+    fn english_dates_use_month_names() {
+        let lines = clock_lines_with(&cfg(), &at(2026, 10, 30, 5), Language::En);
+        assert_eq!(lines[1].text, "October 30, 2026 Fri");
+        let mut c = cfg();
+        c.edge = Edge::Left;
+        let lines = clock_lines_with(&c, &at(2026, 10, 30, 5), Language::En);
+        assert_eq!(lines[1].text, "Oct 30");
+        assert_eq!(lines[2].text, "Fri");
+    }
+
+    /// Numeric date formats are language independent.
+    #[test]
+    fn numeric_formats_do_not_change_with_language() {
+        let mut c = cfg();
+        c.apply_i32(Key::CLOCK_WEEK, 0);
+        c.apply_i32(Key::DATE_FMT, 2);
+        assert_eq!(
+            clock_lines_with(&c, &at(2026, 10, 5, 1), Language::En)[1].text,
+            zh(&c, &at(2026, 10, 5, 1))[1].text
+        );
+    }
+
     /// Vertical: short date, weekday on its own line (no room for the year).
     #[test]
     fn vertical_puts_weekday_on_its_own_line() {
         let mut c = cfg();
         c.edge = Edge::Left;
-        let lines = clock_lines(&c, &at(2026, 10, 30, 5));
+        let lines = zh(&c, &at(2026, 10, 30, 5));
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].text, "09:05");
         assert_eq!(lines[1].text, "10月30日");
         assert_eq!(lines[2].text, "周五");
-        // Date and weekday share a group; no divider between them.
         assert!(lines[1].is_date && lines[2].is_date);
     }
 
@@ -161,17 +256,17 @@ mod tests {
         // the comparison no longer tests the format itself.
         c.apply_i32(Key::CLOCK_WEEK, 0);
         c.apply_i32(Key::DATE_FMT, 1);
-        assert_eq!(clock_lines(&c, &at(2026, 10, 5, 1))[1].text, "2026/10/05");
+        assert_eq!(zh(&c, &at(2026, 10, 5, 1))[1].text, "2026/10/05");
         c.apply_i32(Key::DATE_FMT, 2);
-        assert_eq!(clock_lines(&c, &at(2026, 10, 5, 1))[1].text, "2026-10-05");
+        assert_eq!(zh(&c, &at(2026, 10, 5, 1))[1].text, "2026-10-05");
     }
 
     #[test]
     fn seconds_are_optional() {
         let mut c = cfg();
-        assert_eq!(clock_lines(&c, &at(2026, 1, 1, 0))[0].text, "09:05");
+        assert_eq!(zh(&c, &at(2026, 1, 1, 0))[0].text, "09:05");
         c.apply_i32(Key::CLOCK_SEC, 1);
-        assert_eq!(clock_lines(&c, &at(2026, 1, 1, 0))[0].text, "09:05:07");
+        assert_eq!(zh(&c, &at(2026, 1, 1, 0))[0].text, "09:05:07");
     }
 
     /// Time-only and date-only modes yield a single non-empty line.
@@ -179,12 +274,12 @@ mod tests {
     fn single_part_modes_produce_one_line() {
         let mut c = cfg();
         c.apply_i32(Key::CLOCK_SHOW, 1); // time only
-        let l = clock_lines(&c, &at(2026, 10, 30, 5));
+        let l = zh(&c, &at(2026, 10, 30, 5));
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].text, "09:05");
 
         c.apply_i32(Key::CLOCK_SHOW, 2); // date only
-        let l = clock_lines(&c, &at(2026, 10, 30, 5));
+        let l = zh(&c, &at(2026, 10, 30, 5));
         assert_eq!(l.len(), 1);
         assert_eq!(l[0].text, "2026年10月30日 周五");
     }
@@ -194,10 +289,7 @@ mod tests {
     fn weekday_can_be_disabled() {
         let mut c = cfg();
         c.apply_i32(Key::CLOCK_WEEK, 0);
-        assert_eq!(
-            clock_lines(&c, &at(2026, 10, 30, 5))[1].text,
-            "2026年10月30日"
-        );
+        assert_eq!(zh(&c, &at(2026, 10, 30, 5))[1].text, "2026年10月30日");
     }
 
     /// `ClockOrder=1` puts the date on top.
@@ -205,7 +297,7 @@ mod tests {
     fn order_swaps_date_and_time() {
         let mut c = cfg();
         c.apply_i32(Key::CLOCK_ORDER, 1);
-        let l = clock_lines(&c, &at(2026, 10, 30, 5));
+        let l = zh(&c, &at(2026, 10, 30, 5));
         assert!(l[0].is_date, "第一行应当是日期");
         assert_eq!(l[1].text, "09:05");
     }
@@ -213,7 +305,7 @@ mod tests {
     /// Out-of-range weekday must not panic; the system never sends one.
     #[test]
     fn out_of_range_weekday_is_safe() {
-        let l = clock_lines(&cfg(), &at(2026, 10, 30, 200));
+        let l = zh(&cfg(), &at(2026, 10, 30, 200));
         assert!(l[1].text.ends_with("周日"));
     }
 }

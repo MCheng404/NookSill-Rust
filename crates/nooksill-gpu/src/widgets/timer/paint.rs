@@ -48,7 +48,7 @@ pub(super) fn draw_panel(
     painter.text(
         egui::pos2(rect.left() + pad, rect.top() + pad),
         Align2::LEFT_TOP,
-        "计时器 · 待办",
+        nooksill_core::i18n::t("Timer · To-do"),
         FontId::proportional(16.0),
         tc,
     );
@@ -91,10 +91,14 @@ pub(super) fn draw_panel(
     let by = big_y + 62.0;
     let bw = (w - 8.0) / 2.0;
     let labels = [
-        if state.running { "暂停" } else { "开始" },
-        "重置",
-        "− 1 分钟",
-        "+ 1 分钟",
+        if state.running {
+            nooksill_core::i18n::t("Pause")
+        } else {
+            nooksill_core::i18n::t("Start")
+        },
+        nooksill_core::i18n::t("Reset"),
+        nooksill_core::i18n::t("− 1 minute"),
+        nooksill_core::i18n::t("+ 1 minute"),
     ];
     for (i, label) in labels.iter().enumerate() {
         let col = i % 2;
@@ -127,7 +131,7 @@ pub(super) fn draw_panel(
     painter.text(
         egui::pos2(x0, ty),
         Align2::LEFT_TOP,
-        "待办事项",
+        nooksill_core::i18n::t("To-do list"),
         FontId::proportional(13.0),
         tc,
     );
@@ -178,7 +182,7 @@ pub(super) fn draw_panel(
             painter.text(
                 egui::pos2(x0 + 6.0, ty + 4.0),
                 Align2::LEFT_TOP,
-                "输入后回车…",
+                nooksill_core::i18n::t("Type and press Enter…"),
                 FontId::proportional(12.0),
                 sub,
             );
@@ -222,9 +226,9 @@ pub(super) fn draw_panel(
             egui::pos2(x0 + 2.0, ty + 4.0),
             Align2::LEFT_TOP,
             if state.todos.len() >= MAX_TODOS {
-                "已达上限（16 条）"
+                nooksill_core::i18n::t("Limit reached (16 items)")
             } else {
-                "＋ 添加待办…"
+                nooksill_core::i18n::t("＋ Add to-do…")
             },
             FontId::proportional(12.0),
             sub,
@@ -237,7 +241,7 @@ pub(super) fn draw_panel(
         painter.text(
             egui::pos2(rect.right() - pad, rect.top() + pad),
             Align2::RIGHT_TOP,
-            format!("{pending} 项待办"),
+            nooksill_core::i18n::fmt("{0} to-dos", &[pending.to_string().as_str()]),
             FontId::proportional(11.0),
             sub,
         );

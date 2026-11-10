@@ -8,54 +8,84 @@ use super::widgets::{button, card, combo, row, slider, toggle, toggle_derived, C
 use super::Command;
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(ctx, ui, "图形", "", |ctx, ui| {
-        adapter_combo(ctx, ui);
-        ui.label(
-            RichText::new("自动：由后端按功耗偏好挑选，通常落在核显上。改动在下次启动生效。")
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Graphics"),
+        "",
+        |ctx, ui| {
+            adapter_combo(ctx, ui);
+            ui.label(
+            RichText::new(nooksill_core::i18n::t("Automatic: the backend picks by power preference, usually the integrated GPU. Applies on next start."))
                 .small()
                 .weak(),
         );
-    });
+        },
+    );
 
     card(
         ctx,
         ui,
-        "帧率与同步",
-        "默认不限制帧率；需要省电时可设上限或对齐刷新率。",
+        nooksill_core::i18n::t("Frame rate & sync"),
+        nooksill_core::i18n::t(
+            "Unlimited by default; cap the frame rate or align to the refresh rate to save power.",
+        ),
         |ctx, ui| {
-            slider(ctx, ui, Key::FRAME_CAP, "帧率上限（0 = 不限制）", " FPS");
+            slider(
+                ctx,
+                ui,
+                Key::FRAME_CAP,
+                nooksill_core::i18n::t("Frame cap (0 = unlimited)"),
+                " FPS",
+            );
             toggle(
                 ctx,
                 ui,
                 Key::VSYNC,
-                "垂直同步",
-                "按 DWM 合成刷新率对齐出帧，覆盖帧率上限",
+                nooksill_core::i18n::t("VSync"),
+                nooksill_core::i18n::t(
+                    "Align frames to the DWM refresh rate; overrides the frame cap",
+                ),
             );
-            combo(ctx, ui, Key::MSAA, "抗锯齿（下次启动生效）", MSAA_OPTS);
+            combo(
+                ctx,
+                ui,
+                Key::MSAA,
+                nooksill_core::i18n::t("Anti-aliasing (applies on next start)"),
+                MSAA_OPTS,
+            );
             ui.label(
-                RichText::new("降低抗锯齿档位可显著减少每窗口的常驻显存。")
-                    .small()
-                    .weak(),
+                RichText::new(nooksill_core::i18n::t(
+                    "Lowering MSAA noticeably cuts per-window resident VRAM.",
+                ))
+                .small()
+                .weak(),
             );
         },
     );
 
-    card(ctx, ui, "当前占用", "", |ctx, ui| {
-        ui.monospace(&ctx.state.stats);
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("Current usage"),
+        "",
+        |ctx, ui| {
+            ui.monospace(&ctx.state.stats);
+        },
+    );
 
     card(
         ctx,
         ui,
-        "高耗能功能",
-        "每项都标了开销，可以单独关掉。",
+        nooksill_core::i18n::t("Costly features"),
+        nooksill_core::i18n::t("Each item lists its cost and can be switched off alone."),
         |ctx, ui| {
             // Frost is derived from `BgMode`, not a separate boolean key.
             toggle_derived(
                 ctx,
                 ui,
-                "磨砂玻璃背景",
-                "中等：桌面捕获 + GPU 模糊，每 2.5 秒一次",
+                nooksill_core::i18n::t("Frosted glass background"),
+                nooksill_core::i18n::t("Medium: desktop capture + GPU blur every 2.5 s"),
                 ctx.cfg.bg_mode == BgMode::Frost,
                 |cfg, on| cfg.apply_i32(Key::BgMode, if on { 2 } else { 1 }),
             );
@@ -64,8 +94,10 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             toggle_derived(
                 ctx,
                 ui,
-                "扫描运行中应用（指示点 / 运行中列表）",
-                "中等：每 2.5 秒枚举窗口；关闭后几乎不做后台扫描",
+                nooksill_core::i18n::t("Scan running apps (dots / running list)"),
+                nooksill_core::i18n::t(
+                    "Medium: enumerates windows every 2.5 s; off means almost no background scan",
+                ),
                 ctx.cfg.scan_enabled(),
                 |cfg, on| {
                     cfg.apply_i32(Key::Dots, i32::from(on));
@@ -77,58 +109,122 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 ctx,
                 ui,
                 Key::Preview,
-                "悬停窗口预览",
-                "低：仅悬停时使用系统缩略图",
+                nooksill_core::i18n::t("Window preview on hover"),
+                nooksill_core::i18n::t("Low: system thumbnails only while hovering"),
             );
-            toggle(ctx, ui, Key::Clock, "时间与日期", "低：每 30 秒刷新一次");
-            combo(ctx, ui, Key::CLOCK_SHOW, "时钟显示内容", CLOCK_SHOW_OPTS);
-            combo(ctx, ui, Key::DATE_FMT, "日期格式", DATE_FMT_OPTS);
-            toggle(ctx, ui, Key::CLOCK_WEEK, "日期显示周几", "");
+            toggle(
+                ctx,
+                ui,
+                Key::Clock,
+                nooksill_core::i18n::t("Time & date"),
+                nooksill_core::i18n::t("Low: refreshes every 30 s"),
+            );
+            combo(
+                ctx,
+                ui,
+                Key::CLOCK_SHOW,
+                nooksill_core::i18n::t("Clock content"),
+                CLOCK_SHOW_OPTS,
+            );
+            combo(
+                ctx,
+                ui,
+                Key::DATE_FMT,
+                nooksill_core::i18n::t("Date format"),
+                DATE_FMT_OPTS,
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::CLOCK_WEEK,
+                nooksill_core::i18n::t("Show weekday"),
+                "",
+            );
             toggle(
                 ctx,
                 ui,
                 Key::CLOCK_SEC,
-                "时间显示秒数",
-                "每秒刷新一次，占用略增",
+                nooksill_core::i18n::t("Show seconds"),
+                nooksill_core::i18n::t("Refreshes every second with a small cost"),
             );
-            toggle(ctx, ui, Key::Reflect, "图标倒影", "低：多画一层半透明图像");
+            toggle(
+                ctx,
+                ui,
+                Key::Reflect,
+                nooksill_core::i18n::t("Icon reflection"),
+                nooksill_core::i18n::t("Low: one extra translucent layer"),
+            );
             toggle(
                 ctx,
                 ui,
                 Key::MinAnim,
-                "最小化缩入动画",
-                "低：仅在窗口最小化时运行",
+                nooksill_core::i18n::t("Minimise animation"),
+                nooksill_core::i18n::t("Low: runs only when a window is minimised"),
             );
         },
     );
 
-    card(ctx, ui, "系统与兼容", "", |ctx, ui| {
-        toggle(
-            ctx,
-            ui,
-            Key::GUARDIAN,
-            "防止被清理工具关闭",
-            "启动一个极小的守护进程，被结束后自动重开",
-        );
-        toggle(
-            ctx,
-            ui,
-            Key::CLICK_TOGGLE,
-            "点击运行中的应用 = 最小化 / 恢复",
-            "窗口在最前时再次点击会缩回 Dock",
-        );
-        toggle(ctx, ui, Key::MN_AUTO, "右键菜单显示开机自启开关", "");
-        toggle(ctx, ui, Key::MN_NOTES, "右键菜单显示速记开关", "");
-        toggle(ctx, ui, Key::MN_ADD, "空白处右键显示新建项", "");
-    });
+    card(
+        ctx,
+        ui,
+        nooksill_core::i18n::t("System & compatibility"),
+        "",
+        |ctx, ui| {
+            toggle(
+                ctx,
+                ui,
+                Key::GUARDIAN,
+                nooksill_core::i18n::t("Keep running after cleanup tools"),
+                nooksill_core::i18n::t("Start a tiny guardian process that restarts the Dock"),
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::CLICK_TOGGLE,
+                nooksill_core::i18n::t("Click a running app = minimise / restore"),
+                nooksill_core::i18n::t("Clicking the front window again sends it back to the Dock"),
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::MN_AUTO,
+                nooksill_core::i18n::t("Show the autostart switch in the context menu"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::MN_NOTES,
+                nooksill_core::i18n::t("Show the Notes switch in the context menu"),
+                "",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::MN_ADD,
+                nooksill_core::i18n::t("Show new-item entries on empty-space right click"),
+                "",
+            );
+        },
+    );
 
-    card(ctx, ui, "预设", "", |ctx, ui| {
+    card(ctx, ui, nooksill_core::i18n::t("Presets"), "", |ctx, ui| {
         ui.horizontal(|ui| {
-            button(ctx, ui, "一键低占用模式", Command::LowPower);
-            button(ctx, ui, "恢复推荐设置", Command::Recommended);
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Low-usage mode"),
+                Command::LowPower,
+            );
+            button(
+                ctx,
+                ui,
+                nooksill_core::i18n::t("Restore recommended settings"),
+                Command::Recommended,
+            );
         });
         ui.label(
-            RichText::new("空闲时没有常驻动画定时器，只在交互时提交 GPU 帧。")
+            RichText::new(nooksill_core::i18n::t("No resident animation timer while idle; GPU frames are submitted only on interaction."))
                 .small()
                 .weak(),
         );
@@ -140,24 +236,34 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
 fn adapter_combo(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     let mut cur = ctx.cfg.adapter.clone();
     let adapters = ctx.state.adapters.clone();
-    row(ui, ctx.state, "显卡", "", |ui, id| {
-        let text = if cur.is_empty() {
-            "自动（推荐）"
-        } else {
-            cur.as_str()
-        };
-        egui::ComboBox::from_id_salt("gpu_adapter")
-            .selected_text(text)
-            .width(220.0)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut cur, String::new(), "自动（推荐）");
-                for name in &adapters {
-                    ui.selectable_value(&mut cur, name.clone(), name);
-                }
-            })
-            .response
-            .labelled_by(id);
-    });
+    row(
+        ui,
+        ctx.state,
+        nooksill_core::i18n::t("GPU"),
+        "",
+        |ui, id| {
+            let text = if cur.is_empty() {
+                nooksill_core::i18n::t("Automatic (recommended)")
+            } else {
+                cur.as_str()
+            };
+            egui::ComboBox::from_id_salt("gpu_adapter")
+                .selected_text(text)
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut cur,
+                        String::new(),
+                        nooksill_core::i18n::t("Automatic (recommended)"),
+                    );
+                    for name in &adapters {
+                        ui.selectable_value(&mut cur, name.clone(), name);
+                    }
+                })
+                .response
+                .labelled_by(id);
+        },
+    );
 
     if cur != ctx.cfg.adapter {
         ctx.cfg.adapter = Config::sanitize_adapter(&cur);
@@ -167,18 +273,23 @@ fn adapter_combo(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     // Show the adapter actually in use: a name mismatch falls back silently,
     // so the configured value alone would be misleading.
     if ctx.state.active_adapter.is_empty() {
-        ui.small("当前实际使用：尚未初始化");
+        ui.small(nooksill_core::i18n::t("Active GPU: not initialised yet"));
     } else {
-        ui.small(format!("当前实际使用：{}", ctx.state.active_adapter));
+        ui.small(nooksill_core::i18n::fmt(
+            "Active GPU: {0}",
+            &[ctx.state.active_adapter.to_string().as_str()],
+        ));
     }
     if !ctx.state.adapter_note.is_empty() {
         ui.colored_label(ui.visuals().warn_fg_color, &ctx.state.adapter_note);
     }
     if ctx.state.adapters.is_empty() {
         ui.label(
-            RichText::new("没有枚举到可用显卡，只能用自动。")
-                .small()
-                .weak(),
+            RichText::new(nooksill_core::i18n::t(
+                "No usable GPU enumerated; automatic selection is the only option.",
+            ))
+            .small()
+            .weak(),
         );
     }
 }

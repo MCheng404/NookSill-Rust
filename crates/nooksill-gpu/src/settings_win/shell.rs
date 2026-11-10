@@ -104,7 +104,7 @@ pub fn shell_with_frost(
         search_id,
         &mut state.nav_filter,
         &nooksill_settings::text_field::FieldOpts {
-            hint: "搜索设置…",
+            hint: nooksill_core::i18n::t("Search settings…"),
             icon: nooksill_settings::text_field::FieldIcon::Search,
             trailing: Some("Ctrl K"),
             clearable: true,
@@ -148,7 +148,9 @@ pub fn shell_with_frost(
     );
     // A self-drawn widget must report its node, otherwise screen readers and
     // kittest cannot find it.
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "关闭"));
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, nooksill_core::i18n::t("Close"))
+    });
     if resp.clicked() {
         out.command = Some(Command::Close);
     }

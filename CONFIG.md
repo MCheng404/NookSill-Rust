@@ -30,6 +30,7 @@
 | 段 | 内容 |
 |---|---|
 | `[meta]` | 格式版本号 |
+| `[general]` | 界面语言（`Language`，Rust 版独有） |
 | `[appearance]` | 尺寸、不透明度、边框、分隔线、运行指示点 |
 | `[appearance.background]` | 背景填充方式、颜色、渐变 |
 | `[appearance.plate]` | 图标底盘（macOS 风格圆角方块） |
@@ -158,6 +159,28 @@ cargo run -q -p nooksill-core --example config_table
 例子：`IconSize=48` 在 100% 下画 48 px，在 150% 下画 72 px，同一份配置
 在两台机器上肉眼一样大。用户调滑块改的是逻辑值，所以"先 DPI 自动、再
 人工设置"——人工设置永远在逻辑空间里，不会被 DPI 二次放大。
+
+### 界面语言（`[general] Language`）
+
+```ini
+[general]
+Language=zh-CN
+```
+
+| 值 | 含义 |
+|---|---|
+| 空 / `auto` | **默认**：跟随系统显示语言（`GetUserDefaultUILanguage`） |
+| `en` | 英文，底层语言 |
+| `zh-CN` | 简体中文 |
+| `zh-TW` | 繁体中文（部分翻译，未覆盖条目回退英文） |
+
+- 这是**独立字符串字段**，不在 `Key` / `NUMERIC_KEYS` 表内，读写只在
+  `config/ini_io.rs`，与 `[Graphics] Adapter` 同一套做法。
+- 读入时经 `Config::sanitize_language` 归一：大小写不敏感，`zh-cn` → `zh-CN`，
+  `auto` / 未知 tag / 夹带控制字符的值 → 空串（跟随系统）。
+- 保存时**总是写这一行**（空串也写），这样「显式设回跟随系统」在文件里可见。
+- 改动即时生效；已打开的设置窗口标题会同步刷新，其它窗口下次创建时按新语言命名。
+- 上层 C 版不认识这一段，`Ini` 不裁剪未知段，所以同一份 ini 在两边切换不丢设置。
 
 ### 毛玻璃（三处弹层）
 
@@ -442,6 +465,7 @@ B1=改\n这里
 - 新增键必须同时：① 加到 `Key::ALL` 或 `NUMERIC_KEYS` 表；
   ② 在 `Key::section()` 里给出所属段；③ 给默认值与夹紧范围；
   ④ 在本文档登记。老版本读到未知键会原样保留（`Ini` 不做裁剪）。
+- 独立的字符串键（`Adapter` / `Order` / `Language`）**不进 `Key` 表**：上面四条只约束数字键。字符串键要在 `Config` 加字段、`config/apply.rs` 给默认值与清洗（并挂进 `clamp()`）、`config/ini_io.rs` 手写读写，再在本文档登记。
 - **保存只写新格式**，并把版本号写成 `[meta] version=<CONFIG_VERSION>`。
   上游格式的段在升级时被删除 —— 保留会让文件里出现两套等价的键。
 - 删除或改名键会让老配置永久丢失该设置，必须同时改 `legacy_name()`

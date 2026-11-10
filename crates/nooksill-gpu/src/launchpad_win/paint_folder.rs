@@ -94,7 +94,7 @@ pub(super) fn draw_folder_panel(
     painter.text(
         Pos2::new(panel.center().x, panel.top() + 56.0),
         Align2::CENTER_CENTER,
-        "滚轮 / Esc 关闭 · 右键把应用移出文件夹",
+        nooksill_core::i18n::t("Scroll / Esc to close · right-click to move an app out"),
         FontId::proportional(10.5),
         sub,
     );

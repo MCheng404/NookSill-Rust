@@ -60,6 +60,25 @@ nooksill-core        （无 Win32 依赖，纯逻辑）
 `settings` 不认识 `wgpu`，所以它的测试不需要 GPU/显示器；
 `core` 不认识 Windows，所以它的测试能跑在任何宿主上。
 
+### 界面语言：`core::i18n`
+
+```
+[general] Language ─┐
+GetUserDefaultUILanguage ─┴→ i18n::configure → AtomicU8 → t() / fmt()
+                                                     ↑
+                          en.rs（底层） ← 回退 ← zh_cn.rs / zh_tw.rs
+```
+
+文案放在 `core` 是因为四个 crate 都依赖它，而 `core` 零依赖、不碰 Win32；
+系统语言由 `platform::locale` 读一次，启动时与配置合成进程级语言。英文文案
+自身就是键，同时是底层语言：翻译表按英文键排序、二分查找，缺项回退英文。
+每种语言一个独立 `.rs`，加语言 = 加一个文件 + `Language` 加一项。动态文案走
+`fmt(key, args)` 的 `{0}` 占位，译文可以自己决定语序；`i18n::tests` 扫全部
+源码，保证每个调用点都登记在 `en.rs::TEXT`，翻译表不含野键。
+
+不随语言切换的三类：农历 / 节气 / 干支的名称（文化数据，面板标签已本地化）、控制台日志与 Win32
+诊断串、测试断言消息。繁体表有意保持部分翻译，用于验证回退链。
+
 ## 三、渲染管线
 
 一帧的完整路径在 **`frame/render.rs::FrameRenderer::draw_frame`** 里，`render` 与
@@ -343,6 +362,8 @@ async 运行时带来的调度开销与栈占用都不划算。
     DPI 无关的，重复缩放会让它在 150% 下变大 1.5 倍。ini 里的旧值是
     物理像素，由 `Config::migrate_units`（v3 → v4）一次性换算。
 
+24. **面向用户的文案只有一条出口**：`core::i18n::t / fmt`，英文文案即键。新增文案必须在 `i18n/en.rs::TEXT` 登记（有序、无重复），中文放 `i18n/zh_cn.rs`，缺项自动回退英文；`i18n::tests` 扫源码守住登记完整性，`options.rs` 的测试守住下拉选项常量。下拉表只存英文、由 `combo` 一处翻译；用显示文案做命令分派要写成 guard 比较，不能进 `match` 模式。窗口标题是创建期的 Win32 字符串，语言变化时已打开的设置窗口要显式 `SetWindowTextW`。
+
 ## 八、与 C 版的模块映射
 
 | 原版（minidock.c） | Rust | 状态 |
@@ -374,7 +395,10 @@ async 运行时带来的调度开销与栈占用都不划算。
 ## 九、模块划分与文件规模
 
 一个 `.rs` 只放一个职责，生产代码单文件 ≤ 600 行；超过就按职责拆成子模块。
-规则与拆分手法见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 第六、七节。
+规则与拆分手法见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 第六、七节；两条规则分别由
+`scripts/check-comments.sh` 与 `scripts/check-size.sh` 守住，本地钩子、CI 的
+`gate` job 与 `--gate` 跑同一批脚本。规模门禁按「排除末尾 `#[cfg(test)]` 模块
+后的行数」判定，独立测试文件按总行数判定，上限同为 600。
 
 拆分的落法是稳定的：`foo.rs` → `foo/mod.rs`（类型、`use`、子模块声明）+
 `foo/{state,paint,input,...}.rs`。`impl` 块可以分散在同一 crate 的多个子模块里，
@@ -400,6 +424,20 @@ async 运行时带来的调度开销与栈占用都不划算。
 | `core/smoke.rs` | `smoke/{mod,fluid,noise,raster}.rs` |
 | `core/launchpad.rs` | `launchpad/{mod,order,tags,apps,persist}.rs` |
 | `settings/pages/widgets.rs` | `pages/widgets/{mod,card,row,button,toggle,slider,combo,pickers,sidebar,motion}.rs` |
+| `gpu/widgets/notes.rs` | `notes.rs`（窗口生命周期）+ `notes/paint.rs`（行布局、绘制、分页、纯函数测试） |
+| `gpu/dock/input.rs` | `input/{events,hit,drag}.rs`；`impl Dock` 分散，跨段私有项用 `pub(in crate::dock)` |
+| `gpu/bin/probe.rs` | `probe/{wgpu_device,d3d11_device,gl_device}.rs`；binary crate root 的子模块用 `#[path]` 指路 |
+
+三处拆分的外部路径都不变：`note_win::paint_preview` 由 `notes.rs` 重导出，
+`Dock` 的方法仍是同一类型上的 `impl`，probe 的三个设备模块仍以 `super::`
+访问 crate root 的定义。
+
+规模门禁把 `i18n/en.rs`(599) 与 `zh_cn.rs`(592) 顶到上限：再加文案会撞线，
+届时按字母段拆 `en/` / `zh_cn/`，不要放宽门禁。
+
+新增的 `core/src/i18n/` 按同一套手法集中组织：`mod.rs`（语言状态、查表、
+`fmt`）、`en.rs` / `zh_cn.rs` / `zh_tw.rs`（各语言独立数据）、`tests.rs`。
+`platform/src/locale.rs` 只负责读系统 LANGID，不含任何文案。
 
 测试文件同样拆：`tests.rs` → `tests/{mod,分组}.rs`，共享辅助函数留在
 `tests/mod.rs`，子模块首行 `use super::*;` 继承父模块的导入。

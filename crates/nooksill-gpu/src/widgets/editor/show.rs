@@ -30,6 +30,7 @@ pub fn show_edit(
     if slot.is_none() {
         register_class()?;
         let hinst = unsafe { GetModuleHandleW(None)? };
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Edit"));
         unsafe {
             let hwnd = CreateWindowExW(
                 // No WS_EX_NOACTIVATE: the input fields need keyboard focus.
@@ -38,7 +39,7 @@ pub fn show_edit(
                 // bit SetForegroundWindow is more often blocked.
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 w!("NookSillEditWindow"),
-                w!("NookSill 编辑"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 px,
                 py,
@@ -55,7 +56,7 @@ pub fn show_edit(
     }
 
     let Some((hwnd, renderer)) = slot.as_mut() else {
-        return Err("编辑弹窗未初始化".into());
+        return Err(nooksill_core::i18n::t("Edit window not initialised").into());
     };
     renderer.resize(gpu, pw as u32, ph as u32)?;
 

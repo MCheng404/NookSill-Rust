@@ -23,11 +23,12 @@ impl GroupWindow {
         let pw = (400.0 * ppp).round() as i32;
         let ph = (300.0 * ppp).round() as i32;
         let (x, y) = centered_origin(pw, ph);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Group"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("NookSill 分组"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,

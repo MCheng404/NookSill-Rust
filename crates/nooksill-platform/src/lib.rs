@@ -16,6 +16,7 @@ pub mod icon;
 pub mod json;
 pub mod launch;
 pub mod launchpad;
+pub mod locale;
 pub mod net;
 pub mod occlusion;
 pub mod paths;

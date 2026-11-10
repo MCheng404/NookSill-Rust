@@ -82,11 +82,12 @@ impl ResMonWindow {
 
         let (pw, ph) = physical_size(ppp);
         let (x, y) = centered_origin(pw, ph);
+        let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Resource Monitor"));
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_TOPMOST,
                 class_pcwstr(),
-                windows::core::w!("资源监视器"),
+                windows::core::PCWSTR(title.as_ptr()),
                 WS_POPUP,
                 x,
                 y,
@@ -251,7 +252,7 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     painter.text(
         egui::pos2(rect.left() + pad, y + 10.0),
         Align2::LEFT_TOP,
-        "资源监视器",
+        nooksill_core::i18n::t("Resource Monitor"),
         FontId::proportional(18.0),
         tc,
     );
@@ -266,16 +267,26 @@ fn draw_panel(ui: &mut egui::Ui, dark: bool, frosted: bool, info: SysInfo) {
     y += 14.0;
 
     let rows = [
-        ("处理器", info.cpu_percent, format!("{}%", info.cpu_percent)),
         (
-            "内存",
+            nooksill_core::i18n::t("Processor"),
+            info.cpu_percent,
+            format!("{}%", info.cpu_percent),
+        ),
+        (
+            nooksill_core::i18n::t("Memory"),
             info.mem_percent,
             format!("{} / {} MB", info.mem_used_mb, info.mem_total_mb),
         ),
         (
-            "磁盘（C:）",
+            nooksill_core::i18n::t("Disk (C:)"),
             info.disk_percent,
-            format!("可用 {} / {} GB", info.disk_free_gb, info.disk_total_gb),
+            nooksill_core::i18n::fmt(
+                "{0} / {1} GB free",
+                &[
+                    info.disk_free_gb.to_string().as_str(),
+                    info.disk_total_gb.to_string().as_str(),
+                ],
+            ),
         ),
     ];
 
@@ -374,8 +385,12 @@ pub fn is_resmon_window(hwnd: HWND) -> bool {
 /// Text shown on the panel (used by tests).
 #[must_use]
 pub fn summary(info: &SysInfo) -> String {
-    format!(
-        "CPU {}%  内存 {}%  磁盘 {}%",
-        info.cpu_percent, info.mem_percent, info.disk_percent
+    nooksill_core::i18n::fmt(
+        "CPU {0}%  Memory {1}%  Disk {2}%",
+        &[
+            info.cpu_percent.to_string().as_str(),
+            info.mem_percent.to_string().as_str(),
+            info.disk_percent.to_string().as_str(),
+        ],
     )
 }

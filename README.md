@@ -27,16 +27,20 @@ are tracked in [`PORTING.md`](PORTING.md) M2–M4.
 source scripts/env.sh          # Inject MSVC + Windows SDK
 cargo build                    # Default Target: x86_64-pc-windows-msvc
 cargo test  --workspace        # Logic Layer + Settings Interface (No Need for Monitor / GPU)
-./scripts/build.sh --gate      # Full Gate Check: fmt + clippy + Test (Run This Before Submission)
+./scripts/build.sh --gate      # Full Gate: comments, file size, fmt, clippy, tests
 # Run the Dock (the only executable; the M0 spike was removed in ADR-036)
 ./scripts/build.sh --run -p nooksill-gpu --bin nooksill-dock
 # Memory Probe: Compare Each Backend on the Same Graphics Card (Table See Section 5 of BUILD.md)
 ./scripts/probe-mem.sh
 PROBE_LIST=1 ./target/x86_64-pc-windows-msvc/release/probe.exe   # First Check Adapter List
 ```
-**After Cloning, Do It Once** `git config core.hooksPath .githooks`, Otherwise the `fmt` / `clippy` Gate Check Before Submission Will Not Take Effect. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for Submission Information Format and Branch Convention.
+**After Cloning, Do It Once** `git config core.hooksPath .githooks`, Otherwise the Fast Pre-commit Gates (Comments / File Size / `fmt` / `clippy`) Will Not Take Effect. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for Submission Information Format and Branch Convention.
 Artifacts: `./scripts/package.sh [--release]` → `dist/NookSill-<version>-win64[-debug].exe` + `.sha256` (Plain Files, No Zip). Debug Builds Carry a Build Number and Commit (`X.Y.Z-<n>-<sha>`), Releases Are Stable (`X.Y.Z`); See Section 4 of [`BUILD.md`](BUILD.md).
 Dependency Versions: `egui 0.37` / `egui-wgpu 0.37` / `wgpu 30` / `windows 0.62`, All Taking the Latest at Present.
+
+UI language follows the Windows display language by default. Override it in
+Settings → General → Language or with `[general] Language` in `NookSill.ini`;
+English is the base language and the fallback for untranslated strings.
 
 ## License
 GNU General Public License v3.0 or Later (`GPL-3.0-or-later`). Full Text in [`LICENSE`](LICENSE). Settings → 关于 Shows the Same Declaration.

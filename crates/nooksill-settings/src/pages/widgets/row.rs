@@ -152,7 +152,11 @@ fn hint_button(ui: &mut Ui, state: &mut SettingsState, note: &str) {
     // Self-drawn widgets must report themselves or screen readers and kittest
     // cannot find the node.
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, true, format!("说明：{note}"))
+        egui::WidgetInfo::labeled(
+            egui::Role::Button,
+            true,
+            nooksill_core::i18n::fmt("Note: {0}", &[note.to_string().as_str()]),
+        )
     });
 }
 

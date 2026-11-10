@@ -11,30 +11,36 @@ impl App {
         // something was left out.
         let is_group = item.kind == ItemKind::Group;
         let mut fields = vec![EditField {
-            label: "名称".into(),
+            label: nooksill_core::i18n::t("Name").into(),
             value: item.name.clone(),
-            hint: "显示在气泡与分组面板里的名字".into(),
+            hint: nooksill_core::i18n::t("Shown in the hover bubble and group panel").into(),
             multiline: false,
         }];
         if !is_group {
             fields.push(EditField {
-                label: "目标".into(),
+                label: nooksill_core::i18n::t("Target").into(),
                 value: item.path.clone(),
                 hint: match item.kind {
                     ItemKind::Url => "https://example.com".into(),
-                    ItemKind::Trash => "回收站不需要目标".into(),
-                    _ => "程序路径、文件夹路径".into(),
+                    ItemKind::Trash => {
+                        nooksill_core::i18n::t("The Recycle Bin needs no target").into()
+                    }
+                    _ => nooksill_core::i18n::t("Program path or folder path").into(),
                 },
                 multiline: false,
             });
             fields.push(EditField {
-                label: "参数".into(),
+                label: nooksill_core::i18n::t("Arguments").into(),
                 value: item.args.clone(),
-                hint: "启动时附加的命令行参数（可留空）".into(),
+                hint: nooksill_core::i18n::t("Extra command-line arguments (optional)").into(),
                 multiline: false,
             });
         }
-        let Some(out) = self.edit_dialog("编辑条目", fields, "保存") else {
+        let Some(out) = self.edit_dialog(
+            nooksill_core::i18n::t("Edit item"),
+            fields,
+            nooksill_core::i18n::t("Save"),
+        ) else {
             return;
         };
         if !out.accepted {
@@ -60,7 +66,7 @@ impl App {
         target.path = path;
         target.args = args;
         self.apply_item_change();
-        self.status("已保存");
+        self.status(nooksill_core::i18n::t("Saved"));
     }
 
     /// Show the edit dialog; `None` means the user cancelled.
@@ -108,12 +114,16 @@ impl App {
     /// Create a new group (folder).
     pub(super) fn new_group(&mut self) {
         let fields = vec![EditField {
-            label: "分组名称".into(),
-            value: "新建分组".into(),
-            hint: "这个目录的名字".into(),
+            label: nooksill_core::i18n::t("Group name").into(),
+            value: nooksill_core::i18n::t("New group").into(),
+            hint: nooksill_core::i18n::t("Name of this folder").into(),
             multiline: false,
         }];
-        let Some(out) = self.edit_dialog("新建分组", fields, "创建") else {
+        let Some(out) = self.edit_dialog(
+            nooksill_core::i18n::t("New group"),
+            fields,
+            nooksill_core::i18n::t("Create"),
+        ) else {
             return;
         };
         if !out.accepted {
@@ -121,12 +131,15 @@ impl App {
         }
         let name = out.value(0).trim().to_owned();
         if name.is_empty() {
-            self.status("分组名不能为空");
+            self.status(nooksill_core::i18n::t("Group name cannot be empty"));
             return;
         }
         self.raw.push(group::new_group(&name));
         self.apply_item_change();
-        self.status(format!("已新建分组「{name}」"));
+        self.status(nooksill_core::i18n::fmt(
+            "Group {0} created",
+            &[name.to_string().as_str()],
+        ));
     }
 
     /// Create a folder on disk and add it to the dock.
@@ -135,18 +148,23 @@ impl App {
     /// decide the location, and guessing one would hide the new folder.
     pub(super) fn new_folder(&mut self) {
         let owner = self.settings_hwnd();
-        let Some(parent) =
-            nooksill_platform::filedialog::open_folder("选一个位置放新文件夹", owner)
-        else {
+        let Some(parent) = nooksill_platform::filedialog::open_folder(
+            nooksill_core::i18n::t("Choose a location for the new folder"),
+            owner,
+        ) else {
             return;
         };
         let fields = vec![EditField {
-            label: "文件夹名".into(),
-            value: "新建文件夹".into(),
-            hint: "不能包含路径分隔符".into(),
+            label: nooksill_core::i18n::t("Folder name").into(),
+            value: nooksill_core::i18n::t("New folder").into(),
+            hint: nooksill_core::i18n::t("Cannot contain path separators").into(),
             multiline: false,
         }];
-        let Some(out) = self.edit_dialog("新建文件夹", fields, "创建") else {
+        let Some(out) = self.edit_dialog(
+            nooksill_core::i18n::t("New folder"),
+            fields,
+            nooksill_core::i18n::t("Create"),
+        ) else {
             return;
         };
         if !out.accepted {
@@ -162,7 +180,10 @@ impl App {
                 self.raw
                     .push(Item::new(ItemKind::Folder, &label, path.to_string_lossy()));
                 self.apply_item_change();
-                self.status(format!("已新建文件夹「{label}」"));
+                self.status(nooksill_core::i18n::fmt(
+                    "Folder {0} created",
+                    &[label.to_string().as_str()],
+                ));
             }
             Err(e) => self.status(e),
         }
@@ -176,9 +197,9 @@ impl App {
         if self.dock.take_tray_toggle() {
             let hidden = self.dock.toggle_force_hide();
             self.status(if hidden {
-                "Dock 已隐藏（点托盘图标恢复）"
+                nooksill_core::i18n::t("Dock hidden (click the tray icon to restore)")
             } else {
-                "Dock 已显示"
+                nooksill_core::i18n::t("Dock shown")
             });
         }
         if !self.dock.take_tray_menu() {
@@ -219,9 +240,9 @@ impl App {
             Some(MenuCmd::ToggleDock) => {
                 let hidden = self.dock.toggle_force_hide();
                 self.status(if hidden {
-                    "Dock 已隐藏（点托盘图标恢复）"
+                    nooksill_core::i18n::t("Dock hidden (click the tray icon to restore)")
                 } else {
-                    "Dock 已显示"
+                    nooksill_core::i18n::t("Dock shown")
                 });
             }
             Some(MenuCmd::Settings) => {

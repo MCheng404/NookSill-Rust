@@ -28,7 +28,9 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send(UpdateMsg::Status("正在检查…".to_owned()));
+            let _ = tx.send(UpdateMsg::Status(
+                nooksill_core::i18n::t("Checking…").to_owned(),
+            ));
             match nooksill_platform::update::latest_release() {
                 Ok(rel) => {
                     let installed =
@@ -66,22 +68,27 @@ impl App {
             let allow_direct =
                 !(secure_dns && nooksill_platform::update::dns_looks_poisoned("github.com"));
             let _ = tx.send(UpdateMsg::Status(if allow_direct {
-                "正在测速选镜像…".to_owned()
+                nooksill_core::i18n::t("Benchmarking mirrors…").to_owned()
             } else {
-                "系统 DNS 疑似被污染，只用镜像…".to_owned()
+                nooksill_core::i18n::t("System DNS looks poisoned; using mirrors only…").to_owned()
             }));
             let base =
                 nooksill_platform::update::pick_mirror(&release.sha256.url, test_all, allow_direct);
             let Some(base) = base else {
-                let _ = tx.send(UpdateMsg::Failed("没有可用镜像".to_owned()));
+                let _ = tx.send(UpdateMsg::Failed(
+                    nooksill_core::i18n::t("No usable mirror").to_owned(),
+                ));
                 return;
             };
             let label = if base.is_empty() {
-                "GitHub 直连"
+                nooksill_core::i18n::t("GitHub direct")
             } else {
                 base.as_str()
             };
-            let _ = tx.send(UpdateMsg::Status(format!("从 {label} 下载…")));
+            let _ = tx.send(UpdateMsg::Status(nooksill_core::i18n::fmt(
+                "Downloading from {0}…",
+                &[label.to_string().as_str()],
+            )));
             match nooksill_platform::update::stage(&base, &release) {
                 Ok(path) => {
                     let _ = tx.send(UpdateMsg::Staged(path));
@@ -120,31 +127,40 @@ impl App {
                 }
                 UpdateMsg::Available(release) => {
                     let kind = if release.prerelease {
-                        "新预发布"
+                        nooksill_core::i18n::t("New pre-release")
                     } else {
-                        "新版本"
+                        nooksill_core::i18n::t("New version")
                     };
-                    view.status = format!("发现{kind} {}", release.version.text);
+                    view.status = nooksill_core::i18n::fmt(
+                        "Found {0} {1}",
+                        &[
+                            kind.to_string().as_str(),
+                            release.version.text.to_string().as_str(),
+                        ],
+                    );
                     view.available = true;
                     view.busy = false;
                     self.update_release = Some(*release);
                     finished = true;
                 }
                 UpdateMsg::UpToDate => {
-                    view.status = "已是最新版本".to_owned();
+                    view.status = nooksill_core::i18n::t("Already up to date").to_owned();
                     view.available = false;
                     view.busy = false;
                     finished = true;
                 }
                 UpdateMsg::Staged(path) => {
-                    view.status = "已下载并校验通过，重启后生效".to_owned();
+                    view.status =
+                        nooksill_core::i18n::t("Downloaded and verified; applies after restart")
+                            .to_owned();
                     view.ready = true;
                     view.busy = false;
                     self.update_staged = Some(path);
                     finished = true;
                 }
                 UpdateMsg::Failed(why) => {
-                    view.status = format!("失败：{why}");
+                    view.status =
+                        nooksill_core::i18n::fmt("Failed: {0}", &[why.to_string().as_str()]);
                     view.busy = false;
                     finished = true;
                 }

@@ -118,7 +118,7 @@ pub(super) fn draw(
         painter.text(
             egui::pos2(search.right() + 14.0, search.center().y),
             Align2::LEFT_CENTER,
-            "回车确认 · Esc 取消",
+            nooksill_core::i18n::t("Enter to confirm · Esc to cancel"),
             FontId::proportional(11.5),
             sub,
         );
@@ -126,7 +126,7 @@ pub(super) fn draw(
         painter.text(
             search.center(),
             Align2::CENTER_CENTER,
-            "搜索应用…（可直接打中文）",
+            nooksill_core::i18n::t("Search apps… (Chinese input works)"),
             FontId::proportional(13.0),
             sub,
         );
@@ -165,7 +165,7 @@ pub(super) fn draw(
         let label = if adding {
             "＋".to_owned()
         } else if t == 0 {
-            "全部".to_owned()
+            nooksill_core::i18n::t("All").to_owned()
         } else {
             lp.tags()[t - 1].clone()
         };
@@ -371,11 +371,11 @@ pub(super) fn draw(
             Pos2::new(w * 0.5, h * 0.5 - 20.0),
             Align2::CENTER_CENTER,
             if !query.is_empty() {
-                "没有找到匹配的应用"
+                nooksill_core::i18n::t("No matching apps")
             } else if ov.cat != 0 {
-                "这一组里还没有应用 —— 右键图标可以把它移过来"
+                nooksill_core::i18n::t("This folder is empty — right-click an app to move it here")
             } else {
-                "起动台是空的 —— 把文件、快捷方式或文件夹拖进来"
+                nooksill_core::i18n::t("Launchpad is empty — drop files, shortcuts or folders here")
             },
             FontId::proportional(14.0),
             sub,
@@ -535,7 +535,7 @@ pub(super) fn draw(
                 Align2::LEFT_CENTER,
                 label.as_str(),
                 FontId::proportional(12.5),
-                if label == "从起动台移除" {
+                if label == nooksill_core::i18n::t("Remove from Launchpad") {
                     Color32::from_rgba_unmultiplied(230, 74, 70, 255)
                 } else {
                     tc

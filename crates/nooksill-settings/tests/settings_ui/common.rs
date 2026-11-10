@@ -22,6 +22,9 @@ pub(super) fn new_harness() -> Harness<'static, St> {
 /// not shrink with content, so both columns covered the title. Without a shell
 /// stand-in a test cannot catch that.
 pub(super) fn harness(shell: bool) -> Harness<'static, St> {
+    // Tests locate widgets by their Chinese labels; pin the language so the
+    // assertions do not depend on the host's display language.
+    nooksill_core::i18n::set_language(nooksill_core::i18n::Language::ZhCn);
     let state = St {
         cfg: Config::defaults(),
         ui: SettingsState {

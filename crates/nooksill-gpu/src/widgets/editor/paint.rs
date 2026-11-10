@@ -129,7 +129,14 @@ pub(super) fn paint(ui: &mut egui::Ui, st: &mut EditState) {
         egui::vec2(cancel_w, BTN_H),
     );
 
-    if button(ui, cancel_rect, "取消", false, ink, faint) {
+    if button(
+        ui,
+        cancel_rect,
+        nooksill_core::i18n::t("Cancel"),
+        false,
+        ink,
+        faint,
+    ) {
         st.accepted = false;
         st.done = true;
     }

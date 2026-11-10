@@ -13,6 +13,7 @@ struct St {
 }
 
 fn harness(text: &str) -> Harness<'static, St> {
+    nooksill_core::i18n::set_language(nooksill_core::i18n::Language::ZhCn);
     Harness::builder()
         .with_size([400.0, 120.0])
         .with_context_setup(|ctx| {

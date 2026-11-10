@@ -61,20 +61,27 @@ impl Selection {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            Self::Auto => "自动".to_owned(),
-            Self::Pinned => "按配置指定".to_owned(),
+            Self::Auto => nooksill_core::i18n::t("Automatic").to_owned(),
+            Self::Pinned => nooksill_core::i18n::t("Selected by config").to_owned(),
             Self::Fallback { wanted, available } => {
                 const SHOW: usize = 3;
                 let head: Vec<&str> = available.iter().take(SHOW).map(String::as_str).collect();
                 let more = available.len().saturating_sub(SHOW);
                 let tail = if more > 0 {
-                    format!(" 等 {} 项", available.len())
+                    nooksill_core::i18n::fmt(
+                        " and {0} more",
+                        &[available.len().to_string().as_str()],
+                    )
                 } else {
                     String::new()
                 };
-                format!(
-                    "配置的「{wanted}」未找到，已回退自动；可选：{}{tail}",
-                    head.join(" / ")
+                nooksill_core::i18n::fmt(
+                    "Configured GPU {0} not found; fell back to automatic. Available: {1}{2}",
+                    &[
+                        wanted.to_string().as_str(),
+                        head.join(" / ").as_str(),
+                        tail.as_str(),
+                    ],
                 )
             }
         }
@@ -299,7 +306,10 @@ mod tests {
 
     #[test]
     fn selection_describes_itself() {
-        assert_eq!(Selection::Auto.describe(), "自动");
+        assert_eq!(
+            Selection::Auto.describe(),
+            nooksill_core::i18n::t("Automatic")
+        );
         assert!(!Selection::Auto.fell_back());
 
         let fb = Selection::Fallback {
@@ -360,6 +370,9 @@ mod tests {
         let text = fb.describe();
         assert!(text.contains("A / B / C"));
         assert!(!text.contains('D'), "第四个不应出现: {text}");
-        assert!(text.contains("等 5 项"), "总数量要交代清楚: {text}");
+        assert!(
+            text.contains(&nooksill_core::i18n::fmt(" and {0} more", &["5"])),
+            "total count must be stated: {text}"
+        );
     }
 }

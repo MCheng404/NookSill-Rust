@@ -155,7 +155,7 @@ pub(super) fn url_host(url: &str) -> String {
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let host = host.strip_prefix("www.").unwrap_or(host);
     if host.is_empty() {
-        "网页应用".to_owned()
+        nooksill_core::i18n::t("Web app").to_owned()
     } else {
         host.to_owned()
     }

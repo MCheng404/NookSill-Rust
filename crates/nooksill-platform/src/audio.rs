@@ -106,9 +106,11 @@ impl Battery {
     #[must_use]
     pub fn text(self) -> String {
         match self.percent {
-            Some(p) if self.ac => format!("电量 {p}% · 已接通电源"),
-            Some(p) => format!("电量 {p}%"),
-            None => "未检测到电池".to_owned(),
+            Some(p) if self.ac => {
+                nooksill_core::i18n::fmt("Battery {0}% · plugged in", &[p.to_string().as_str()])
+            }
+            Some(p) => nooksill_core::i18n::fmt("Battery {0}%", &[p.to_string().as_str()]),
+            None => nooksill_core::i18n::t("No battery detected").to_owned(),
         }
     }
 }
@@ -126,7 +128,7 @@ mod tests {
                 ac: true
             }
             .text(),
-            "电量 80% · 已接通电源"
+            nooksill_core::i18n::fmt("Battery {0}% · plugged in", &["80"])
         );
         assert_eq!(
             Battery {
@@ -134,8 +136,11 @@ mod tests {
                 ac: false
             }
             .text(),
-            "电量 35%"
+            nooksill_core::i18n::fmt("Battery {0}%", &["35"])
         );
-        assert_eq!(Battery::default().text(), "未检测到电池");
+        assert_eq!(
+            Battery::default().text(),
+            nooksill_core::i18n::t("No battery detected")
+        );
     }
 }
