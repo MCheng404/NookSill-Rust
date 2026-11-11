@@ -197,6 +197,37 @@ pub(super) fn apply_low_power(cfg: &mut Config) {
     }
 }
 
+/// Work area the dock anchors to, for the monitor and edge in `cfg`.
+///
+/// An auto-hidden taskbar on the same edge still shrinks the work area by a
+/// strip that shows nothing; anchor to the monitor rect then, or the dock
+/// floats short of the screen edge.
+pub(super) fn work_rect(cfg: &Config, taskbar: Option<appbar::Taskbar>) -> LRect {
+    if appbar::taskbar_steals_edge(cfg.edge, taskbar) {
+        display::monitor_rect(cfg.monitor)
+    } else {
+        display::work_area(cfg.monitor)
+    }
+}
+
+/// Apply the AppBar reservation `cfg` asks for and return the granted rect.
+///
+/// Releases a previous reservation when the new edge/mode no longer wants one:
+/// a stale registration keeps a strip of the old screen unusable until logout.
+pub(super) fn reserve_space(
+    appbar: &mut AppBar,
+    cfg: &Config,
+    mode: DockMode,
+    thickness: i32,
+    taskbar: Option<appbar::Taskbar>,
+) -> Option<LRect> {
+    if !appbar::should_reserve(cfg.reserve, mode == DockMode::Always, cfg.edge, taskbar) {
+        appbar.remove();
+        return None;
+    }
+    appbar.apply(cfg.edge, thickness, display::monitor_rect(cfg.monitor))
+}
+
 /// Build the single-frame `RawInput` shared by the dock and the menu.
 ///
 /// `screen_rect` must be right or egui lays the bar out in the wrong place.

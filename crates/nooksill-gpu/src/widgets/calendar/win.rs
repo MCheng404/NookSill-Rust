@@ -58,64 +58,14 @@ pub(super) fn place(
     edge: Edge,
     ppp: f32,
 ) -> (i32, i32) {
-    place_in(
-        pw,
-        ph,
-        anchor,
-        edge,
-        ppp,
-        nooksill_platform::display::monitor_rect(0),
-    )
+    let mon = super::super::anchor::monitor_of(anchor);
+    super::super::anchor::place(pw, ph, anchor, edge, ppp, mon)
 }
 
-/// Same as [`place`], but the monitor rect comes from the caller.
-///
-/// Split out so tests are reproducible: the CI virtual screen is only
-/// 1024x768, and the real `monitor_rect(0)` would clamp the popup elsewhere.
-pub(super) fn place_in(
-    pw: i32,
-    ph: i32,
-    anchor: (f32, f32, f32, f32),
-    edge: Edge,
-    ppp: f32,
-    mon: nooksill_core::layout::Rect,
-) -> (i32, i32) {
-    let (al, at, ar, ab) = anchor;
-    let ax = (al + ar) * 0.5;
-    let ay = (at + ab) * 0.5;
-    let pm = (PM * ppp).round() as i32;
-    let gap = (4.0 * ppp).round() as i32;
-    let (mut x, mut y) = match edge {
-        Edge::Top => (ax - pw as f32 * 0.5, ab - pm as f32 + gap as f32),
-        Edge::Left => (ar - pm as f32 + gap as f32, ay - ph as f32 * 0.5),
-        Edge::Right => (
-            al - pw as f32 + pm as f32 - gap as f32,
-            ay - ph as f32 * 0.5,
-        ),
-        Edge::Bottom => (
-            ax - pw as f32 * 0.5,
-            at - ph as f32 + pm as f32 - gap as f32,
-        ),
-    };
-    // Clamp into the monitor using `rcMonitor`, not the work area: covering
-    // the taskbar is fine, leaving the screen is not.
-    let (mut xi, mut yi) = (x.round() as i32, y.round() as i32);
-    if xi + pw > mon.right {
-        xi = mon.right - pw;
-    }
-    if yi + ph > mon.bottom {
-        yi = mon.bottom - ph;
-    }
-    if xi < mon.left {
-        xi = mon.left;
-    }
-    if yi < mon.top {
-        yi = mon.top;
-    }
-    x = xi as f32;
-    y = yi as f32;
-    (x as i32, y as i32)
-}
+/// Geometry lives in [`crate::widgets::anchor`]; the placement tests in
+/// `calendar.rs` reach it by this name.
+#[cfg(test)]
+pub(super) use crate::widgets::anchor::place as place_in;
 
 /// Converts client coords (physical px) to logical points.
 pub(super) fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {

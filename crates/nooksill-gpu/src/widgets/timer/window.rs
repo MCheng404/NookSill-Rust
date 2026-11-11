@@ -1,6 +1,6 @@
 //! Timer window lifecycle: creation, visibility and repaint timing.
 
-use super::win::{centered_origin, class_pcwstr, physical_size, wndproc};
+use super::win::{class_pcwstr, physical_size, wndproc};
 use super::*;
 
 impl ToolWindow {
@@ -26,7 +26,7 @@ impl ToolWindow {
         }
 
         let (pw, ph) = physical_size(ppp, panel_h(state.todos.len()));
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Timer · To-do"));
         let hwnd = unsafe {
             CreateWindowExW(

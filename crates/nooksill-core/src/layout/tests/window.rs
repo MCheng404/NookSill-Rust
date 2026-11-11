@@ -78,3 +78,17 @@ fn reserve_thickness_matches_upstream() {
     // Truncated, matching the `(int)` cast.
     assert_eq!(reserve_thickness(76.9, 12.9), 93);
 }
+
+/// Panels centre on the dock's monitor, not on the origin of the desktop.
+#[test]
+fn centered_in_uses_the_given_area() {
+    let primary = Rect::new(0, 0, 1920, 1040);
+    assert_eq!(centered_in(primary, 800, 600), (560, 220));
+
+    // A monitor to the right: the result must be inside it, not near zero.
+    let secondary = Rect::new(1920, 0, 3840, 1040);
+    assert_eq!(centered_in(secondary, 800, 600), (2480, 220));
+
+    // Integer division floors, so an odd leftover leans left/up by one pixel.
+    assert_eq!(centered_in(Rect::new(0, 0, 101, 101), 100, 100), (0, 0));
+}

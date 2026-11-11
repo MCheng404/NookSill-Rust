@@ -20,8 +20,8 @@ impl LaunchpadWindow {
             RegisterClassW(&raw const wc);
         }
 
-        // Cover the whole primary monitor.
-        let mon = nooksill_platform::display::monitor_rect(0);
+        // Cover the whole monitor the dock sits on.
+        let mon = nooksill_platform::display::target_monitor_rect();
         let (pw, ph) = (mon.right - mon.left, mon.bottom - mon.top);
         let size = (pw as f32 / ppp, ph as f32 / ppp);
 

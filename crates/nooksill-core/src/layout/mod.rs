@@ -18,8 +18,8 @@ pub use slots::{
     sep_scale, Bars, SlotKind, Slots, View, MAG_RADIUS, REF_FRAME_MS, SIZE_LERP, SNAP,
 };
 pub use window::{
-    bounce_active, bounce_offset, map_rect, physical_size, reserve_thickness, to_logical,
-    window_origin, BOUNCE_MS,
+    bounce_active, bounce_offset, centered_in, map_rect, physical_size, reserve_thickness,
+    to_logical, window_origin, BOUNCE_MS,
 };
 
 /// Integer rectangle with Win32 `RECT` convention: right/bottom are exclusive.

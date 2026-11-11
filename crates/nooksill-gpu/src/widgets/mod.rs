@@ -1,6 +1,7 @@
 //! Popup panel widgets, one module per panel.
 //! `lib.rs` re-exports the legacy `*_win` names as aliases.
 
+pub mod anchor;
 pub mod calendar;
 pub mod control;
 pub mod editor;

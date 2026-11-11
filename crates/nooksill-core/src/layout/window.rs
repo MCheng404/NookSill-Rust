@@ -48,6 +48,19 @@ pub fn window_origin(
     }
 }
 
+/// Top-left corner that centres a `w` x `h` window in `area`, physical pixels.
+///
+/// Used by the free-floating panels (settings, launchpad, notes, group, timers,
+/// resource monitor): they belong to the monitor the dock is on, which the
+/// caller passes in rather than each panel querying the primary itself.
+#[must_use]
+pub fn centered_in(area: Rect, w: i32, h: i32) -> (i32, i32) {
+    (
+        area.left + (area.width() - w) / 2,
+        area.top + (area.height() - h) / 2,
+    )
+}
+
 /// Window size in physical pixels: `(lw, lh)` horizontal, transposed when vertical.
 ///
 /// Shared by window creation and AppBar thickness; getting it wrong once leaves a

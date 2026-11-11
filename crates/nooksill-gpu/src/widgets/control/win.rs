@@ -56,40 +56,8 @@ pub(super) fn place(
     edge: nooksill_core::config::Edge,
     ppp: f32,
 ) -> (i32, i32) {
-    use nooksill_core::config::Edge;
-    let (al, at, ar, ab) = anchor;
-    let ax = (al + ar) * 0.5;
-    let ay = (at + ab) * 0.5;
-    let pm = (PM * ppp).round() as i32;
-    let gap = (4.0 * ppp).round() as i32;
-    let (x, y) = match edge {
-        Edge::Top => (ax - pw as f32 * 0.5, ab - pm as f32 + gap as f32),
-        Edge::Left => (ar - pm as f32 + gap as f32, ay - ph as f32 * 0.5),
-        Edge::Right => (
-            al - pw as f32 + pm as f32 - gap as f32,
-            ay - ph as f32 * 0.5,
-        ),
-        Edge::Bottom => (
-            ax - pw as f32 * 0.5,
-            at - ph as f32 + pm as f32 - gap as f32,
-        ),
-    };
-    let mon = nooksill_platform::display::monitor_rect(0);
-    let mut xi = x.round() as i32;
-    let mut yi = y.round() as i32;
-    if xi + pw > mon.right {
-        xi = mon.right - pw;
-    }
-    if yi + ph > mon.bottom {
-        yi = mon.bottom - ph;
-    }
-    if xi < mon.left {
-        xi = mon.left;
-    }
-    if yi < mon.top {
-        yi = mon.top;
-    }
-    (xi, yi)
+    let mon = super::super::anchor::monitor_of(anchor);
+    super::super::anchor::place(pw, ph, anchor, edge, ppp, mon)
 }
 
 /// Converts client coords (physical px) to logical points.

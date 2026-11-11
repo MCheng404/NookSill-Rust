@@ -1,6 +1,7 @@
 //! Pointer, tray and menu command handling.
 
 use super::menu_win::{frost_spec, show_menu};
+use super::misc::reserve_space;
 use super::satellite::{ensure_launchpad, ensure_settings, tick_settings};
 use super::*;
 
@@ -288,21 +289,13 @@ impl App {
             // docks transpose lw/lh) is handled by the next `step_relayout`;
             // this frame is placed with the old size.
             self.dock.mode = self.dock.cfg.mode;
-            self.reserved = if appbar::should_reserve(
-                self.dock.cfg.reserve,
-                self.dock.mode == DockMode::Always,
-                self.dock.cfg.edge,
+            self.reserved = reserve_space(
+                &mut self.appbar,
+                &self.dock.cfg,
+                self.dock.mode,
+                self.dock.reserve_thickness(),
                 appbar::taskbar(),
-            ) {
-                self.appbar.apply(
-                    self.dock.cfg.edge,
-                    self.dock.reserve_thickness(),
-                    display::monitor_rect(0),
-                )
-            } else {
-                self.appbar.remove();
-                None
-            };
+            );
             self.reposition();
             if trace::geom() {
                 eprintln!(

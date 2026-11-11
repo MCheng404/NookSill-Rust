@@ -40,13 +40,6 @@ pub(super) fn class_pcwstr() -> windows::core::PCWSTR {
     windows::core::PCWSTR(buf.as_ptr())
 }
 
-pub(super) fn centered_origin(pw: i32, ph: i32) -> (i32, i32) {
-    let work = nooksill_platform::display::work_area(0);
-    let cx = (work.left + work.right) / 2;
-    let cy = (work.top + work.bottom) / 2;
-    (cx - pw / 2, cy - ph / 2)
-}
-
 pub(super) fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {
     let x = (lparam.0 & 0xFFFF) as i16 as f32;
     let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;

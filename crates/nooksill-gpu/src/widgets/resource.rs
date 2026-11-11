@@ -81,7 +81,7 @@ impl ResMonWindow {
         }
 
         let (pw, ph) = physical_size(ppp);
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Resource Monitor"));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -364,14 +364,6 @@ fn physical_size(ppp: f32) -> (i32, i32) {
         (LOGICAL_SIZE.0 * ppp).round() as i32,
         (LOGICAL_SIZE.1 * ppp).round() as i32,
     )
-}
-
-/// Centers the panel in the work area.
-fn centered_origin(pw: i32, ph: i32) -> (i32, i32) {
-    let work = nooksill_platform::display::work_area(0);
-    let cx = (work.left + work.right) / 2;
-    let cy = (work.top + work.bottom) / 2;
-    (cx - pw / 2, cy - ph / 2)
 }
 
 /// Tells whether this window is the resource monitor panel.

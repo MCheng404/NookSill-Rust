@@ -246,6 +246,30 @@ pub(super) unsafe extern "system" fn wndproc(
             }
             LRESULT(0)
         }
+        // Scaling change or the window moving to another monitor. Not applying
+        // the suggested rect: the bar size comes from `cfg`, so Windows would
+        // resize to a rect that does not match the content. Re-derive instead,
+        // which picks up the new DPI at once.
+        WM_DPICHANGED => {
+            let ptr = dock_ptr(hwnd);
+            if !ptr.is_null() {
+                unsafe {
+                    (*ptr).geom_epoch = (*ptr).geom_epoch.wrapping_add(1);
+                }
+            }
+            LRESULT(0)
+        }
+        // Resolution change, scaling change or a monitor plugged in/out: the
+        // cached work area is stale. `sync_monitor` re-derives it.
+        WM_DISPLAYCHANGE => {
+            let ptr = dock_ptr(hwnd);
+            if !ptr.is_null() {
+                unsafe {
+                    (*ptr).geom_epoch = (*ptr).geom_epoch.wrapping_add(1);
+                }
+            }
+            LRESULT(0)
+        }
         // Right click: only the position is recorded, the main loop opens the
         // menu because a modal window must not block in the procedure.
         WM_RBUTTONDOWN => LRESULT(0),

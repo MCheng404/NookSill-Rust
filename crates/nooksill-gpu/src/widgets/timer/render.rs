@@ -1,7 +1,7 @@
 //! Timer window painting and height fitting.
 
 use super::paint::{draw_panel, Input};
-use super::win::{centered_origin, physical_size};
+use super::win::physical_size;
 use super::*;
 
 impl ToolWindow {
@@ -64,7 +64,7 @@ impl ToolWindow {
         }
         self.renderer.resize(gpu, pw as u32, ph as u32)?;
         self.size = (pw, ph);
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         self.pos = (x, y);
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(

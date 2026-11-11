@@ -187,7 +187,19 @@
 
 - 未改：实现不变量（256 字节对齐、描述符预算 4096、`WM_APP` 号段、D3D/Win32 约束）保持原样；它们不是策略参数。
 
-### 验证
+### 显示器选择真正生效（2026-11-11）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 启动 | `[Settings] Monitor` 从「只读写不使用」改为参与引导：工作区、`AppBar` 预留矩形、DPI 都按该序号取；序号越界（显示器已拔掉）回退主屏并记一行日志 | 引导里写死 `work_area(0)` / `monitor_rect(0)`，多屏用户切换后毫无反应 |
+| 按显示器 DPI | 新增 `display::monitor_dpi(index)`（`GetDpiForMonitor` + `MDT_EFFECTIVE_DPI`）；`system_dpi()` 只回答主屏 | 微软文档：PMv2 进程下该 API 返回「用户为该显示器设置的真实 DPI」；混合缩放时 150% 屏会按 100% 绘制 |
+| 运行时切换 | `App::sync_monitor` 在序号或拓扑变化时重算工作区/DPI/预留并置脏；`step_relayout` 增加「尺寸没变但原点变了」分支 | 原来只比尺寸，换到同尺寸的另一块屏时窗口不动 |
+| 拓扑变化 | `WM_DPICHANGED` / `WM_DISPLAYCHANGE` 自增 `Dock.geom_epoch` 触发同一条重算；`WM_DPICHANGED` 不采用系统建议矩形 | 默认处理会按建议矩形改窗口尺寸，与「栏体尺寸由 `cfg` 决定」冲突 |
+| 弹窗跟随 | 新增 `widgets::anchor`，日历与控制中心共用一套锚点几何；面板按锚点所在显示器钳制（`monitor_at` / `work_area_at`） | 原来两处 `place` 各写一遍，且都钳到 0 号屏 |
+| 居中面板 | 删除 5 份 `centered_origin`，改读 `display::centered_on_target`（Dock 用 `set_target_work_area` 发布目标工作区）；启动台按 `target_monitor_rect` 铺满该屏 | 设置/便签/分组/计时器/资源面板原来一律在主屏居中 |
+| 预留 | `misc::reserve_space` 合并「要不要预留」与「按哪块屏预留」，引导、换屏、改边三处共用 | `ABM_SETPOS` 是系统级注册，换屏不重提会让旧屏一直少一条空白 |
+
+### 验证（可自定义热键）
 
 `./scripts/build.sh --gate` 六步全绿。测试总数 575：
 `nooksill-core` 287、`nooksill-gpu` 172（+15 ignored，GPU/窗口类）
@@ -200,6 +212,19 @@
 `dock_shot` 三边（底 / 左 / 右）、`panels_shot` 7 张、`settings_shot` 常规页
 （新输入框显示 `Ctrl+Alt+D`）均出图正常。
 CI run `43039955569` 的 gate（3m20s）与 debug（1m58s）均通过。
+
+### 验证（显示器选择）
+
+`./scripts/build.sh --gate` 六步全绿，测试总数 581（`core` 288 / `gpu` 175
++15 ignored / `dock` 7 / `platform` 74 +6 ignored / `settings` 6 + 29 + 2）。
+本轮新增：`widgets::anchor` 三点定位（3）、`layout::centered_in` 副屏居中（1）、
+`display::monitor_dpi` 逐屏取值与越界回退（2）、`target_work_area` 往返（1）。
+
+本机单屏实测 `monitor_dpi(0)=96` 与 `system_dpi()` 一致；`crates/` 下 275 个 `.rs`、
+56276 行，无文件超过 600 行门禁。多屏与混合缩放需真机验证：设置 → 位置 →
+「显示在」切换到副屏后，栏体应立即移动且按该屏缩放绘制，`NOOKSILL_GEOM=1`
+会打印 `[monitor] index=… dpi=… work=(…)`。CI run `43054611786` 的 gate（3m4s，
+含新的 commit message 步骤）与 debug（2m28s）通过。
 
 ---
 

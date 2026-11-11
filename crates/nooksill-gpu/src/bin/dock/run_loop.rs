@@ -1,6 +1,7 @@
 //! Main message loop and the per-frame layout/reorder steps it drives.
 
 use super::drag::{reorder_bar, BarMove};
+use super::misc::{reserve_space, work_rect};
 use super::sys::{dump_geometry, pump};
 use super::*;
 
@@ -16,6 +17,64 @@ impl App {
         }
         self.global_hotkey.rebind(want.0, want.1);
         self.hotkey_applied = want;
+    }
+
+    /// Follow `[Settings] Monitor` and display changes without a restart.
+    ///
+    /// Work area, DPI and the AppBar reservation are all per monitor, so all
+    /// three are re-derived instead of staying at their boot values; the window
+    /// itself is moved by `step_relayout`. A `WM_DISPLAYCHANGE` re-runs this
+    /// even when the index did not change: resolution, scaling and a hot-plugged
+    /// screen all invalidate the cached work area. Edge changes keep their own
+    /// path (`mount_key`), which does not touch the work rect. Returns whether
+    /// anything changed.
+    fn sync_monitor(&mut self) -> bool {
+        let want = (self.dock.cfg.monitor, self.dock.geom_epoch);
+        if want == self.monitor_for {
+            return false;
+        }
+        let count = display::monitors().len();
+        if self.dock.cfg.monitor < 0 || self.dock.cfg.monitor as usize >= count.max(1) {
+            if trace::geom() {
+                eprintln!(
+                    "[monitor] 序号 {} 越界（当前 {count} 台），改用主显示器",
+                    self.dock.cfg.monitor
+                );
+            }
+            self.dock.cfg.monitor = 0;
+        }
+        let want = (self.dock.cfg.monitor, want.1);
+        self.monitor_for = want;
+        let taskbar = appbar::taskbar();
+        self.work = work_rect(&self.dock.cfg, taskbar);
+        // `Dock` keeps its own copy for `calc_metrics`; a stale one lays the bar
+        // out for the old screen.
+        self.dock.work = self.work;
+        // Panels that are not anchored to a card centre themselves here.
+        display::set_target_work_area(self.work);
+        let dpi = display::monitor_dpi(want.0);
+        if dpi != self.dpi {
+            self.dpi = dpi;
+            self.ppp = dpi as f32 / 96.0;
+            self.frame.set_pixels_per_point(self.ppp);
+        }
+        self.reserved = reserve_space(
+            &mut self.appbar,
+            &self.dock.cfg,
+            self.dock.mode,
+            self.dock.reserve_thickness(),
+            taskbar,
+        );
+        // Sizes follow the DPI, so the layout has to run before the window is
+        // moved; `step_relayout` covers both a resize and a pure move.
+        self.dock.mark_dirty();
+        if trace::geom() {
+            eprintln!(
+                "[monitor] index={} dpi={} work=({},{},{},{})",
+                want.0, self.dpi, self.work.left, self.work.top, self.work.right, self.work.bottom
+            );
+        }
+        true
     }
 
     /// Message loop; returns only on `WM_QUIT`.
@@ -43,9 +102,12 @@ impl App {
                 Pumped::Wake | Pumped::Idle => {}
             }
 
-            // 2. Relayout. Both conditions are required: `dirty` (mouse
-            //    enter/leave/press changed input state, so `hot` must be
-            //    recomputed) and `anim` (the zoom curve is still running).
+            // 2. Monitor and edge from settings: refresh the work rect, DPI and
+            //    AppBar reservation before the layout runs.
+            need_frame |= self.sync_monitor();
+            // 2.5 Relayout. Both conditions are required: `dirty` (mouse
+            //     enter/leave/press changed input state, so `hot` must be
+            //     recomputed) and `anim` (the zoom curve is still running).
             need_frame |= self.step_layout();
             // 3. Window size and position follow the item count.
             need_frame |= self.step_relayout()?;
@@ -170,11 +232,17 @@ impl App {
     /// commits a stale bitmap and only the top-left part appears.
     pub(super) fn step_relayout(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
         let (nw, nh) = self.dock.physical_size_i32();
-        if nw == self.size.0 && nh == self.size.1 {
+        let resized = nw != self.size.0 || nh != self.size.1;
+        if resized {
+            self.size = (nw, nh);
+            self.frame.resize(&self.gpu, nw as u32, nh as u32)?;
+        }
+        // Switching monitor or edge keeps the size on a square bar, so the
+        // origin has to be compared as well: a resize-only test would leave the
+        // window on the old screen.
+        if !resized && self.desired_origin() == self.pos {
             return Ok(false);
         }
-        self.size = (nw, nh);
-        self.frame.resize(&self.gpu, nw as u32, nh as u32)?;
         self.reposition();
         if trace::geom() {
             eprintln!(

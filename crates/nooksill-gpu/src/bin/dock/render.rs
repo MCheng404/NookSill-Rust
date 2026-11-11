@@ -141,15 +141,20 @@ impl App {
         true
     }
 
-    /// Recompute the window origin for the current edge, reservation and size.
-    pub(super) fn reposition(&mut self) {
-        self.pos = layout::window_origin(
+    /// Where the current edge, reservation and size put the window.
+    pub(super) fn desired_origin(&self) -> (i32, i32) {
+        layout::window_origin(
             self.dock.cfg.edge,
             self.work,
             self.reserved,
             self.size.0,
             self.size.1,
-        );
+        )
+    }
+
+    /// Recompute the window origin for the current edge, reservation and size.
+    pub(super) fn reposition(&mut self) {
+        self.pos = self.desired_origin();
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,

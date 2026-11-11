@@ -45,6 +45,7 @@ impl Dock {
             click: None,
             press_force: false,
             look_epoch: 0,
+            geom_epoch: 0,
             menu_at: None,
             dropped_paths: Vec::new(),
             dropped_at: None,

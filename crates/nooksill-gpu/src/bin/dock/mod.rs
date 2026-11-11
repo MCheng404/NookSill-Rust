@@ -76,10 +76,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TranslateMessage, GWLP_USERDATA, HWND_TOPMOST, MA_NOACTIVATE, MB_ICONERROR, MB_OK, MSG,
     MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWNA, WM_CAPTURECHANGED, WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_HOTKEY, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETTINGCHANGE, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNA, WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES,
+    WM_ERASEBKGND, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_SETTINGCHANGE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 
 fn main() {
@@ -251,6 +252,10 @@ struct App {
     appbar: AppBar,
     /// Rect reserved by the AppBar; `None` means nothing was reserved.
     reserved: Option<LRect>,
+    /// Monitor index and display-topology epoch the work rect and DPI were
+    /// derived for. A settings change or a `WM_DISPLAYCHANGE` re-derives both
+    /// (see `sync_monitor`); the AppBar reservation follows in the same step.
+    monitor_for: (i32, u32),
     /// Screen coordinates of the window origin, in physical pixels.
     pos: (i32, i32),
     /// Window size, in physical pixels.

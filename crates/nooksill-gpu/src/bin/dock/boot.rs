@@ -1,6 +1,6 @@
 //! Application startup: window class, GPU/frame setup and the first layout.
 
-use super::misc::{request_missing_icons, resolve_targets};
+use super::misc::{request_missing_icons, reserve_space, resolve_targets, work_rect};
 use super::sys::{dump_geometry, fake_covered_from_env, fake_mouse_from_env};
 use super::wndproc::wndproc;
 use super::*;
@@ -32,11 +32,14 @@ impl App {
         };
 
         let paths = Paths::resolve()?;
-        let dpi = display::system_dpi();
+        // Legacy migrations convert stored physical pixels, which every earlier
+        // version scaled with the system DPI; the dock's own scale follows the
+        // monitor it is placed on, resolved below.
+        let dpi_sys = display::system_dpi();
         let mut ini = Ini::load(&paths.ini)?;
         // Upgrade the legacy ini in place. `from_ini` accepts both formats, so
         // a failed save does not affect this run.
-        if Config::upgrade_legacy(&mut ini, dpi) {
+        if Config::upgrade_legacy(&mut ini, dpi_sys) {
             match ini.save(&paths.ini) {
                 Ok(()) => eprintln!(
                     "配置已从旧格式升级到 v{}（各设置保持不变）。",
@@ -47,13 +50,25 @@ impl App {
         }
         // Length keys move from physical pixels to 96-DPI logical pixels
         // (v3 -> v4); without conversion icons jump 1.5x on a 150% display.
-        if Config::migrate_units(&mut ini, dpi) {
+        if Config::migrate_units(&mut ini, dpi_sys) {
             match ini.save(&paths.ini) {
                 Ok(()) => eprintln!("配置长度已换算成 96 DPI 逻辑像素（v4）。"),
                 Err(e) => eprintln!("配置换算后保存失败（本次仍按新单位使用）：{e}"),
             }
         }
-        let cfg = Config::from_ini(&ini);
+        let mut cfg = Config::from_ini(&ini);
+        // A monitor index outlives the screen it named: unplugging the second
+        // display leaves `Monitor=1` behind. Fall back to the primary instead of
+        // silently drawing nothing.
+        let count = display::monitors().len();
+        if cfg.monitor < 0 || cfg.monitor as usize >= count.max(1) {
+            eprintln!(
+                "配置里的显示器序号 {} 不存在（当前 {count} 台），改用主显示器。",
+                cfg.monitor
+            );
+            cfg.monitor = 0;
+        }
+        let dpi = display::monitor_dpi(cfg.monitor);
         nooksill_core::i18n::configure(&cfg.language, nooksill_platform::locale::ui_language_id());
         // Mutable: drag-reordering edits this list alongside the dock.
         let mut raw: Vec<Item> = store::load_items(&ini);
@@ -73,14 +88,14 @@ impl App {
         // by one taskbar thickness that shows nothing; anchor to the monitor
         // rect instead or the dock floats short of the screen edge.
         let taskbar = appbar::taskbar();
-        let work: LRect = if appbar::taskbar_steals_edge(cfg.edge, taskbar) {
-            display::monitor_rect(0)
-        } else {
-            display::work_area(0)
-        };
+        let work: LRect = work_rect(&cfg, taskbar);
         let mut dock = Box::new(Dock::new(cfg, items, work));
         dock.mode = dock.cfg.mode;
         dock.update(dpi, nooksill_core::layout::REF_FRAME_MS);
+        // Panels that are not anchored to a card centre themselves here.
+        display::set_target_work_area(work);
+        // Settings edits compare against this to re-derive the geometry.
+        let monitor_for = (dock.cfg.monitor, dock.geom_epoch);
 
         let (win_w, win_h) = dock.physical_size_i32();
         dump_geometry(&dock, dpi);
@@ -130,20 +145,13 @@ impl App {
         // Reserve desktop space only in always-visible mode: a sliding dock
         // leaving a blank gap looks wrong.
         let mut appbar = AppBar::new(hwnd);
-        let reserved = if appbar::should_reserve(
-            dock.cfg.reserve,
-            dock.mode == DockMode::Always,
-            dock.cfg.edge,
+        let reserved = reserve_space(
+            &mut appbar,
+            &dock.cfg,
+            dock.mode,
+            dock.reserve_thickness(),
             taskbar,
-        ) {
-            appbar.apply(
-                dock.cfg.edge,
-                dock.reserve_thickness(),
-                display::monitor_rect(0),
-            )
-        } else {
-            None
-        };
+        );
         (x, y) = layout::window_origin(dock.cfg.edge, work, reserved, win_w, win_h);
         if reserved.is_some() {
             // Move only on success; keep the old position rather than placing
@@ -228,6 +236,7 @@ impl App {
             work,
             appbar,
             reserved,
+            monitor_for,
             pos: (x, y),
             size: (win_w, win_h),
             menu_slot: None,

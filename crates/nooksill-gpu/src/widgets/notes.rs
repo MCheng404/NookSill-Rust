@@ -112,7 +112,7 @@ impl NoteWindow {
         }
         let pw = (W * ppp).round() as i32;
         let ph = (H * ppp).round() as i32;
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Notes"));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -182,7 +182,7 @@ impl NoteWindow {
         let ph = (H * self.ppp).round() as i32;
         let (al, at, ar, _) = anchor;
         let cx = (al + ar) / 2;
-        let work = nooksill_platform::display::work_area(0);
+        let work = nooksill_platform::display::work_area_at(cx, at);
         let mut x = cx - pw / 2;
         if x < work.left {
             x = work.left;
@@ -374,14 +374,6 @@ fn class_pcwstr() -> windows::core::PCWSTR {
             .collect()
     });
     windows::core::PCWSTR(buf.as_ptr())
-}
-
-fn centered_origin(pw: i32, ph: i32) -> (i32, i32) {
-    let work = nooksill_platform::display::work_area(0);
-    (
-        (work.left + work.right) / 2 - pw / 2,
-        (work.top + work.bottom) / 2 - ph / 2,
-    )
 }
 
 fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {

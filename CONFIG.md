@@ -77,7 +77,7 @@ cargo run -q -p nooksill-core --example config_table
 | `hide_mode` | 0 | 0–2 | 0 常驻 / 1 自动隐藏 / 2 智能隐藏 |
 | `reserve` | 0 | 0/1 | AppBar 预留桌面空间 |
 | `edge` | 0 | 0–3 | 0 底 / 1 顶 / 2 左 / 3 右 |
-| `monitor` | 0 | 0–63 | 显示器索引（越界回落到 0） |
+| `monitor` | 0 | 0–63 | 显示器索引，0 = 主屏；顺序由系统枚举给出（主屏总是第一个）。越界按 0 处理，`WM_DISPLAYCHANGE` 后重新判定。工作区、AppBar 预留与缩放都按该屏取 |
 | `preview` | 1 | 0/1 | 悬停窗口预览 |
 | `show_running` | 1 | 0/1 | 显示未固定的运行中应用 |
 | `lock` | 0 | 0/1 | 锁定布局 |

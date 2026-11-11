@@ -37,6 +37,14 @@ impl FrameRenderer {
         self.pixels_per_point
     }
 
+    /// Change the scale without rebuilding the target.
+    ///
+    /// Used when the dock moves to a monitor with a different DPI: egui reads
+    /// the value from the next `RawInput`, and the frost radius scales with it.
+    pub fn set_pixels_per_point(&mut self, ppp: f32) {
+        self.pixels_per_point = ppp;
+    }
+
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
         (self.offscreen.width(), self.offscreen.height())

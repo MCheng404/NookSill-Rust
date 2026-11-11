@@ -1,6 +1,6 @@
 //! Settings window lifecycle: creation, scaling, show/hide and frame timing.
 
-use super::win::{centered_origin, class_pcwstr, physical_size, wndproc};
+use super::win::{class_pcwstr, physical_size, wndproc};
 use super::*;
 
 impl SettingsWindow {
@@ -29,7 +29,7 @@ impl SettingsWindow {
         }
 
         let (pw, ph) = physical_size(ppp);
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Settings"));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -134,7 +134,7 @@ impl SettingsWindow {
         // think it already ran and skip: light users would jump back to dark
         // on any scale change. Reset it to force the next frame to reapply.
         self.ui_theme = None;
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         self.pos = (x, y);
         unsafe { SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER) }
             .map_err(|_| GpuError::Win32("SetWindowPos（设置窗口缩放）"))?;

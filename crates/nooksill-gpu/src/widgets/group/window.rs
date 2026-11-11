@@ -1,6 +1,6 @@
 //! Group panel lifecycle: creation, opening and hide timing.
 
-use super::win::{centered_origin, class_pcwstr, wndproc};
+use super::win::{class_pcwstr, wndproc};
 use super::*;
 
 impl GroupWindow {
@@ -22,7 +22,7 @@ impl GroupWindow {
 
         let pw = (400.0 * ppp).round() as i32;
         let ph = (300.0 * ppp).round() as i32;
-        let (x, y) = centered_origin(pw, ph);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Group"));
         let hwnd = unsafe {
             CreateWindowExW(
@@ -118,7 +118,7 @@ impl GroupWindow {
         let (al, at, ar, _ab) = anchor;
         let cx = (al + ar) / 2;
         let mut x = cx - pw / 2;
-        let work = nooksill_platform::display::work_area(0);
+        let work = nooksill_platform::display::work_area_at(cx, at);
         if x < work.left {
             x = work.left;
         }

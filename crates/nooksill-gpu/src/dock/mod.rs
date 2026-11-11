@@ -371,6 +371,11 @@ pub struct Dock {
     notice: Option<(String, Instant)>,
     /// System appearance change counter, bumped on `WM_SETTINGCHANGE`.
     pub look_epoch: u32,
+    /// Display topology counter, bumped on `WM_DISPLAYCHANGE`.
+    ///
+    /// Resolution, scaling and monitor hot-plug all invalidate the cached work
+    /// area; the main loop re-derives it once per bump.
+    pub geom_epoch: u32,
 }
 
 mod chrome;

@@ -1076,3 +1076,20 @@
 - 把每个经验数字都做成 ini 项会显著增加配置面与迁移成本，而用户无法有意义地调整「标签气泡预留 34 px」这类值；具名常量足以让代码可读、让门禁守住，代价更小。
 
 **代价**：热键组合是字符串配置，需要解析与回退逻辑（已用 4 条单测 + ini 往返测试守住）；新增按键名要同时更新 `NAMED_KEYS` 与文档。运行时重绑失败时 `hotkey_applied` 仍标记为已应用以避免每帧重试，用户需再次修改才会重试。老 ini 没有 `[Hotkeys]` 段时静默使用默认组合。提交信息规则同时改为纯 ASCII 英文（commit-msg 钩子 + CI），历史提交不重写。
+
+## ADR-079 · 显示器序号是唯一真源，几何按显示器现算
+
+**决定**：
+- `[Settings] Monitor` 参与引导：工作区、`AppBar` 预留矩形与 DPI 都按该序号取（`work_area` / `monitor_rect` / `monitor_dpi`），序号越界或对应显示器已拔掉时回退主屏并打一行日志。迁移用 `system_dpi()`（旧值就是按它写的），Dock 自身缩放用目标显示器 DPI。
+- `App::sync_monitor` 在 `cfg.monitor` 变化时重算工作区、DPI 与预留，并置脏；`step_relayout` 除尺寸外还比较原点，尺寸不变的换屏也能移动窗口。
+- 弹窗按锚点所在显示器钳制：新增 `display::monitor_at` / `work_area_at`，日历与控制中心共用 `widgets::anchor` 的几何。
+- 没有锚点的居中面板（设置、启动台、便签、分组、计时器、资源监视）读 `display::target_work_area()`；Dock 在引导与换屏时 `set_target_work_area` 发布，未发布时等于主屏工作区。
+- `WM_DPICHANGED` 与 `WM_DISPLAYCHANGE` 只自增 `Dock.geom_epoch`，由同一个 `sync_monitor` 重算；`WM_DPICHANGED` 不接受系统建议矩形。
+
+**依据**：
+- `GetDpiForMonitor` 对 per-monitor-v2 进程返回「用户为该显示器设置的真实 DPI」，而 `system_dpi()`（屏幕 DC 的 `LOGPIXELSX`）只回答主屏；混合缩放多屏下后者会让 Dock 在 150% 屏上按 100% 绘制。微软文档同时说明该 API 在非 PMv2 线程上语义不同，故只用在本进程（已 `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`）内。
+- 面板原来各自 `work_area(0)` / `centered_origin`（5 份副本）：换屏后弹窗落到主屏，是「设置可见但无效」的同一类缺陷。锚点已在手上，用它定位不需要把配置索引穿透到每个窗口。
+- 居中面板没有锚点，而「本进程的 Dock 在哪块屏」本质是进程级事实（一个进程只跑一个 Dock），用一处发布/读取比给 6 个窗口各加字段更少出错；未发布时回退主屏，与改造前行为一致。
+- `AppBar` 预留是系统级注册，换屏必须重新 `ABM_SETPOS`，否则旧屏一直少一条空白；`reserve_space` 把「要不要预留」与「按哪块屏预留」合成一处，引导、换屏、改边共用。
+
+**代价**：`Monitor` 序号是易失索引（插拔显示器会改变它），越界只能回退主屏而不是记住具体设备；`target_work_area` 是进程级可变状态，测试里改它必须复原（已如此）。`WM_DPICHANGED` 故意不采用系统建议矩形（栏体尺寸由 `cfg` 决定），改为自增 `geom_epoch` 触发重算；`WM_DISPLAYCHANGE` 同样用这个计数器，因此分辨率/缩放/插拔都走同一条重算路径。
