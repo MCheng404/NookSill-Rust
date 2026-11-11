@@ -20,7 +20,7 @@
 //! panel grey 24 into grey 81.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui_wgpu::wgpu::TextureView;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
@@ -98,6 +98,8 @@ pub struct FrameRenderer {
     live: Option<crate::frost::Live>,
     /// Last [`crate::frost::Spec`]; live frames need it for radius and corners.
     frost_spec: Option<crate::frost::Spec>,
+    /// Deadline egui asked for on the last frame; `None` means no repaint.
+    next_repaint: Option<Instant>,
 }
 
 impl std::fmt::Debug for FrameRenderer {
@@ -109,6 +111,38 @@ impl std::fmt::Debug for FrameRenderer {
     }
 }
 
+/// Convert egui's `repaint_delay` into a deadline. `Duration::MAX` means idle.
+fn repaint_deadline(delay: Duration, now: Instant) -> Option<Instant> {
+    if delay == Duration::MAX {
+        None
+    } else if delay.is_zero() {
+        Some(now)
+    } else {
+        // Cap the add so a pathological delay cannot overflow `Instant`.
+        Some(now + delay.min(Duration::from_secs(3600)))
+    }
+}
+
 mod frost_state;
 mod render;
 mod setup;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repaint_deadline_maps_egui_states() {
+        let now = Instant::now();
+        assert_eq!(repaint_deadline(Duration::MAX, now), None);
+        assert_eq!(repaint_deadline(Duration::ZERO, now), Some(now));
+        assert_eq!(
+            repaint_deadline(Duration::from_millis(16), now),
+            Some(now + Duration::from_millis(16))
+        );
+        assert_eq!(
+            repaint_deadline(Duration::from_secs(100_000), now),
+            Some(now + Duration::from_secs(3600))
+        );
+    }
+}

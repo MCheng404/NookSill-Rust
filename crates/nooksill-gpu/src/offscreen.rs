@@ -5,6 +5,10 @@
 //! feathered edges leave visibly faceted at low DPI.
 
 use egui_wgpu::wgpu;
+use std::time::Duration;
+
+/// A hung driver must not freeze the UI thread waiting for a mapped buffer.
+pub(crate) const READBACK_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// An offscreen color target plus its readback buffer.
 #[derive(Debug)]
@@ -167,24 +171,26 @@ impl Offscreen {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        // `PollType::Wait` returns only after callbacks ran, so the channel
-        // already holds a result. `try_recv` cannot hang the UI thread.
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| format!("poll 失败: {e}"))?;
-        match rx.try_recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("map_async 失败: {e}")),
-            Err(e) => return Err(format!("回读回调未投递: {e}")),
-        }
-
-        // The buffer is mapped from here on. Every path must `unmap`, or the
-        // next frame's `map_async` fails.
+        // Wait returns only after callbacks ran, so try_recv cannot hang.
+        // unmap() cancels a pending map_async, so every path must reach it.
         let result = (|| {
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .map_err(|e| format!("poll 失败: {e}"))?;
+            match rx.try_recv() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(format!("map_async 失败: {e}")),
+                Err(e) => return Err(format!("回读回调未投递: {e}")),
+            }
             let data = slice
                 .get_mapped_range()
                 .map_err(|e| format!("映射回读缓冲失败: {e}"))?;
-            f(&data[..], self.padded_row)
+            let out = f(&data[..], self.padded_row);
+            drop(data);
+            out
         })();
         self.buffer.unmap();
         result

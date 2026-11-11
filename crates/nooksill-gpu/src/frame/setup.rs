@@ -72,6 +72,7 @@ impl FrameRenderer {
             frost: None,
             live: None,
             frost_spec: None,
+            next_repaint: None,
         })
     }
 

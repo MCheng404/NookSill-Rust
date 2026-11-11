@@ -56,6 +56,7 @@ pub mod popup;
 pub mod present;
 pub mod settings_win;
 pub mod smoke;
+pub(crate) mod text;
 pub mod widgets;
 pub mod worker;
 

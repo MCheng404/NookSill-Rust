@@ -126,11 +126,13 @@ pub(super) fn paint(
             );
         }
         // Name.
-        painter.text(
+        crate::text::draw_truncated(
+            painter,
             egui::pos2(cell.center().x, cell.bottom() + 16.0),
             Align2::CENTER_CENTER,
-            fit_text(painter, &kid.name, cw - 8.0, 11.5),
-            FontId::proportional(11.5),
+            &kid.name,
+            cw - 8.0,
+            11.5,
             faint,
         );
         // Running indicator dot.
@@ -240,31 +242,4 @@ pub(super) fn arrow_button(
         Stroke::new(1.6, ink),
     );
     resp.clicked()
-}
-
-/// Truncates overlong text and appends an ellipsis.
-pub(super) fn fit_text(painter: &egui::Painter, text: &str, max_w: f32, size: f32) -> String {
-    let font = FontId::proportional(size);
-    if painter
-        .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
-        .size()
-        .x
-        <= max_w
-    {
-        return text.to_owned();
-    }
-    let mut out: Vec<char> = text.chars().collect();
-    while !out.is_empty() {
-        out.pop();
-        let s: String = out.iter().collect();
-        if painter
-            .layout_no_wrap(format!("{s}…"), font.clone(), Color32::WHITE)
-            .size()
-            .x
-            <= max_w
-        {
-            return format!("{s}…");
-        }
-    }
-    String::new()
 }

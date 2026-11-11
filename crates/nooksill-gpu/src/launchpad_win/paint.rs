@@ -1,7 +1,7 @@
 //! The launchpad grid painter.
 
 use super::paint_folder::{
-    draw_folder_icon, draw_folder_panel, draw_letter_tile, fit_size, fit_text, hit_cell_in, measure,
+    draw_folder_icon, draw_folder_panel, draw_letter_tile, fit_size, hit_cell_in, measure,
 };
 use super::*;
 
@@ -179,11 +179,13 @@ pub(super) fn draw(
             Color32::from_rgba_unmultiplied(0, 0, 0, 26)
         };
         painter.rect_filled(r, CornerRadius::same(9), fill);
-        painter.text(
+        crate::text::draw_truncated(
+            &painter,
             r.center(),
             Align2::CENTER_CENTER,
-            fit_text(ui, &label, cell_w - 8.0, 12.5),
-            FontId::proportional(12.5),
+            &label,
+            cell_w - 8.0,
+            12.5,
             if on { Color32::WHITE } else { sub },
         );
         // The group being renamed gets a ring, so the user knows which one
@@ -344,11 +346,13 @@ pub(super) fn draw(
 
         // Name, truncated when too wide. The dragged one is drawn dimmer.
         let ghost = drag_src == Some(k);
-        painter.text(
+        crate::text::draw_truncated(
+            &painter,
             Pos2::new(cell.center().x, icon_rect.bottom() + 8.0),
             Align2::CENTER_TOP,
-            fit_text(ui, &name, cw - 12.0, 11.5),
-            FontId::proportional(11.5),
+            &name,
+            cw - 12.0,
+            11.5,
             if ghost { sub } else { tc },
         );
 

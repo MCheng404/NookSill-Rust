@@ -15,12 +15,13 @@ LINE_RE='^(?:[^"]|"(?:\\.|[^"\\])*")*//.*[^\x00-\x7F]'
 NON_ASCII='[^\x00-\x7F]'
 
 line_comments() {
-    grep -rnP "$LINE_RE" "$1" --include='*.rs' 2>/dev/null || true
+    grep -rnP "$LINE_RE" "$1" --include='*.rs' --include='*.wgsl' 2>/dev/null || true
 }
 
 # awk only extracts text inside /* ... */; grep decides whether it is ASCII.
+# WGSL allows nested block comments (W3C WGSL 3.3); this repo does not use them.
 block_comments() {
-    find "$1" -name '*.rs' -type f -print0 \
+    find "$1" \( -name '*.rs' -o -name '*.wgsl' \) -type f -print0 \
         | xargs -0 -r awk '
             FNR == 1 { inblock = 0 }
             function emit(s) { print FILENAME ":" FNR ":" s }
@@ -59,15 +60,19 @@ let x = 1; // 中文行尾注释
 /* ascii start
 中文续行 */
 EOF
+    cat > "$tmp/sample.wgsl" <<'EOF'
+// 中文着色器注释
+let x = 1; // 中文行尾注释
+EOF
     hits="$(violations "$tmp")"
     n="$(printf '%s\n' "$hits" | grep -c . || true)"
     rm -rf "$tmp"
-    if [ "$n" -ne 5 ]; then
-        echo "comment gate self-test failed: expected 5 hits, got $n" >&2
+    if [ "$n" -ne 7 ]; then
+        echo "comment gate self-test failed: expected 7 hits, got $n" >&2
         printf '%s\n' "$hits" >&2
         return 1
     fi
-    echo "comment gate self-test ok (line-tail, doc, module, single and multi-line block)."
+    echo "comment gate self-test ok (rs + wgsl: line-tail, doc, module, block)."
 }
 
 if [ "${1:-}" = "--self-test" ]; then

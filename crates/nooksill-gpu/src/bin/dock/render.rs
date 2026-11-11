@@ -177,7 +177,15 @@ impl App {
             .settings_slot
             .as_ref()
             .is_some_and(|sw| sw.has_pending_repaint());
-        self.set_timer_resolution(self.dock.anim || smoke_on || settings_active);
+        // A hidden dock renders no frame, so its stale deadline must not wake us.
+        let frame_repaint = if self.dock.fully_hidden() || self.fs_hidden {
+            None
+        } else {
+            self.frame.repaint_in()
+        };
+        self.set_timer_resolution(
+            self.dock.anim || smoke_on || settings_active || frame_repaint.is_some(),
+        );
         // Active = continuous repaint. Idle keeps the "zero frames" promise.
         let mut timeout = if self.dock.anim || smoke_on {
             self.frame_interval_ms()
@@ -198,6 +206,10 @@ impl App {
                     timeout = timeout.min(left.as_millis().clamp(1, u128::from(u32::MAX)) as u32);
                 }
             }
+        }
+        // egui can ask for a frame while none of the dock's own flags are set.
+        if let Some(left) = frame_repaint {
+            timeout = timeout.min(left.as_millis().clamp(1, u128::from(u32::MAX)) as u32);
         }
         unsafe {
             MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);

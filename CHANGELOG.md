@@ -120,15 +120,30 @@
   删掉调试过程、重复实测表与前后对比叙事。
 - `BUILD.md` 删掉重复两遍的「冷启动 3–6 分钟」段落，补齐五步门禁与两个独立脚本的命令。
 
+### 算法 / 框架 / 架构（文献核对后的一轮）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 文本截断 | 3 份逐字符重排（O(n) 次 shaping、O(n²) 字符处理量）收口成 `gpu::text`：`LayoutJob` + `TextWrapping::truncate_at_width` 一次排版，再 `painter.galley` 画，去掉 `painter.text` 的第二次排版 | egui 0.37 `Painter` / epaint `TextWrapping` 官方文档；`text::tests` 守退化宽度与省略 |
+| 帧调度 | `FrameRenderer` 记下 `repaint_delay`，`repaint_in()` / `repaint_due()` 供 `run_loop` 与 `wait()` 同时消费；隐藏态屏蔽残留期限 | egui 0.37 `ViewportOutput`；原实现丢弃该值，egui 请求的动画可能漏帧 |
+| 回读健壮性 | `PollType::wait_indefinitely()` → 带 200 ms 超时的 `Wait`；两处回读的所有提前返回路径都 `unmap()` | wgpu 30 `PollType` / `Buffer::unmap` 官方语义（unmap 取消此前 map_async） |
+| 注释门禁 | 扫描范围扩到 `*.wgsl`，自测增加 WGSL 样例；两个 shader 共 14 处中文注释改写或精简 | W3C WGSL §3.3 的 `//` 与块注释语法 |
+| 控件身份 | 速记 / 编辑弹窗按钮的 ID 盐从翻译后文案换成语义键 | egui 0.37 `Id::unique` 是固定种子哈希，文案变化会改控件身份 |
+
+- 明确不做（完整依据见 ADR-075）：异步双缓冲回读与 DirectComposition；frost 高斯改线性采样（需把 `array<u32>` 换成 texture+sampler，改动面大）；把四组进程级 atomics 重构成显式 Context 注入；把 `illusion` 的 `p.t` 改成指数插值（`advance()` 以 `t>=1.0` 为终止条件，指数形式永不达到，会导致无限重绘）。
+- 「同步回读对小 Dock 仍划算」这一判断的前提是重绘有明确终止点；若将来改动 illusion 的时间参数化，需重新评估。
+- 依据来源：wgpu 30 / egui 0.37 / W3C WGSL / Microsoft Learn / Rust Edition Guide 与 API Guidelines / Elm 官方指南 / Intel 与 Rastergrid 的高斯优化文章 / SIGGRAPH Asia 2024，共 40 余条一手文献，逐条对应 ADR-075。
+
 ### 验证
 
-`./scripts/build.sh --gate` 五步全绿。测试总数 561：
-`nooksill-core` 281、`nooksill-gpu` 165（+15 ignored，GPU/窗口类）
+`./scripts/build.sh --gate` 五步全绿。测试总数 565：
+`nooksill-core` 281、`nooksill-gpu` 169（+15 ignored，GPU/窗口类）
 + `nooksill-dock` 7、`nooksill-platform` 72（+6 ignored）、
-`nooksill-settings` 6 + 28 + 2。
+`nooksill-settings` 6 + 28 + 2。新增 `text::tests`（3）与 `frame::tests`（1）。
 
-`crates/` 下 267 个 `.rs`、55188 行，生产代码最大 599 行（`i18n/en.rs`），
-无文件超过 600 行门禁。离屏基线 `dock_shot` / `settings_shot` / `panels_shot` 出图正常。
+`crates/` 下 268 个 `.rs`、55311 行，生产代码最大 599 行（`i18n/en.rs`），
+无文件超过 600 行门禁。离屏基线 `panels_shot` 7 张出图正常，
+`dock_shot` / `settings_shot` 沿用上一轮基线。
 
 ---
 

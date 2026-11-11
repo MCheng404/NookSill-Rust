@@ -3,6 +3,19 @@
 use super::*;
 
 impl FrameRenderer {
+    /// Remaining time until egui's next requested repaint; `None` means idle.
+    #[must_use]
+    pub fn repaint_in(&self) -> Option<Duration> {
+        self.next_repaint
+            .map(|at| at.saturating_duration_since(Instant::now()))
+    }
+
+    /// Whether egui's repaint deadline has arrived.
+    #[must_use]
+    pub fn repaint_due(&self) -> bool {
+        self.next_repaint.is_some_and(|at| at <= Instant::now())
+    }
+
     /// Whether a background layer is present. The panel uses this to pick an
     /// opaque or a translucent tint.
     #[must_use]
@@ -226,6 +239,8 @@ impl FrameRenderer {
         }
         textures_delta.clear();
 
+        // Drives both the loop's draw decision and its sleep timeout.
+        self.next_repaint = repaint_deadline(delay, Instant::now());
         FrameOutcome {
             cursor,
             repaint_delay: delay,

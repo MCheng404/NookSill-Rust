@@ -93,18 +93,22 @@ pub(super) fn paint(
             painter.rect_filled(r, CornerRadius::same(PanelStyle::R_CARD), field);
         }
         let row_resp = ui.interact(r, egui::Id::unique(("note-row", k)), egui::Sense::click());
-        painter.text(
+        crate::text::draw_truncated(
+            painter,
             egui::pos2(r.left() + 10.0, r.top() + 8.0),
             Align2::LEFT_TOP,
-            fit_text(painter, &note.display_title(), r.width() - 140.0, 13.0),
-            FontId::proportional(13.0),
+            &note.display_title(),
+            r.width() - 140.0,
+            13.0,
             ink,
         );
-        painter.text(
+        crate::text::draw_truncated(
+            painter,
             egui::pos2(r.left() + 10.0, r.top() + 30.0),
             Align2::LEFT_TOP,
-            fit_text(painter, &note.preview(), r.width() - 140.0, 11.0),
-            FontId::proportional(11.0),
+            &note.preview(),
+            r.width() - 140.0,
+            11.0,
             faint,
         );
 
@@ -118,21 +122,24 @@ pub(super) fn paint(
             egui::pos2(del_rect.left() - BTN_W - 6.0, del_rect.top()),
             egui::vec2(BTN_W, BTN_H),
         );
-        for (br, label, act) in [
+        // A translated label is not a stable id salt; use a semantic key.
+        for (br, label, act, key) in [
             (
                 edit_rect,
                 nooksill_core::i18n::t("Edit"),
                 NoteAction::Edit(start + k),
+                0u8,
             ),
             (
                 del_rect,
                 nooksill_core::i18n::t("Delete"),
                 NoteAction::Remove(start + k),
+                1u8,
             ),
         ] {
             let resp = ui.interact(
                 br,
-                egui::Id::unique(("note-btn", k, label)),
+                egui::Id::unique(("note-btn", k, key)),
                 egui::Sense::click(),
             );
             painter.rect_filled(br, PanelStyle::pill(br.height()), field);
@@ -252,33 +259,6 @@ fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) 
         style.border(),
         style.card(),
     )
-}
-
-/// Truncates overlong text and appends an ellipsis.
-fn fit_text(painter: &egui::Painter, text: &str, max_w: f32, size: f32) -> String {
-    let font = FontId::proportional(size);
-    if painter
-        .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
-        .size()
-        .x
-        <= max_w
-    {
-        return text.to_owned();
-    }
-    let mut out: Vec<char> = text.chars().collect();
-    while !out.is_empty() {
-        out.pop();
-        let s: String = out.iter().collect();
-        if painter
-            .layout_no_wrap(format!("{s}…"), font.clone(), Color32::WHITE)
-            .size()
-            .x
-            <= max_w
-        {
-            return format!("{s}…");
-        }
-    }
-    String::new()
 }
 
 #[cfg(test)]

@@ -102,7 +102,14 @@ API 变动都要改两处。
    - `render_rgba`：`read_pixels` 返回紧密 RGBA，不呈现 —— 离屏截图
      （`examples/settings_shot.rs`）与像素级回归走这条路。
 
-返回 `FrameOutcome { cursor, repaint_delay }` —— 调用方只需要这两个值。
+面板与起动台的标签统一走 `gpu::text`：`LayoutJob` 一次排版出带省略号的
+`Galley`，再 `painter.galley` 画。`painter.text` 内部会再排版一次，所以
+「量一次宽 + text 画」是两次 shaping（不变式 14 的同一条约束）。
+
+返回 `FrameOutcome { cursor, repaint_delay }`，同时把 `repaint_delay` 记成
+`FrameRenderer` 的截止时间：主循环用 `repaint_due()` 决定是否出帧、用
+`repaint_in()` 决定等多久。只改其中一半会漏帧或让等待退化成 1 ms 空转；
+Dock 完全隐藏时屏蔽残留期限。依据见 ADR-075。
 
 毛玻璃背景不走上屏纹理上传：`frost::Live` 线程只抓屏（顺带算脏列范围与
 低频色场）并把字节用 `Arc` 交给 UI 线程；`FrameRenderer` 在 `draw_frame`
@@ -363,6 +370,8 @@ async 运行时带来的调度开销与栈占用都不划算。
     物理像素，由 `Config::migrate_units`（v3 → v4）一次性换算。
 
 24. **面向用户的文案只有一条出口**：`core::i18n::t / fmt`，英文文案即键。新增文案必须在 `i18n/en.rs::TEXT` 登记（有序、无重复），中文放 `i18n/zh_cn.rs`，缺项自动回退英文；`i18n::tests` 扫源码守住登记完整性，`options.rs` 的测试守住下拉选项常量。下拉表只存英文、由 `combo` 一处翻译；用显示文案做命令分派要写成 guard 比较，不能进 `match` 模式。窗口标题是创建期的 Win32 字符串，语言变化时已打开的设置窗口要显式 `SetWindowTextW`。
+25. **控件 ID 不是显示文案**：`Id::unique` 哈希传入的内容，翻译后的 label 会随语言变化而改变控件身份。ID 盐只用语义键（下标、动作编号、固定字符串）；egui 0.37 里 `Id::new` 已弃用，不要改回去。
+26. **GPU 回读的每条返回路径都要 `unmap()`**，且 `Device::poll` 必须带超时。`unmap()` 会取消此前的 `map_async`，漏掉会让下一帧提交失败；`wait_indefinitely()` 在驱动挂起时会永久卡住 UI 线程（ADR-075）。
 
 ## 八、与 C 版的模块映射
 
@@ -397,7 +406,8 @@ async 运行时带来的调度开销与栈占用都不划算。
 一个 `.rs` 只放一个职责，生产代码单文件 ≤ 600 行；超过就按职责拆成子模块。
 规则与拆分手法见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 第六、七节；两条规则分别由
 `scripts/check-comments.sh` 与 `scripts/check-size.sh` 守住，本地钩子、CI 的
-`gate` job 与 `--gate` 跑同一批脚本。规模门禁按「排除末尾 `#[cfg(test)]` 模块
+`gate` job 与 `--gate` 跑同一批脚本。注释门禁扫 `*.rs` 与 `*.wgsl`（WGSL 的
+`//` / `/* */` 语法见 W3C WGSL §3.3）；规模门禁按「排除末尾 `#[cfg(test)]` 模块
 后的行数」判定，独立测试文件按总行数判定，上限同为 600。
 
 拆分的落法是稳定的：`foo.rs` → `foo/mod.rs`（类型、`use`、子模块声明）+

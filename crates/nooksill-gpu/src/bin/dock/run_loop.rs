@@ -86,6 +86,8 @@ impl App {
             }
             // 13. Smoke: paces itself (see `step_smoke`).
             need_frame |= self.step_smoke();
+            // egui's own repaint deadline (hover, illusion, animations).
+            need_frame |= !self.dock.fully_hidden() && !self.fs_hidden && self.frame.repaint_due();
 
             // 14. Present. While fully hidden, draw nothing: the content is
             //     offscreen and the smart-hide scanner still wakes the loop

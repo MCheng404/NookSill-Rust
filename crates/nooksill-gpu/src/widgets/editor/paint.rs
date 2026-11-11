@@ -210,7 +210,8 @@ pub(super) fn button(
     ink: Color32,
     faint: Color32,
 ) -> bool {
-    let id = Id::unique(("edit-btn", label));
+    // Two buttons per dialog, so `primary` is a stable, language-free salt.
+    let id = Id::unique(("edit-btn", primary));
     let resp = ui.interact(rect, id, Sense::click());
     let accent = ui.visuals().selection.bg_fill;
     let (bg, fg) = if primary {

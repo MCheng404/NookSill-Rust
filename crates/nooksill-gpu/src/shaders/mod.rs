@@ -185,18 +185,28 @@ impl ShaderRuntime {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        rx.try_recv().ok()?.ok()?;
-        let data = slice.get_mapped_range().ok()?;
-        let row = w as usize * 4;
-        let mut out = Vec::with_capacity(row * h as usize);
-        for y in 0..h as usize {
-            let start = y * stride as usize;
-            out.extend_from_slice(&data[start..start + row]);
-        }
-        drop(data);
+        // unmap() cancels a pending map_async, so every early return unwinds
+        // through here instead of leaving the buffer mapped for the next call.
+        let result = (|| {
+            self.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(crate::offscreen::READBACK_TIMEOUT),
+                })
+                .ok()?;
+            rx.try_recv().ok()?.ok()?;
+            let data = slice.get_mapped_range().ok()?;
+            let row = w as usize * 4;
+            let mut out = Vec::with_capacity(row * h as usize);
+            for y in 0..h as usize {
+                let start = y * stride as usize;
+                out.extend_from_slice(&data[start..start + row]);
+            }
+            drop(data);
+            Some(out)
+        })();
         buf.unmap();
-        Some(out)
+        result
     }
 }
 

@@ -1,8 +1,4 @@
-// 实验性「视觉欺骗」模糊：一次真高斯提供空间结构，之后只用低频色场
-// 做颜色重投影 + 时间插值，跟着桌面实时变色，不再每帧跑卷积。
-//
-// 面板底色只透出约 22% 的模糊层，且模糊本身已经抹掉高频细节，所以
-// 「结构沿用上一帧、颜色立刻跟上」在视觉上几乎等价于重新模糊一遍。
+// Temporal colour reprojection over a cached Gaussian base.
 
 struct Params {
     width: u32,
@@ -11,15 +7,14 @@ struct Params {
     gh: u32,
     gain: f32,
     t: f32,
-    // 本帧已用真高斯重算过的列 [dirty_x0, dirty_x1)：这些列直接取基底，
-    // 不再叠加色场差值（否则同一处颜色变化会被算两遍）。
+    // Columns rebuilt by the real Gaussian this frame; skip the field delta there.
     dirty_x0: u32,
     dirty_x1: u32,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var base_tex: texture_2d<f32>;
-// 三段连续色场：base（生成基底时）/ prev / cur，每段 gw*gh 个 vec4。
+// Three consecutive colour fields: base, prev, cur; each gw*gh vec4s.
 @group(0) @binding(2) var<storage, read> fields: array<vec4<f32>>;
 @group(0) @binding(3) var out_tex: texture_storage_2d<rgba8unorm, write>;
 
@@ -55,9 +50,6 @@ fn reproject(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = sample_field(0u, u, v);
     let prev = sample_field(n, u, v);
     let cur = sample_field(2u * n, u, v);
-    // 色场差值就是「这块区域比它上次真模糊时亮/暗了多少」。
-    // 本帧刚跑过真高斯的列已经包含最新颜色，跳过补偿；其余列用
-    // 低频色场把颜色补上 —— 于是结构持续更新，颜色始终实时。
     let covered = f32(x) >= f32(p.dirty_x0) && f32(x) < f32(p.dirty_x1);
     let gain = select(p.gain, 0.0, covered);
     let delta = (mix(prev, cur, p.t) - b) * gain / 255.0;

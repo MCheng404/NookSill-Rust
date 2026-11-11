@@ -1001,3 +1001,25 @@
 - 「用显示文案当命令标识」的起动台菜单改成 guard 比较（`_ if label == t("…")`），而不是把译文写进 `match` 模式——后者在 Rust 里既非法也无法跨语言。
 
 **代价**：进程级语言意味着同一进程内不能每个窗口用不同语言（当前也不需要）；测试必须显式固定语言，否则断言会随宿主机区域漂移。窗口标题是 Win32 创建时的字符串，切换语言要给已打开的设置窗口补一次 `SetWindowTextW`。农历、节气与干支的名称属于文化数据（日历面板标签已本地化），控制台日志与诊断串不属于 UI，三者不随语言切换；繁体表有意只覆盖 49 条常用词，其余界面按约定显示英文，补齐只需往表里加行。
+
+---
+
+## ADR-075 · 按官方 API 语义收口文本、调度与回读，不做架构级重写
+
+**决定**：
+- 面板与起动台的文本截断统一到 `gpu::text`：`LayoutJob` + `TextWrapping::truncate_at_width` 一次排版，`painter.galley` 绘制；删掉 3 份逐字符重排。
+- `FrameRenderer` 把 egui 的 `repaint_delay` 记成截止时间，`run_loop` 的「是否出帧」与 `wait()` 的「等多久」同时消费；完全隐藏时屏蔽残留期限。
+- 两处 GPU 回读改用带 200 ms 超时的 `PollType::Wait`，且所有提前返回路径都 `unmap()`。
+- 注释门禁覆盖 `*.wgsl`；控件 ID 盐不再使用翻译后的显示文案。
+- **保持不变**：进程级 atomics（i18n / MSAA / panel style / illusion）、库 crate 的具体错误类型与主循环的 `Box<dyn Error>`、UI 只产出 `Command`、同步回读 + `UpdateLayeredWindow`、`illusion` 的线性 `p.t`、`lerp_to` 的 dt 驱动指数平滑。
+
+**依据**（一手来源，按结论分组）：
+- egui 0.37：`Painter::text` 内部会再排版一次，`galley` 画已排好的 `Arc<Galley>` → https://docs.rs/egui/0.37.0/egui/struct.Painter.html ；`TextWrapping::truncate_at_width` 单次 layout 内省略并置 `Galley::elided` → https://docs.rs/epaint/0.37.0/epaint/text/struct.TextWrapping.html ；`Id::unique` 是固定种子哈希、跨帧稳定，但 `Id::new` 已弃用 → https://docs.rs/egui/0.37.0/egui/struct.Id.html 与 https://github.com/emilk/egui/blob/0.37.0/crates/egui/src/id.rs ；`ViewportOutput.repaint_delay` 仍是 0.37 的正式字段 → https://docs.rs/egui/0.37.0/egui/viewport/struct.ViewportOutput.html ；`textures_delta` 顺序与 debug 断言 → https://docs.rs/egui/0.37.0/egui/struct.FullOutput.html 。
+- wgpu 30：`PollType::Wait` 支持 `timeout`，`wait_indefinitely()` 无超时 → https://docs.rs/wgpu-types/30.0.1/wgpu_types/enum.PollType.html ；`Buffer::unmap()`「terminates the effect of all previous map_async operations」→ https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html ；回调触发与映射期独占 → https://docs.rs/wgpu/30.0.1/wgpu/struct.BufferSlice.html ；256 字节行对齐 → https://docs.rs/wgpu/30.0.1/wgpu/constant.COPY_BYTES_PER_ROW_ALIGNMENT.html 与 https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints 。
+- 呈现层：`UpdateLayeredWindow` 每帧整窗更新、窗口宜小 → https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-updatelayeredwindow ；`AC_SRC_ALPHA` 要求 32bpp 预乘 → https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-blendfunction ；DirectComposition 的代价与 Win10 起改荐 Windows.UI.Composition → https://learn.microsoft.com/en-us/windows/win32/directcomp/directcomposition-portal 。
+- WGSL 注释语法（行注释与可嵌套块注释）→ https://www.w3.org/TR/WGSL §3.3；多行 `bytesPerRow` 256 倍数 → https://www.w3.org/TR/webgpu/ 。
+- 架构：Rust 2024「Don't use globals」给出 atomics / OnceLock / Mutex 替代 → https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html ；`OnceLock` 是 write-once → https://doc.rust-lang.org/std/sync/struct.OnceLock.html ；atomics 定位 → https://doc.rust-lang.org/std/sync/atomic/index.html ；`pub(in path)` 语义 → https://doc.rust-lang.org/reference/visibility-and-privacy.html ；库/应用错误分层（C-GOOD-ERR、Rust Book ch9、anyhow 与 thiserror）→ https://rust-lang.github.io/api-guidelines/interoperability.html 、 https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html 、 https://github.com/dtolnay/anyhow ；Command 模式即 Elm TEA 的 Cmd → https://guide.elm-lang.org/effects/ ；微软明言简单场景只采用有明确收益的技术 → https://learn.microsoft.com/en-us/windows/apps/develop/data-binding/data-binding-and-mvvm 。
+- 算法：线性采样高斯需把 `src` 从 `array<u32>` 改成 texture+sampler 才能获益 → Intel https://www.intel.com/content/www/us/en/developer/articles/technical/an-investigation-of-fast-real-time-gpu-based-image-blur-algorithms.html 与 Rastergrid https://www.rastergrid.com/blog/2010/09/efficient-gaussian-blur-with-linear-sampling/ ；compute+LDS 未必更快 → https://lisyarus.github.io/blog/posts/compute-blur.html ；时域复用的 ghosting / 闪烁与邻域 clip → https://dl.acm.org/doi/fullHtml/10.1145/3681758.3697996 、 ARM SIGGRAPH 讲义；固定 lerp 的帧率偏差与 `1-exp(-k·dt)` → https://lisyarus.github.io/blog/posts/exponential-smoothing.html 、 https://tront.xyz/lerp 。
+- 明确否决：`lerp_to` 已用 `1-(1-k)^(dt/16.67)`，改 `1-exp(-k·dt)` 属重复劳动；`illusion.p.t` 已由真实 dt 线性推进且以 `t>=1.0` 停止，改指数形式会渐近不到 1.0、导致永不停止重绘；异步/双缓冲回读与 DComp+swapchain 需重写 `Offscreen` 生命周期、帧序与倒影绑定，而小窗口同步回读常 1–2 ms，收益不足。
+
+**代价**：文本省略由 egui 决定，断字位置可能与旧的逐字符实现略有差异（已用 `panels_shot` 7 张出图核对）；200 ms 回读超时在驱动异常时丢一帧、下帧重试，取代无限挂起；egui 请求重绘期间会开启 1 ms 定时器精度，功耗略升，空闲仍为零帧。保持同步回读意味着 UI 线程仍有每帧一次阻塞点，若将来出现持续 60 fps 全屏动画或改动 illusion 的时间参数化（破坏重绘终止条件），必须重新评估异步化；保持全局 atomics 意味着多实例场景需重新设计配置同步。

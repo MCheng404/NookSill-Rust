@@ -4,8 +4,7 @@ struct Params {
     radius: u32,
     taps: u32,
     corner: f32,
-    // 脏列起点：只重算 [x0, width) 里 dispatch 覆盖到的那一段。
-    // 全量帧传 0，输出与原实现逐像素一致。
+    // First dirty column; 0 requests a full frame.
     x0: u32,
     _pad1: f32,
     _pad2: f32,
@@ -47,8 +46,7 @@ fn coverage(x: f32, y: f32) -> f32 {
 @compute @workgroup_size(64)
 fn h_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    // 列优先：i 从脏列起点开始，x = x0 + i/height，y = i%height。
-    // 与 mid[x*height+y] 的转置布局对齐，两趟都只扫脏列。
+    // Column-major: x = x0 + i/height, y = i%height; mid[] is transposed.
     let x = i32(p.x0) + i32(i / p.height);
     if (x >= i32(p.width)) {
         return;

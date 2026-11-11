@@ -132,11 +132,13 @@ pub(super) fn draw_folder_panel(
         } else {
             draw_letter_tile(&painter, &ir, &lp.apps()[ai].name, dark);
         }
-        painter.text(
+        crate::text::draw_truncated(
+            &painter,
             Pos2::new(cell.center().x, ir.bottom() + 8.0),
             Align2::CENTER_TOP,
-            fit_text(ui, &lp.apps()[ai].name, cw - 12.0, 11.5),
-            FontId::proportional(11.5),
+            &lp.apps()[ai].name,
+            cw - 12.0,
+            11.5,
             tc,
         );
 
@@ -266,21 +268,4 @@ pub(super) fn fit_size(ui: &egui::Ui, text: &str, max_w: f32, size: f32) -> f32 
     } else {
         (size * max_w / w).max(9.0)
     }
-}
-
-/// Truncates with an ellipsis when too wide. `egui::Painter::text` does not
-/// clip on its own, so a long name would reach into the next cell.
-pub(super) fn fit_text(ui: &egui::Ui, text: &str, max_w: f32, size: f32) -> String {
-    if measure(ui, text, size) <= max_w {
-        return text.to_owned();
-    }
-    let mut out: Vec<char> = text.chars().collect();
-    while !out.is_empty() {
-        out.pop();
-        let candidate: String = out.iter().collect::<String>() + "…";
-        if measure(ui, &candidate, size) <= max_w {
-            return candidate;
-        }
-    }
-    "…".to_owned()
 }
