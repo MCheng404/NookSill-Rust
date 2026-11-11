@@ -29,22 +29,22 @@ impl App {
     /// path (`mount_key`), which does not touch the work rect. Returns whether
     /// anything changed.
     fn sync_monitor(&mut self) -> bool {
-        let want = (self.dock.cfg.monitor, self.dock.geom_epoch);
-        if want == self.monitor_for {
+        let epoch = self.dock.geom_epoch;
+        let index = self.dock.cfg.monitor;
+        if (index, epoch) == self.monitor_for {
             return false;
         }
+        // A hot-plugged or unplugged screen leaves the index pointing at
+        // nothing; clamp to the primary and keep the config consistent.
         let count = display::monitors().len();
-        if self.dock.cfg.monitor < 0 || self.dock.cfg.monitor as usize >= count.max(1) {
+        if index < 0 || index as usize >= count.max(1) {
             if trace::geom() {
-                eprintln!(
-                    "[monitor] 序号 {} 越界（当前 {count} 台），改用主显示器",
-                    self.dock.cfg.monitor
-                );
+                eprintln!("[monitor] 序号 {index} 越界（当前 {count} 台），改用主显示器");
             }
             self.dock.cfg.monitor = 0;
         }
-        let want = (self.dock.cfg.monitor, want.1);
-        self.monitor_for = want;
+        let index = self.dock.cfg.monitor;
+        self.monitor_for = (index, epoch);
         let taskbar = appbar::taskbar();
         self.work = work_rect(&self.dock.cfg, taskbar);
         // `Dock` keeps its own copy for `calc_metrics`; a stale one lays the bar
@@ -52,7 +52,7 @@ impl App {
         self.dock.work = self.work;
         // Panels that are not anchored to a card centre themselves here.
         display::set_target_work_area(self.work);
-        let dpi = display::monitor_dpi(want.0);
+        let dpi = display::monitor_dpi(index);
         if dpi != self.dpi {
             self.dpi = dpi;
             self.ppp = dpi as f32 / 96.0;
@@ -70,8 +70,8 @@ impl App {
         self.dock.mark_dirty();
         if trace::geom() {
             eprintln!(
-                "[monitor] index={} dpi={} work=({},{},{},{})",
-                want.0, self.dpi, self.work.left, self.work.top, self.work.right, self.work.bottom
+                "[monitor] index={index} dpi={} work=({},{},{},{})",
+                self.dpi, self.work.left, self.work.top, self.work.right, self.work.bottom
             );
         }
         true
