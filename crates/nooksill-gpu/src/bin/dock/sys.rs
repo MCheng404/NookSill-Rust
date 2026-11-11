@@ -4,10 +4,16 @@ use super::*;
 
 /// Drain the queued messages at once; waking per message makes frames jitter.
 ///
+/// `own` is the bar's window handle. Only messages addressed to it count as
+/// news for the bar: every window in the process shares this queue and this
+/// thread, so a mouse move over the settings window would otherwise repaint
+/// the whole bar for nothing.
+///
 /// A free function because message handling never touches `App`.
-pub(super) fn pump(msg: &mut MSG) -> Pumped {
+pub(super) fn pump(msg: &mut MSG, own: HWND) -> Pumped {
     let mut saw = false;
-    // Whether this batch held a real message; all wakes only interrupt the wait.
+    // Whether this batch held a message for the bar; all other wakes only
+    // interrupt the wait.
     let mut real = false;
     loop {
         let has = unsafe { PeekMessageW(msg, None, 0, 0, PM_REMOVE) };
@@ -18,7 +24,7 @@ pub(super) fn pump(msg: &mut MSG) -> Pumped {
         if msg.message == WM_QUIT {
             return Pumped::Quit;
         }
-        if msg.message != WM_APP_WAKE {
+        if msg.message != WM_APP_WAKE && msg.hwnd == own {
             real = true;
         }
         unsafe {

@@ -182,7 +182,10 @@ impl App {
 
         let gpu = Gpu::new(&dock.cfg.adapter)?;
         nooksill_gpu::gpu::set_msaa_preference(dock.cfg.get_i32(Key::MSAA));
-        let frame = FrameRenderer::new(&gpu, win_w as u32, win_h as u32, ppp)?;
+        let mut frame = FrameRenderer::new(&gpu, win_w as u32, win_h as u32, ppp)?;
+        // The bar frosts its pieces, not its window: the window also holds the
+        // hover area above the bar and the reflection strip below it.
+        frame.set_frost_whole_window(false);
         let start = Instant::now();
 
         // Resolve `.lnk` targets: both running detection and activation need
@@ -267,6 +270,7 @@ impl App {
             tool_save_at,
             widgets_dump,
             fps_frames: 0,
+            fps_ms: 0.0,
             fps_at: Instant::now(),
             smoke,
             accent: theme::accent().unwrap_or(PALETTE[0]),

@@ -31,6 +31,16 @@ pub(super) fn trace() -> bool {
     std::env::var_os("NOOKSILL_SETTINGS_TRACE").is_some()
 }
 
+/// Whether to print the frame-rate line, once per 400 ms
+/// (`NOOKSILL_SETTINGS_PERF=1`).
+///
+/// Separate from [`trace`] because the message trace logs every Win32 message,
+/// which changes the very thing this measures.
+pub(super) fn perf() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var_os("NOOKSILL_SETTINGS_PERF").is_some())
+}
+
 /// The window class name as a UTF-16 wide string.
 ///
 /// The buffer must stay valid for the whole process lifetime. Encoding a
@@ -53,6 +63,14 @@ pub(super) fn physical_size(ppp: f32) -> (i32, i32) {
         (LOGICAL_SIZE.0 * ppp).round() as i32,
         (LOGICAL_SIZE.1 * ppp).round() as i32,
     )
+}
+
+/// Frame interval that continuous repaints are paced to: the display refresh.
+///
+/// egui's zero delay means "immediately", which on a 60 Hz panel would burn
+/// several frames per shown one and starve the bar that shares this thread.
+pub(super) fn repaint_cap(hwnd: HWND) -> Duration {
+    Duration::from_millis(u64::from(crate::perf::vsync_interval_ms(hwnd)))
 }
 
 pub(super) fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {

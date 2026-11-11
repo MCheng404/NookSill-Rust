@@ -154,7 +154,7 @@ impl App {
             self.sync_global_hotkey();
 
             // 1. Drain the queue; one frame per message would jitter.
-            match pump(&mut msg) {
+            match pump(&mut msg, self.hwnd) {
                 Pumped::Quit => return Ok(()),
                 Pumped::Frames => need_frame = true,
                 // A worker wake only breaks the wait; the dirty flags below
@@ -234,10 +234,20 @@ impl App {
             //     offscreen and the smart-hide scanner still wakes the loop
             //     every 100 ms. `anim` is untouched, so the final collapse
             //     frame is still drawn.
-            if (need_frame || self.dock.anim) && !self.dock.fully_hidden() {
+            //
+            //     One present per round. The settings window and the bar share
+            //     this thread and one GPU queue, so a 10 ms bar frame painted
+            //     between two drag frames is exactly the stutter this loop is
+            //     allowed to avoid: while the settings window runs a continuous
+            //     animation, the bar does not paint at all. It resumes the
+            //     moment that animation ends, so its smoke only pauses while
+            //     the user is dragging or hovering in the settings window.
+            let settings_busy = self.settings_slot.as_ref().is_some_and(|sw| sw.animating());
+            let dock_due = (need_frame || self.dock.anim) && !self.dock.fully_hidden();
+            if dock_due && !(settings_busy && !self.dock.anim) {
                 self.render()?;
             }
-            self.wait();
+            self.wait(settings_busy && !self.dock.anim);
         }
     }
 

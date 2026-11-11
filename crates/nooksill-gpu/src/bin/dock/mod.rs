@@ -221,6 +221,7 @@ mod trace {
                 || menu()
                 || popup()
                 || fps()
+                || flag("NOOKSILL_SETTINGS_PERF")
                 || flag("NOOKSILL_GEOM")
                 || flag("NOOKSILL_TRACE")
         });
@@ -333,6 +334,8 @@ struct App {
     widgets_dump: String,
     /// Frame count of the current second and its start time.
     fps_frames: u32,
+    /// Total cost of those frames, in milliseconds.
+    fps_ms: f64,
     fps_at: Instant,
     /// Ambient smoke around the bar.
     smoke: SmokeFx,

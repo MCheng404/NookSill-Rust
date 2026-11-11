@@ -40,26 +40,39 @@ impl App {
 
     /// Draw one frame: egui paints the dock, offscreen, read back, layered
     /// window.
+    ///
+    /// The `NOOKSILL_FPS` line reports both the rate and the cost per frame:
+    /// the two windows of this process share one thread, so "how expensive is
+    /// a bar frame" decides how much the settings window gets.
     pub(super) fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Panel styling is a process-wide preference (the seven popup
-        // constructors take no `Config`), synced per frame so a settings change
-        // applies next frame. Costs two table lookups and two atomic writes.
-        nooksill_gpu::panel_style::sync_prefs(&self.dock.cfg);
+        let started = Instant::now();
+        let drawn = self.render_frame();
         if trace::fps() {
+            self.fps_ms += started.elapsed().as_secs_f64() * 1000.0;
             self.fps_frames += 1;
             let dt = self.fps_at.elapsed();
             if dt >= Duration::from_secs(1) {
                 eprintln!(
-                    "[fps] {:.1} 帧/秒（hidden={} anim={}）",
+                    "[fps] {:.1} 帧/秒 · {:.2} ms/帧（hidden={} anim={}）",
                     f32::from(u16::try_from(self.fps_frames).unwrap_or(u16::MAX))
                         / dt.as_secs_f32(),
+                    self.fps_ms / f64::from(self.fps_frames.max(1)),
                     self.dock.fully_hidden(),
                     self.dock.anim
                 );
                 self.fps_frames = 0;
+                self.fps_ms = 0.0;
                 self.fps_at = Instant::now();
             }
         }
+        drawn
+    }
+
+    fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Panel styling is a process-wide preference (the seven popup
+        // constructors take no `Config`), synced per frame so a settings change
+        // applies next frame. Costs two table lookups and two atomic writes.
+        nooksill_gpu::panel_style::sync_prefs(&self.dock.cfg);
         // The dock theme, not the settings theme: `UiTheme` and `DockTheme`
         // invert 0/1, so mixing them repaints the dock in the wrong palette.
         // Clock text comes from `core::clock`, which owns the date format,
@@ -177,8 +190,13 @@ impl App {
     ///
     /// Worker threads never need polling; each posts `WM_APP_WAKE` to break the
     /// wait, so this can sleep up to the full `FS_CHECK_MS`.
-    pub(super) fn wait(&mut self) {
-        let smoke_on = Tuning::from_config(&self.dock.cfg, self.accent).enabled
+    ///
+    /// `yielded` means the bar is skipping its frames because the settings
+    /// window is animating: the smoke then has nothing to pace, and asking for
+    /// a frame interval would spin the loop at 1 ms for no work.
+    pub(super) fn wait(&mut self, yielded: bool) {
+        let smoke_on = !yielded
+            && Tuning::from_config(&self.dock.cfg, self.accent).enabled
             && !self.fs_hidden
             && !self.dock.fully_hidden();
         // 1 ms timer precision only while something animates. The settings

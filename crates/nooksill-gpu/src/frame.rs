@@ -94,6 +94,13 @@ pub struct FrameRenderer {
     reflection: Option<Reflection>,
     /// Frost background layer, drawn below the UI (see `crate::frost`).
     frost: Option<FrostLayer>,
+    /// Whether the background layer covers the whole window on every frame.
+    ///
+    /// True for the popups, whose window *is* the blurred panel. False for the
+    /// dock: its window also holds the hover area above the bar and the
+    /// reflection margin, so the bar and each widget card sample the backdrop
+    /// themselves (`frost::Backdrop` + `dock::chrome::rounded_frost`).
+    frost_whole: bool,
     /// Live capture thread while the panel is visible; `None` = one capture at open.
     live: Option<crate::frost::Live>,
     /// Last [`crate::frost::Spec`]; live frames need it for radius and corners.
@@ -144,5 +151,40 @@ mod tests {
             repaint_deadline(Duration::from_secs(100_000), now),
             Some(now + Duration::from_secs(3600))
         );
+    }
+
+    /// The bar frosts its pieces, not its window: its window rect also holds
+    /// the hover area above the bar and the reflection strip, and a sheet there
+    /// read as a blurred rectangle around the bar.
+    ///
+    /// The popups keep the sheet, so the switch has to be opt-out, not removed.
+    #[test]
+    #[ignore = "requires a GPU; run with --ignored"]
+    fn backdrop_sheet_is_opt_out() {
+        let gpu = crate::gpu::Gpu::new("").expect("D3D12 adapter");
+        let (w, h) = (64u32, 48u32);
+        let image = egui::ColorImage::filled(
+            [w as usize, h as usize],
+            egui::Color32::from_rgb(200, 40, 40),
+        );
+
+        let max_alpha = |sheet: bool| {
+            let mut f = FrameRenderer::new(&gpu, w, h, 1.0).expect("renderer");
+            f.set_frost(image.clone());
+            f.set_frost_whole_window(sheet);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(w as f32, h as f32),
+                )),
+                ..Default::default()
+            };
+            let (pixels, _) = f.render_rgba(&gpu, raw, |_| {}).expect("frame");
+            let (px, _) = pixels.as_chunks::<4>();
+            px.iter().map(|p| p[3]).max().unwrap_or(0)
+        };
+
+        assert_eq!(max_alpha(true), 255, "弹窗要整窗铺底");
+        assert_eq!(max_alpha(false), 0, "栏体不该整窗铺底");
     }
 }

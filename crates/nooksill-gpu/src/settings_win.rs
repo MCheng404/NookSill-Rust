@@ -90,6 +90,12 @@ pub struct SettingsWindow {
     cursor: egui::CursorIcon,
     /// Minimum frame interval when egui asks for a repaint soon.
     next_repaint: Option<Instant>,
+    /// Interval that "repaint as soon as possible" is paced to: the display
+    /// refresh. Cached because the query goes through DWM.
+    repaint_cap: Duration,
+    /// Whether the last frame was part of a continuous run (egui asked for an
+    /// immediate repaint), i.e. the user is dragging or hovering.
+    continuous: bool,
     /// Esc or the close button requested a close; consumed by the main loop.
     pub close_requested: bool,
     visible: bool,
@@ -98,6 +104,8 @@ pub struct SettingsWindow {
     /// Frame-time statistics shown on the performance page.
     frame_ms: f32,
     samples: u64,
+    /// TEMP: sample count at the last trace line.
+    probe_samples: u64,
     last_stats_push: Instant,
     /// IME state; the system draws the candidate window, we only take committed text.
     ime: crate::ime::Ime,

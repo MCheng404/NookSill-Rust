@@ -27,7 +27,6 @@ use nooksill_core::config::{Config, Key};
 use nooksill_core::layout::Rect as LRect;
 use nooksill_gpu::dock::{Dock, DockItem};
 use nooksill_gpu::frame::FrameRenderer;
-use nooksill_gpu::frost::Backdrop;
 use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::present::mirror_rows;
 
@@ -43,8 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let show_insert = args.next().as_deref() == Some("insert");
     // Optional dock edge; a placeholder (`-`) keeps earlier flags positional.
     let edge = args.next().unwrap_or_default();
-    // `frost` draws a synthetic blurred backdrop instead of the real capture.
-    let show_frost = args.next().as_deref() == Some("frost");
+    // `frost` draws a synthetic blurred backdrop instead of the real capture;
+    // `frostsheet` additionally keeps the whole-window layer that the popups
+    // use, so the difference the bar must make is visible in one command.
+    let frost_arg = args.next().unwrap_or_default();
+    let show_frost = frost_arg == "frost" || frost_arg == "frostsheet";
     let ppp = 1.25_f32;
 
     let mut cfg = Config::defaults();
@@ -131,7 +133,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The live blur needs a desktop behind a visible window; a synthetic
     // pattern stands in for it. Sharp bands, because the point is where the
     // backdrop is drawn, not how it blurs.
-    let frost = show_frost.then(|| {
+    //
+    // It goes in through the renderer's own background layer, not as a
+    // hand-built `Backdrop`: that is the path the window takes, including the
+    // "sheet across the whole window" switch.
+    if show_frost {
         let img = egui::ColorImage::from_rgb(
             [w as usize, h as usize],
             &(0..w as usize * h as usize)
@@ -145,14 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .collect::<Vec<u8>>(),
         );
-        let tex = frame
-            .ctx()
-            .load_texture("dock-shot-frost", img, egui::TextureOptions::NEAREST);
-        Backdrop {
-            tex: tex.id(),
-            win: [w as f32 / ppp, h as f32 / ppp],
-        }
-    });
+        frame.set_frost(img);
+        frame.set_frost_whole_window(frost_arg == "frostsheet");
+    }
+    let frost = frame.frost_backdrop();
     let (rgba, _) = frame.render_rgba(&gpu, raw_input(w, h, ppp), |ui| {
         dock.paint(ui, ppp, dark, clock, frost);
     })?;

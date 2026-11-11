@@ -42,14 +42,27 @@ impl SettingsWindow {
         }
         self.cursor = out.cursor;
         self.cursor_to_system(out.cursor);
-        self.update_stats(started.elapsed().as_secs_f32() * 1000.0);
+        let frame_ms = started.elapsed().as_secs_f32() * 1000.0;
+        self.update_stats(frame_ms);
+        if super::win::perf() && self.last_stats_push.elapsed() < Duration::from_millis(1) {
+            eprintln!(
+                "[settings] {:.0} 帧/秒 · {:.2} ms/帧（连续={}）",
+                (self.samples.saturating_sub(self.probe_samples) as f64) / 0.4,
+                frame_ms,
+                out.repaint_delay.is_zero()
+            );
+            self.probe_samples = self.samples;
+        }
 
-        // No rate cap: a zero repaint delay means "as soon as possible".
-        // The main loop reads `repaint_in()` to wake at this deadline.
+        // egui asks for "as soon as possible" while it animates; free-running
+        // on that costs a full core and starves the bar, which shares this
+        // thread. Pace continuous repaints to the display instead: input still
+        // renders immediately, because a message sets the deadline itself.
+        self.continuous = out.repaint_delay.is_zero();
         self.next_repaint = if out.repaint_delay == Duration::MAX {
             None
-        } else if out.repaint_delay.is_zero() {
-            Some(Instant::now() + Duration::from_millis(1))
+        } else if self.continuous {
+            Some(Instant::now() + self.repaint_cap)
         } else {
             Some(Instant::now() + out.repaint_delay)
         };

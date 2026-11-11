@@ -1,6 +1,6 @@
 //! Settings window lifecycle: creation, scaling, show/hide and frame timing.
 
-use super::win::{class_pcwstr, physical_size, wndproc};
+use super::win::{class_pcwstr, physical_size, repaint_cap, wndproc};
 use super::*;
 
 impl SettingsWindow {
@@ -63,11 +63,14 @@ impl SettingsWindow {
             outcome: Outcome::default(),
             cursor: egui::CursorIcon::Default,
             next_repaint: None,
+            repaint_cap: repaint_cap(hwnd),
+            continuous: false,
             close_requested: false,
             visible: false,
             ui_theme: None,
             frame_ms: 0.0,
             samples: 0,
+            probe_samples: 0,
             last_stats_push: Instant::now(),
             ime: crate::ime::Ime::new(),
         });
@@ -129,6 +132,8 @@ impl SettingsWindow {
         let frost = self.renderer.frost_spec();
         self.renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         self.ppp = ppp;
+        // The window may land on a display with another refresh rate.
+        self.repaint_cap = repaint_cap(self.hwnd);
         // A new renderer means a new egui context (dark visuals by default).
         // `ui_theme` still holds the old theme marker, so `apply_theme` would
         // think it already ran and skip: light users would jump back to dark
@@ -222,6 +227,18 @@ impl SettingsWindow {
     #[must_use]
     pub fn due(&self) -> bool {
         self.visible && self.next_repaint.is_some_and(|t| t <= Instant::now())
+    }
+
+    /// Whether the window is in the middle of a continuous animation.
+    ///
+    /// True while the last frame asked for an immediate repaint and another
+    /// one is still pending, which is exactly a drag or a hover transition.
+    /// The bar yields its rounds to that: a 10 ms bar frame between two drag
+    /// frames is the stutter this flag exists to prevent. A blink or a one-off
+    /// update is not continuous, so the bar keeps its smoke then.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.visible && self.continuous && self.next_repaint.is_some()
     }
 
     /// Whether egui has a pending repaint deadline (animation, slider drag,

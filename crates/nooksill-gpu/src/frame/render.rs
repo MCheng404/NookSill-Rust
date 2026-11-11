@@ -26,6 +26,17 @@ impl FrameRenderer {
         self.frost.is_some()
     }
 
+    /// Stop (or resume) painting the background layer across the whole window.
+    ///
+    /// On by default, which is what a popup wants: its window is the panel.
+    /// The dock turns it off and draws the backdrop per piece, because its
+    /// window also contains the hover area above the bar and the reflection
+    /// margin - both transparent, so a full-window sheet would read as a
+    /// blurred rectangle around the bar.
+    pub const fn set_frost_whole_window(&mut self, on: bool) {
+        self.frost_whole = on;
+    }
+
     /// The background layer as a [`crate::frost::Backdrop`].
     ///
     /// Windows that paint their background in pieces (the dock bar and its
@@ -165,8 +176,12 @@ impl FrameRenderer {
                 .request_repaint_after(Duration::from_millis(ILLUSION_FRAME_MS));
         }
         let frost = self.frost.as_ref().map(FrostLayer::id);
+        // The dock switches this off: its window rect is not the bar. A
+        // full-window sheet there would blur the hover area above the bar and
+        // the reflection margin, both of which must stay transparent.
+        let frost_whole = self.frost_whole;
         let full = self.ctx.run_ui(raw, |ui| {
-            if let Some(id) = frost {
+            if let (Some(id), true) = (frost, frost_whole) {
                 let rect = ui.max_rect();
                 ui.painter().image(
                     id,
