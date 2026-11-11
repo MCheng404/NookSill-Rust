@@ -77,6 +77,66 @@ impl App {
         true
     }
 
+    /// Whether the painted background needs a blurred backdrop.
+    ///
+    /// `fill=2` is the documented meaning of `BgMode::Frost`; anything else is
+    /// a plain gradient and must not pay for a capture thread.
+    fn frost_wanted(&self) -> bool {
+        self.dock.cfg.frost_enabled()
+    }
+
+    /// Follow `fill` / `Blur` and present a frame per captured background.
+    ///
+    /// Two independent facts are tracked. `frost_excluded` is the screen
+    /// capture affinity: the capture reads the desktop *behind* the window, so
+    /// the window has to be excluded or the blur would feed on its own pixels
+    /// and flatten into a wash. `frost_live` is the capture thread: it runs
+    /// only while the bar is actually on screen, so a hidden or fullscreen
+    /// dock neither wakes the loop nor grows the frame queue. Returns whether a
+    /// new background is waiting, which is exactly when another present is due.
+    fn step_frost(&mut self) -> bool {
+        let wanted = self.frost_wanted();
+        if wanted != self.frost_excluded {
+            self.frost_excluded = wanted;
+            if wanted {
+                nooksill_gpu::frost::exclude_from_capture(self.hwnd);
+            } else {
+                // Hand the window back to screenshots the moment the blurred
+                // background is gone; a stale layer would keep the bar
+                // translucent over a frozen picture.
+                self.frame.clear_frost();
+                nooksill_gpu::frost::allow_capture(self.hwnd);
+                self.dock.mark_dirty();
+            }
+        }
+        let live = wanted && !self.fs_hidden && !self.dock.fully_hidden();
+        if live != self.frost_live {
+            self.frost_live = live;
+            // The radius is set separately: dragging the slider must not
+            // restart the thread on every frame.
+            let spec = FrostSpec {
+                radius: self.dock.cfg.get_i32(Key::Blur).clamp(1, 14) as u32,
+                // The bar rounds each piece itself (`dock::chrome`), so the
+                // texture must stay square or the window corners would be cut.
+                corner_pt: 0.0,
+            };
+            if live {
+                self.frame.start_live_frost(self.hwnd, spec, self.ppp);
+            } else {
+                self.frame.stop_live_frost();
+            }
+            self.dock.mark_dirty();
+            return true;
+        }
+        if live {
+            self.frame.set_frost_spec(FrostSpec {
+                radius: self.dock.cfg.get_i32(Key::Blur).clamp(1, 14) as u32,
+                corner_pt: 0.0,
+            });
+        }
+        live && self.frame.frost_pending()
+    }
+
     /// Message loop; returns only on `WM_QUIT`.
     ///
     /// Each step reports whether this round needs a frame. Order matters: the
@@ -163,6 +223,10 @@ impl App {
             }
             // 13. Smoke: paces itself (see `step_smoke`).
             need_frame |= self.step_smoke();
+            // 13.5 Bar background: follow the fill/blur setting and present once
+            //      per captured frame. A still desktop sends none, so this does
+            //      not break the "zero frames while idle" promise.
+            need_frame |= self.step_frost();
             // egui's own repaint deadline (hover, illusion, animations).
             need_frame |= !self.dock.fully_hidden() && !self.fs_hidden && self.frame.repaint_due();
 

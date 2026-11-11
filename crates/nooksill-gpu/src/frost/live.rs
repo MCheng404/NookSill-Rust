@@ -24,6 +24,8 @@ pub struct Live {
     /// Dropping the sender unblocks `recv_timeout` when the panel closes.
     tx: Option<Sender<()>>,
     rx: Receiver<FrostFrame>,
+    /// Frame taken by [`Self::has_frame`] but not consumed yet.
+    pending: Option<FrostFrame>,
     /// Never joined: a GDI capture may still be in flight at shutdown.
     _thread: JoinHandle<()>,
 }
@@ -43,8 +45,26 @@ impl Live {
         Some(Self {
             tx: Some(tx),
             rx,
+            pending: None,
             _thread: thread,
         })
+    }
+
+    /// Whether a capture is queued, keeping it for [`Self::latest`].
+    ///
+    /// The main loop asks this instead of polling: the thread only sends a
+    /// frame when the desktop changed, so an idle desktop costs nothing.
+    pub(crate) fn has_frame(&mut self) -> bool {
+        if self.pending.is_some() {
+            return true;
+        }
+        match self.rx.try_recv() {
+            Ok(frame) => {
+                self.pending = Some(frame);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Keeps only the newest frame; a stale background is worse than a drop.
@@ -52,8 +72,8 @@ impl Live {
     /// Dropped frames must merge their dirty columns: a column changed in the
     /// skipped frame but not in the newest one would never be recomputed and
     /// would stay frozen on the background of two frames ago.
-    pub(crate) fn latest(&self) -> Option<FrostFrame> {
-        let mut newest: Option<FrostFrame> = None;
+    pub(crate) fn latest(&mut self) -> Option<FrostFrame> {
+        let mut newest: Option<FrostFrame> = self.pending.take();
         while let Ok(frame) = self.rx.try_recv() {
             newest = Some(match newest {
                 Some(prev) => merge_frames(prev, frame),

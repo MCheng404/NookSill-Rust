@@ -379,6 +379,7 @@ async 运行时带来的调度开销与栈占用都不划算。
 27. **Dock 内部只有一种坐标：逻辑轴 `(u,v)`**（`u` 沿栏、`v` 离屏幕边缘）。Win32 给的是窗口像素，必须在 WndProc / `DockDropTarget` / `cursor::client_pos` 这些边界经 `logical_point` 转换；反过来屏幕矩形（`slot_screen_rect`、`widget_screen_rect`、`hot_phys`、`icon_rect`）必须走 `map_rect`。唯一例外是烟雾光标的窗口像素，用 `window_point` 转回。漏掉 `to_logical`，靠左/靠右时命中、放大、拖放与弹窗锚点会整体错位（ADR-077）。
 28. **全局热键只有一个所有者**：`platform::hotkey::GlobalHotkey` 用 RAII 注册/注销，组合由 `[Hotkeys] Toggle` 经 `core::hotkey::Hotkey` 解析；`App::sync_global_hotkey` 只在配置变化时重绑，被占用时回滚并提示一次。`[Settings] Hotkey` 只是 0/1 开关，不要把组合塞回那 76 个与 C 版一一对应的键（ADR-078）。
 29. **几何按目标显示器现算，不缓存主屏**：工作区、`AppBar` 预留、DPI 都从 `[Settings] Monitor` 取（`work_area` / `monitor_rect` / `monitor_dpi`），越界回退主屏；`App::sync_monitor` 在序号或 `Dock.geom_epoch`（`WM_DPICHANGED` / `WM_DISPLAYCHANGE` 自增）变化时重算，`step_relayout` 同时比较尺寸与原点。弹窗按锚点钳制（`widgets::anchor` + `display::monitor_at` / `work_area_at`），没有锚点的居中面板读 `display::target_work_area()`。任何新窗口都不要直接写 `work_area(0)` / `monitor_rect(0)`（ADR-079）。
+30. **抓屏背景要求窗口把自己排除出捕获**：`frost::Live` 读的是「屏幕在该矩形上显示的内容」，活窗口不调 `exclude_from_capture`（`WDA_EXCLUDEFROMCAPTURE`）就会抓到自己；`x ← blur(0.6·tint + 0.4·x)` 的不动点是一片纯色，磨砂会静默退化成塑料。排除只在真的画磨砂时开（`Config::frost_enabled()`），关闭或退出走 `allow_capture`，代价是开着磨砂的窗口不进截图/录屏。背景按件取：`FrameRenderer::frost_backdrop` 给出 `frost::Backdrop { tex, win }`，绘制一律走 `chrome::rounded_frost`，UV 是「窗口内分数」，不要整张 `Shape::image` 贴上去——栏体上下留出的悬垂与倒影边距里没有模糊底。换帧由 `Live::has_frame` 驱动（`App::step_frost` 返回 `true` 才重绘），不要用定时器轮询，否则静止时也会出帧，破坏零帧待机；只改半径走 `set_frost_spec`，不要重启线程（ADR-080）。
 
 ## 八、与 C 版的模块映射
 

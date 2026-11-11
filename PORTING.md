@@ -243,7 +243,7 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 | 分组 | `KidAdd` `MergeInto` `ExtractKid` `DissolveGroup` `BuildGroupIcon` | `core::group` + `gpu::group_win` + `gpu::edit_win` | ✅ 建组/改名/点开/归组/移出/解散 + 四宫格图标；`launch` 的 `Unsupported` 分支不再可达 |
 | 菜单 | `ShowMenu` `MenuProc` `MenuDraw` `HandleCmd` | `gpu::menu` | ✅ 独立窗口 + 模态捕获（ADR-032） |
 | 预览 | `ShowPreview` `PvProc` `PvEnum` `ClosePreview` | —— | ❌ 未做（只有配置键） |
-| 磨砂 | `UpdateFrost` `BlurPass` | —— | ❌ 未做，`Frost` 退化为渐变 |
+| 磨砂 | `UpdateFrost` `BlurPass` | `gpu::frost` + `gpu::frame::frost_state` + `bin/dock/run_loop.rs::step_frost` | ✅ 栏体自己起抓屏线程（GDI 抓整窗 + 两趟高斯 + 圆角 SDF，按件取 UV）；窗口须在开磨砂期间排除出捕获（ADR-080） |
 | 托盘 | `AddTray` `WM_APP_TRAY` | `platform::tray` + `bin/dock.rs::step_tray` | ✅ 图标 + 左键切显隐 + 右键菜单（显隐/起动台/设置/退出）；RAII 注销 |
 | 单项图标 | `LoadItemIcon`（自定义 `icon_src` 分支） | `bin/dock.rs::change_icon` + `Dock::clear_icon` | ✅ 只列 `.ico/.exe/.dll`；PNG/JPEG 待 WIC |
 | 速记 | `ToolDraw` 之外的便签窗口 | `core::note` + `gpu::note_win` + `gpu::edit_win` | ✅ 列表/新建/编辑/删除/分页，`[Notes]` 段持久化 |
@@ -712,7 +712,7 @@ SbPopFrost SbAutoOpaque TaskPeek FrostHold AnimSpeed FanReverse LogCollect
 | 3 | **多窗口列表** | 中 | 现在只有分组预览；上游是"同应用多窗口时悬停列窗口标题" | 数据层要 `EnumWindows` 按 PID 分组（`running_apps` 现在只留第一个窗口）；UI 是新的弹层 |
 | 4 | ~~速记面板~~ | — | ✅ 已做（`core::note` + `gpu::note_win` + `gpu::edit_win` 多行；`Notes` / `MnNotes` 两个空壳一起接通） | — |
 | 5 | ~~托盘图标~~ | — | ✅ 已做（`platform::tray`，左键显隐 / 右键菜单 / RAII 注销） | — |
-| 6 | **磨砂玻璃背景** | 大 | `BgMode::Frost` 是默认值，但实现退化成渐变（§9.4 提过） | 要桌面捕获 + compute 模糊；`glass-backdrop` 已经有 blur/SDF，缺的是管线接入 |
+| 6 | ~~磨砂玻璃背景~~ | — | ✅ 已做（`frost::Live` 抓屏线程 + `chrome::rounded_frost` 按件取样，由 `App::step_frost` 用「抓到一帧」驱动；不动时零帧，窗口排除出捕获见 ADR-080） | — |
 | 7 | 图标解码（PNG/JPEG） | 小 | `icon_src` 目前只认 `.ico`（shell 图像列表） | 加 WIC 解码即可；注意别为此引入 `image` crate |
 | 8 | 更新进度条 | 小 | 更新卡片只有一行文字 | `mirror_rows` 那套回读缓冲里顺手能算进度，但要先把下载改成流式 |
 | — | 窗口动画 | — | 逐帧改别人 HWND，§9.4 已论证 | **不做** |

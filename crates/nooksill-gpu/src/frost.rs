@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use egui::{Color32, ColorImage};
+use egui::{Color32, ColorImage, TextureId};
 use glass_backdrop::blur::{clamp_radius, normalized_gaussian_weights, sigma_for_radius};
 use glass_backdrop::capture::DesktopCapture;
 use glass_backdrop::glass::glass_sdf;
@@ -86,7 +86,24 @@ pub struct Spec {
     /// Gaussian radius in capture-image texels; from `Blur`.
     pub radius: u32,
     /// Panel corner radius in logical points; the launchpad is square, pass 0.
+    ///
+    /// The dock passes 0 as well: it rounds each piece of its geometry itself,
+    /// see [`Backdrop`].
     pub corner_pt: f32,
+}
+
+/// A registered blur texture plus the window it covers.
+///
+/// The texture always spans the whole window, so a piece of geometry can
+/// sample the slice of the blur behind itself: the dock draws one backdrop per
+/// bar-shaped rect instead of covering the window, which would also frost the
+/// zoom overhang and the reflection margin. UV of a point is its position as a
+/// fraction of `win`, so the mapping survives a resize or a DPI change.
+#[derive(Clone, Copy, Debug)]
+pub struct Backdrop {
+    pub tex: TextureId,
+    /// Window size in logical points.
+    pub win: [f32; 2],
 }
 
 impl Spec {

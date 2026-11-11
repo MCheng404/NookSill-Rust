@@ -5,6 +5,7 @@
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp light
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp dark - - left
+//! cargo run -p nooksill-gpu --example dock_shot -- out.bmp dark - - - frost
 //! ```
 //!
 //! Same render path as the app (`FrameRenderer` + `Dock::paint`), minus
@@ -13,6 +14,11 @@
 //! In the real window the presenter applies the reflection straight to the DIB.
 //! Offscreen there is no DIB, so the same `mirror_rows` runs on the readback
 //! buffer: RGBA instead of BGRA, but every channel is scaled equally.
+//!
+//! `frost` swaps the real desktop capture for a synthetic pattern: the live
+//! capture needs a visible window and a desktop behind it, so it cannot run
+//! here, but everything after the blur (UV mapping, rounded mask, fill on top)
+//! is the same code.
 
 #[path = "common/bmp.rs"]
 mod bmp;
@@ -21,6 +27,7 @@ use nooksill_core::config::{Config, Key};
 use nooksill_core::layout::Rect as LRect;
 use nooksill_gpu::dock::{Dock, DockItem};
 use nooksill_gpu::frame::FrameRenderer;
+use nooksill_gpu::frost::Backdrop;
 use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::present::mirror_rows;
 
@@ -36,6 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let show_insert = args.next().as_deref() == Some("insert");
     // Optional dock edge; a placeholder (`-`) keeps earlier flags positional.
     let edge = args.next().unwrap_or_default();
+    // `frost` draws a synthetic blurred backdrop instead of the real capture.
+    let show_frost = args.next().as_deref() == Some("frost");
     let ppp = 1.25_f32;
 
     let mut cfg = Config::defaults();
@@ -119,8 +128,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let lines = nooksill_core::clock::clock_lines(&cfg, &now);
     let clock = Some(lines.as_slice());
+    // The live blur needs a desktop behind a visible window; a synthetic
+    // pattern stands in for it. Sharp bands, because the point is where the
+    // backdrop is drawn, not how it blurs.
+    let frost = show_frost.then(|| {
+        let img = egui::ColorImage::from_rgb(
+            [w as usize, h as usize],
+            &(0..w as usize * h as usize)
+                .flat_map(|i| {
+                    let (x, y) = (i % w as usize, i / w as usize);
+                    if (x / 60 + y / 40) % 2 == 0 {
+                        [64u8, 140, 240]
+                    } else {
+                        [240, 190, 60]
+                    }
+                })
+                .collect::<Vec<u8>>(),
+        );
+        let tex = frame
+            .ctx()
+            .load_texture("dock-shot-frost", img, egui::TextureOptions::NEAREST);
+        Backdrop {
+            tex: tex.id(),
+            win: [w as f32 / ppp, h as f32 / ppp],
+        }
+    });
     let (rgba, _) = frame.render_rgba(&gpu, raw_input(w, h, ppp), |ui| {
-        dock.paint(ui, ppp, dark, clock);
+        dock.paint(ui, ppp, dark, clock, frost);
     })?;
 
     // Exactly what the presenter does in the real window.

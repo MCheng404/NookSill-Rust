@@ -391,6 +391,18 @@ struct App {
     /// to a new value that never takes effect.
     scan_sent: Option<ScanInput>,
 
+    /// Whether the window is currently excluded from screen capture.
+    ///
+    /// Frost reads what is *behind* the bar, and the only way Windows allows
+    /// that is `WDA_EXCLUDEFROMCAPTURE`: without it the capture is a blur of
+    /// the bar itself, which converges on a flat wash. The trade-off is that
+    /// the bar disappears from screenshots and recordings while it is on
+    /// (see `DECISIONS.md`, ADR-080), so the affinity follows the setting and
+    /// is dropped the moment frost is off.
+    frost_excluded: bool,
+    /// Whether the background capture thread is running.
+    frost_live: bool,
+
     last_fs_check: Instant,
     fs_hidden: bool,
     /// Whether the foreground window is maximized, used to switch between the

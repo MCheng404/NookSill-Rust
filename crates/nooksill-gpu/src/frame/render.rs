@@ -26,6 +26,23 @@ impl FrameRenderer {
         self.frost.is_some()
     }
 
+    /// The background layer as a [`crate::frost::Backdrop`].
+    ///
+    /// Windows that paint their background in pieces (the dock bar and its
+    /// widget cards) sample this instead of blitting the whole window.
+    #[must_use]
+    pub fn frost_backdrop(&self) -> Option<crate::frost::Backdrop> {
+        let tex = self.frost.as_ref()?.id();
+        let (w, h) = self.size();
+        // A degenerate scale would make every UV infinite; egui's own minimum
+        // is far below any real DPI, so clamping costs nothing.
+        let k = self.pixels_per_point.max(0.1);
+        Some(crate::frost::Backdrop {
+            tex,
+            win: [w as f32 / k, h as f32 / k],
+        })
+    }
+
     /// The egui `Context`, for `request_repaint` and similar calls.
     #[must_use]
     pub const fn ctx(&self) -> &egui::Context {

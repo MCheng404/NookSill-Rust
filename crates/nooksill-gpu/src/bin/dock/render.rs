@@ -103,6 +103,9 @@ impl App {
         // A reflection is this frame's mirrored pixels, so it belongs in the
         // presentation layer; hand it the geometry first.
         self.frame.set_reflection(self.dock.reflection_spec());
+        // Resolve the backdrop once: `render` borrows the renderer mutably, so
+        // the texture handle cannot be looked up inside the closure.
+        let frost = self.frame.frost_backdrop();
         let dock = &*self.dock;
         // Hoist all smoke inputs out of the closure: it holds `&Dock` and
         // `&mut SmokeFx` at once, so reading other `self` fields would conflict.
@@ -125,7 +128,7 @@ impl App {
                 // Smoke is a background glow and must come first; painting it
                 // on top would tint the icons.
                 smoke.paint(ui, ppp, &tune, view);
-                dock.paint(ui, ppp, dark, clock.as_deref());
+                dock.paint(ui, ppp, dark, clock.as_deref(), frost);
             })?;
         self.dump_widgets();
         Ok(())

@@ -160,6 +160,91 @@ fn grad_lr(from: Color32, to: Color32) -> BarGradient {
     }
 }
 
+/// A frosted piece samples its own slice of the window, not the whole texture.
+///
+/// This is the whole point of `Backdrop`: the dock draws the blur under the bar
+/// and under each widget card separately, so the UV of a point has to be its
+/// window fraction. Stretching the full texture into one piece would put the
+/// desktop from under the *whole window* behind every card.
+#[test]
+fn frost_mesh_maps_window_fractions() {
+    let frost = crate::frost::Backdrop {
+        tex: egui::TextureId::User(7),
+        win: [1225.0, 247.0],
+    };
+    let piece = EguiRect::from_min_size(Pos2::new(600.0, 100.0), egui::vec2(300.0, 60.0));
+    let egui::epaint::Shape::Mesh(mesh) = rounded_frost(piece, 18.0, frost) else {
+        panic!("应当产出网格");
+    };
+    assert_eq!(mesh.texture_id, frost.tex, "网格必须用磨砂纹理");
+    // The first vertex is the fan centre.
+    let center = mesh.vertices[0];
+    assert!((center.uv.x - 750.0 / 1225.0).abs() < 1e-3, "中心 UV x");
+    assert!((center.uv.y - 130.0 / 247.0).abs() < 1e-3, "中心 UV y");
+    for v in &mesh.vertices {
+        assert!(
+            (0.0..=1.0).contains(&v.uv.x) && (0.0..=1.0).contains(&v.uv.y),
+            "UV 越界: {:?}",
+            v.uv
+        );
+    }
+}
+
+/// A square piece keeps its sub-rect: the quad covers just that slice.
+#[test]
+fn square_frost_piece_keeps_its_slice() {
+    let frost = crate::frost::Backdrop {
+        tex: egui::TextureId::User(1),
+        win: [100.0, 50.0],
+    };
+    let piece = EguiRect::from_min_size(Pos2::new(10.0, 25.0), egui::vec2(20.0, 5.0));
+    let egui::epaint::Shape::Mesh(mesh) = rounded_frost(piece, 0.0, frost) else {
+        panic!("应当产出网格");
+    };
+    assert_eq!(mesh.vertices.len(), 4, "方角只用 4 个顶点");
+    let has = |x: f32, y: f32| {
+        mesh.vertices
+            .iter()
+            .any(|v| (v.uv.x - x).abs() < 1e-4 && (v.uv.y - y).abs() < 1e-4)
+    };
+    assert!(has(0.1, 0.5), "左上角 UV 应当是 (10/100, 25/50)");
+    assert!(has(0.3, 0.6), "右下角 UV 应当是 (30/100, 30/50)");
+}
+
+/// A collapsed piece draws nothing instead of panicking.
+#[test]
+fn rounded_frost_tolerates_degenerate_rects() {
+    let frost = crate::frost::Backdrop {
+        tex: egui::TextureId::User(2),
+        win: [800.0, 600.0],
+    };
+    for (w, h) in [
+        (-50.66668, 76.0),
+        (120.0, -8.0),
+        (0.0, 76.0),
+        (f32::NAN, 76.0),
+    ] {
+        let rect = EguiRect::from_min_size(Pos2::ZERO, egui::vec2(w, h));
+        assert!(matches!(
+            rounded_frost(rect, 12.0, frost),
+            egui::epaint::Shape::Noop
+        ));
+    }
+    // A window of zero extent would divide by zero; the guard must still draw.
+    let tiny = crate::frost::Backdrop {
+        tex: egui::TextureId::User(3),
+        win: [0.0, 0.0],
+    };
+    let ok = EguiRect::from_min_size(Pos2::ZERO, egui::vec2(120.0, 76.0));
+    let egui::epaint::Shape::Mesh(mesh) = rounded_frost(ok, 12.0, tiny) else {
+        panic!("零尺寸窗口也要画出网格");
+    };
+    assert!(mesh
+        .vertices
+        .iter()
+        .all(|v| v.uv.x.is_finite() && v.uv.y.is_finite()));
+}
+
 /// A three-stop gradient hits the mid colour exactly at t = 0.5.
 #[test]
 fn three_stop_gradient_hits_the_middle_color() {

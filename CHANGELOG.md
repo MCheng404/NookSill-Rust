@@ -226,6 +226,31 @@ CI run `43039955569` 的 gate（3m20s）与 debug（1m58s）均通过。
 会打印 `[monitor] index=… dpi=… work=(…)`。CI run `43054611786` 的 gate（3m4s，
 含新的 commit message 步骤）与 debug（2m28s）通过。
 
+### 栏体磨砂真正生效（2026-11-11）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 抓屏 | Dock 自己起一条 `frost::Live` 抓屏线程（`App::step_frost`），`BgMode::Frost` 才开；半径跟随 `Blur`，改滑块只换 `Spec`、不重启线程 | 栏体从来没有接过抓屏管线，`paint_bar` 里写着「磨砂未实现」，默认 `fill=2` 实际画的是渐变 |
+| 排除自身 | 抓屏线程运行期间给窗口打 `WDA_EXCLUDEFROMCAPTURE`，关闭磨砂立刻 `WDA_NONE` | 抓的是「栏体背后」，不排除就会抓到栏体自己：`x ← blur(0.6·tint + 0.4·x)` 收敛成一片平色，等于没磨砂 |
+| 按件绘制 | 新增 `frost::Backdrop`（纹理 + 窗口尺寸），`dock::chrome::rounded_frost` 用与既有 `rounded_gradient` 相同的扇形网格按窗口比例取 UV，`paint_bar` 在填充之前铺一层 | 纹理铺满整个窗口会把缩放溢出区和倒影边距也磨砂掉；按比例取 UV 让栏体与每张卡片各自取自己那片 |
+| 脏帧驱动 | `Live::has_frame` + `FrameRenderer::frost_pending`，主循环只在抓到新帧时出帧 | 桌面静止时抓屏线程不发帧，磨砂因此不破坏「空闲零出帧」；全屏或完全隐藏时停线程，避免帧堆积和空转唤醒 |
+
+### 验证（栏体磨砂）
+
+`./scripts/build.sh --gate` 六步全绿，测试总数 584（`core` 288 / `gpu` 178
++15 ignored / `dock` 7 / `platform` 74 +6 ignored / `settings` 6 + 29 + 2）。
+新增 `frost_mesh_maps_window_fractions`、`square_frost_piece_keeps_its_slice`、
+`rounded_frost_tolerates_degenerate_rects`（3）。
+
+真机三组实测（release，`NOOKSILL_FROST_TRACE=1 NOOKSILL_FPS=1`）：
+
+- 静止桌面：6 秒内只抓 1 帧，`[fps]` 一行不打印 —— 空闲不出帧的承诺没破。
+- 屏底放一块纯红窗口：首帧 `359x67 平均色=(254,0,0)`，说明抓到的是栏体背后的桌面而不是栏体自己。
+- 该窗口每 250 ms 换色：8 秒 29 帧，平均色与窗口颜色逐一对应，`[fps]` 稳定在 3.8 帧/秒（首两秒 62/54 帧/秒是入场动画）。
+- 离屏：`dock_shot … - frost` 用合成棋盘替代真实抓屏，条形与小组件胶囊各自显示出棋盘切片、圆角裁剪正确、上方溢出区和下方倒影边距没有棋盘。
+
+**未做**：磨砂开启期间栏体不会出现在截图与录屏里（Windows 没有别的办法读到「窗口背后」）。设置 → 外观 → 填充改成「渐变」即可立刻恢复可截图，见 `DECISIONS.md` ADR-080。
+
 ---
 
 ## 2.0.0 — 更名为 NookSill（2026-11-06）

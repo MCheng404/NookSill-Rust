@@ -367,11 +367,19 @@ impl Dock {
         rad: f32,
         dark: bool,
         op_override: Option<f32>,
+        p: Proj,
     ) {
         // Widget cards can override opacity; `None` follows the bar.
         let op = op_override.unwrap_or(self.cfg.opacity as f32 / 100.0);
         if op <= 0.0 {
             return;
+        }
+        // The blurred desktop goes underneath: every fill below is translucent,
+        // so without it "frost" is just a tinted window onto a sharp desktop.
+        // One piece at a time, because a whole-window blit would also frost the
+        // zoom overhang and the reflection margin, which must stay clear.
+        if let Some(frost) = p.frost {
+            painter.add(rounded_frost(rect, rad, frost));
         }
         let (c1, c2) = self.bar_colors(dark);
         // Each stop has its own alpha; `BgColor3 < 0` disables the mid stop.
@@ -418,8 +426,8 @@ impl Dock {
             to,
             angle_deg,
         };
-        // `BgMode::Solid` draws one colour; gradient and frost share this path.
-        // Frost is not implemented yet, so the default visibly degrades.
+        // `BgMode::Solid` draws one colour; gradient and frost share this path,
+        // and the frost layer above is what makes the two visibly different.
         if self.cfg.get_i32(Key::BgMode) == 0 {
             painter.rect_filled(rect, CornerRadius::same(r8(rad)), from);
         } else {

@@ -83,6 +83,25 @@ impl FrameRenderer {
         self.live = crate::frost::Live::start(hwnd);
     }
 
+    /// Changes the blur parameters without restarting the capture.
+    ///
+    /// A different radius rebuilds the convolution target on the next frame, so
+    /// dragging the blur slider costs no thread churn.
+    pub fn set_frost_spec(&mut self, spec: crate::frost::Spec) {
+        self.frost_spec = Some(spec);
+    }
+
+    /// Whether a captured frame is waiting to be blurred.
+    ///
+    /// Long-lived windows ask this before deciding to draw: the capture thread
+    /// only sends frames when the desktop changed, so nothing is paid for a
+    /// still background.
+    pub fn frost_pending(&mut self) -> bool {
+        self.live
+            .as_mut()
+            .is_some_and(crate::frost::Live::has_frame)
+    }
+
     /// Stops the live capture. The background layer stays in place, so the
     /// panel keeps showing the last frame.
     pub fn stop_live_frost(&mut self) {
@@ -103,7 +122,7 @@ impl FrameRenderer {
     /// Consume the newest captured frame. The classic path re-convolves only
     /// the changed columns; the experimental path re-projects a colour field.
     pub(super) fn poll_frost(&mut self) -> bool {
-        let Some(frame) = self.live.as_ref().and_then(crate::frost::Live::latest) else {
+        let Some(frame) = self.live.as_mut().and_then(crate::frost::Live::latest) else {
             return false;
         };
         let Some(spec) = self.frost_spec else {

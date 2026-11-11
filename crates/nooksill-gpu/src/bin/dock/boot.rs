@@ -283,6 +283,8 @@ impl App {
             temp_keys: Vec::new(),
             items_stale: false,
             scan_sent: None,
+            frost_excluded: false,
+            frost_live: false,
             last_fs_check: Instant::now(),
             fs_hidden: false,
             fg_maximized: false,

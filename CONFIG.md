@@ -73,7 +73,7 @@ cargo run -q -p nooksill-core --example config_table
 | `bounce` | 1 | 0/1 | 启动弹跳 |
 | `web_app_mode` | 1 | 0/1 | 网页用 `--app` 窗口打开 |
 | `border` | 1 | 0/1 | 栏体描边 |
-| `fill` | 2 | 0–2 | 0 纯色 / 1 渐变 / 2 磨砂 |
+| `fill` | 2 | 0–2 | 0 纯色 / 1 渐变 / 2 磨砂。磨砂会实时抓取栏体背后的桌面并模糊（半径取 `blur`）；**开启期间栏体不会出现在截图与录屏里** —— Windows 只能通过把窗口排除出捕获来读到「窗口背后」，改成 0 或 1 立刻恢复可截图，见 `DECISIONS.md` ADR-080 |
 | `hide_mode` | 0 | 0–2 | 0 常驻 / 1 自动隐藏 / 2 智能隐藏 |
 | `reserve` | 0 | 0/1 | AppBar 预留桌面空间 |
 | `edge` | 0 | 0–3 | 0 底 / 1 顶 / 2 左 / 3 右 |
@@ -459,8 +459,9 @@ B1=改\n这里
 宽度与实际位置错开；现在统一存在 `gap_extra` 字段里。
 
 `WidgetBlur` 在 `frost_spec()` 里覆盖 `Key::Blur`，因此所有经它创建的
-弹出层（菜单 / 起动台 / 设置窗口 / 小组件面板）一起生效。栏体本身
-`BgMode::Frost` 目前仍退化为渐变（Backlog #6），这里不假装已实现。
+弹出层（菜单 / 起动台 / 设置窗口 / 小组件面板）一起生效。栏体
+（`BgMode::Frost`）读的是 `Key::Blur` 本身，不受 `WidgetBlur` 影响；
+它由 `App::step_frost` 维护，改半径只换 `Spec`、不重启抓屏线程。
 
 这四个键是 `Key::Numeric(109..112)`，追加在 `NUMERIC_KEYS` 末尾。
 

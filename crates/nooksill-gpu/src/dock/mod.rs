@@ -25,6 +25,8 @@ struct Proj {
     tx: f32,
     /// Hidden-state vertical offset, physical pixels.
     ty: f32,
+    /// Blurred background to draw under every bar-shaped rect; `None` = off.
+    frost: Option<crate::frost::Backdrop>,
 }
 
 /// An icon uploaded to the GPU.
@@ -380,9 +382,12 @@ pub struct Dock {
 
 mod chrome;
 
-use self::chrome::{argbc, clock_line_size, it_visible, r8, rounded_gradient, to_rgb, BarGradient};
+use self::chrome::{
+    argbc, clock_line_size, it_visible, r8, rounded_frost, rounded_gradient, to_rgb, BarGradient,
+};
 mod input;
 mod items;
+mod overlay;
 mod paint;
 mod paint_cards;
 mod state;
