@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Illusion animation repaint interval, about one frame at 60 Hz.
+const ILLUSION_FRAME_MS: u64 = 16;
+
 impl FrameRenderer {
     /// Remaining time until egui's next requested repaint; `None` means idle.
     #[must_use]
@@ -133,7 +136,8 @@ impl FrameRenderer {
             self.register_frost_view(&view);
         }
         if animating {
-            self.ctx.request_repaint_after(Duration::from_millis(16));
+            self.ctx
+                .request_repaint_after(Duration::from_millis(ILLUSION_FRAME_MS));
         }
         let frost = self.frost.as_ref().map(FrostLayer::id);
         let full = self.ctx.run_ui(raw, |ui| {

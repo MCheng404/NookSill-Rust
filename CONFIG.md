@@ -307,6 +307,29 @@ Adapter=NVIDIA GeForce RTX 5070 Laptop GPU
 
 改动**需要重启**：图形设备在进程启动时创建（ADR-012）。
 
+### 4.1 `[Hotkeys]` 段（Rust 版独有）
+
+```ini
+[Hotkeys]
+Toggle=Ctrl+Alt+D
+```
+
+| 键 | 默认 | 取值 | 说明 |
+|---|---|---|---|
+| `Toggle` | `Ctrl+Alt+D` | 修饰符 + 按键 | 全局显隐快捷键；`[Settings] Hotkey` 仍是 0/1 开关 |
+
+格式与约定：
+
+- **至少一个修饰符**（`Ctrl` / `Alt` / `Shift` / `Win`），加一个按键：字母、`0-9`、
+  `F1`–`F24`，或 `Space` / `Enter` / `Esc` / `Tab` / `Backspace` / `Delete` /
+  `Insert` / `Home` / `End` / `PageUp` / `PageDown` / 方向键等（完整表见
+  `core::hotkey::NAMED_KEYS`）。大小写不敏感，写回 ini 时规范化成固定顺序。
+- **非法值回退默认**，不让进程落到「没有快捷键」的状态；解析是纯函数、有单测。
+- **运行时改配置立即重绑**，不需要重启。新组合被其它程序占用时回滚到旧组合并输出
+  一行诊断，不会每帧重试。
+- 这段与 `[Graphics]` 一样是 Rust 版独有：老版本读到会原样保留，不进那 76 个
+  与 C 版一一对应的键。
+
 ## 五、`[Items]` / `[Groups]` 段
 
 ```ini

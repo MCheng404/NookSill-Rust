@@ -31,6 +31,7 @@ impl Config {
             show_running: true,
             lock: false,
             hotkey: true,
+            hotkey_combo: Hotkey::DEFAULT,
             accent_tone: false,
             reflect: false,
             clock: false,

@@ -2,9 +2,10 @@
 
 use egui::Ui;
 use nooksill_core::config::Key;
+use nooksill_core::hotkey::Hotkey;
 
 use super::options::UI_THEME_OPTS;
-use super::widgets::{button, card, combo, switch_row, toggle, Ctx};
+use super::widgets::{button, card, combo, row, switch_row, toggle, Ctx};
 use super::Command;
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
@@ -48,9 +49,43 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 ctx,
                 ui,
                 Key::Hotkey,
-                nooksill_core::i18n::t("Global hotkey Ctrl + Alt + D"),
+                nooksill_core::i18n::t("Global hotkey"),
                 nooksill_core::i18n::t("Show or hide the Dock at any time"),
             );
+            if ctx.state.hotkey_input.is_empty() {
+                ctx.state.hotkey_input = ctx.cfg.hotkey_combo.display();
+            }
+            let mut text = ctx.state.hotkey_input.clone();
+            let changed = row(
+                ui,
+                ctx.state,
+                nooksill_core::i18n::t("Toggle hotkey"),
+                nooksill_core::i18n::t("Modifier plus a key, e.g. Ctrl+Alt+D"),
+                |ui, id| {
+                    let resp = ui.add(egui::TextEdit::singleline(&mut text).desired_width(180.0));
+                    resp.labelled_by(id).changed()
+                },
+            );
+            if changed {
+                if let Some(hk) = Hotkey::parse(&text) {
+                    ctx.cfg.hotkey_combo = hk;
+                    ctx.out.changed = true;
+                    ctx.state.hotkey_input = hk.display();
+                    ctx.state.hotkey_error = false;
+                } else {
+                    ctx.state.hotkey_input = text.clone();
+                    ctx.state.hotkey_error = true;
+                }
+            } else {
+                ctx.state.hotkey_input = text.clone();
+            }
+            if ctx.state.hotkey_error {
+                let color = ui.visuals().error_fg_color;
+                ui.colored_label(
+                    color,
+                    nooksill_core::i18n::t("Invalid hotkey; use e.g. Ctrl+Alt+D"),
+                );
+            }
             toggle(
                 ctx,
                 ui,

@@ -66,8 +66,8 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, RegisterHotKey, ReleaseCapture, SetCapture, TrackMouseEvent,
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, TME_LEAVE, TRACKMOUSEEVENT, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_SHIFT,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -232,6 +232,10 @@ struct App {
     hwnd: HWND,
     gpu: Gpu,
     frame: FrameRenderer,
+    /// Owns the global toggle hotkey; `Drop` unregisters it.
+    global_hotkey: nooksill_platform::hotkey::GlobalHotkey,
+    /// Combo and enabled flag last applied, so rebinding runs only on change.
+    hotkey_applied: (nooksill_core::hotkey::Hotkey, bool),
     /// Must be on the heap: `wndproc` stores its address in `GWLP_USERDATA`,
     /// and the `Box` content does not move when `App` itself does.
     dock: Box<Dock>,

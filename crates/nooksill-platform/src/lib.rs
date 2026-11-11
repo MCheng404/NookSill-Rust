@@ -12,6 +12,7 @@ pub mod audio;
 pub mod display;
 pub mod filedialog;
 pub mod gpu;
+pub mod hotkey;
 pub mod icon;
 pub mod json;
 pub mod launch;

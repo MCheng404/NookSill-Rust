@@ -175,18 +175,30 @@
 - 依据：仓库其它文本规则（注释语言、单文件规模）都由钩子 + CI 自测守住，
   提交信息此前只写在文档里，且旧规范明确写「中文」。历史提交不重写，从本轮起生效。
 
+### 可自定义热键与硬编码收口（2026-11-11）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 组合解析 | 新增 `core::hotkey::Hotkey`：表驱动解析/格式化，支持 Ctrl/Alt/Shift/Win + 字母数字、F1–F24 与命名键；零依赖、4 条单测 | Win32 `MOD_*` 与虚拟键码语义；解析失败返回 `None` 而不是半合法值 |
+| 持久化 | `Config.hotkey_combo` 读写 `[Hotkeys] Toggle`，非法值回退 `Ctrl+Alt+D`；`config_table.rs` 说明改为只描述开关 | 与 `[Graphics]` 同属 Rust 独有段，不进那 76 个与 C 版一一对应的键 |
+| 运行时注册 | `platform::hotkey::GlobalHotkey` 用 RAII 注册/注销；`rebind` 失败时回滚旧组合；`App::sync_global_hotkey` 在配置变化时即时重绑 | `RegisterHotKey` 可能被其它进程占用，需要可回滚；设备创建才是需要重启的操作 |
+| 设置页 | General 页新增文本输入：合法即写回 `cfg`，非法显示错误并保留输入；新增 4 条 i18n 键、删除写死组合的旧键 | 与 `[Graphics] Adapter` 相同的「配置即改即生效」路径 |
+| 逻辑硬编码 | `layout::metrics` 的 7 个几何经验值、`platform::gpu` 的 1024 MB 显存阈值、`frame::render` 的 16 ms illusion 重绘间隔改成具名常量 | 只提常量不改数值；把每个经验值做成 ini 项会撑爆配置且没有用户收益（ADR-078） |
+
+- 未改：实现不变量（256 字节对齐、描述符预算 4096、`WM_APP` 号段、D3D/Win32 约束）保持原样；它们不是策略参数。
+
 ### 验证
 
-`./scripts/build.sh --gate` 六步全绿。测试总数 569：
-`nooksill-core` 282、`nooksill-gpu` 172（+15 ignored，GPU/窗口类）
+`./scripts/build.sh --gate` 六步全绿。测试总数 575：
+`nooksill-core` 287、`nooksill-gpu` 172（+15 ignored，GPU/窗口类）
 + `nooksill-dock` 7、`nooksill-platform` 72（+6 ignored）、
-`nooksill-settings` 6 + 28 + 2。新增 `text::tests`（3）、`frame::tests`（1）、
-`i18n::tests::strip_comments_only_removes_real_comments`（1）
-与 3 条四边坐标回归测试。
+`nooksill-settings` 6 + 29 + 2。新增 `hotkey::tests`（4）、
+`toggle_hotkey_roundtrips_and_falls_back`（1）与设置页输入框测试（1）。
 
-`crates/` 下 272 个 `.rs`、55439 行，生产代码最大 594 行（`dock/paint.rs`），
-无文件超过 600 行门禁；翻译表拆分后最大数据段 313 行。离屏基线
-`panels_shot` 7 张出图正常，`dock_shot` / `settings_shot` 沿用上一轮基线。
+`crates/` 下 274 个 `.rs`、55989 行，生产代码最大 593 行（`dock/paint.rs`），
+无文件超过 600 行门禁；翻译表分段后最大 313 行。离屏基线：
+`dock_shot` 三边（底 / 左 / 右）、`panels_shot` 7 张、`settings_shot` 常规页
+（新输入框显示 `Ctrl+Alt+D`）均出图正常。
 CI run `43039955569` 的 gate（3m20s）与 debug（1m58s）均通过。
 
 ---

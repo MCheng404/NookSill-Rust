@@ -157,3 +157,16 @@ fn 交互页显示隐藏灵敏度四条滑条() {
     assert_eq!(h.state().cfg.get_i32(Key::HIDE_DELAY_MAX), 900);
     assert_eq!(h.state().cfg.get_i32(Key::SHOW_DELAY_MAX), 400);
 }
+
+#[test]
+fn 热键输入框按配置初始化() {
+    let mut h = new_harness();
+    h.run();
+    assert_eq!(
+        h.state().ui.hotkey_input,
+        h.state().cfg.hotkey_combo.display()
+    );
+    assert_eq!(h.state().ui.hotkey_input, "Ctrl+Alt+D");
+    assert!(!h.state().ui.hotkey_error);
+    assert_eq!(h.query_all_by_label("切换快捷键").count(), 1);
+}

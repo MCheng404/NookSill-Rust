@@ -40,7 +40,7 @@ fn describe(key: Key) -> &'static str {
         Key::Preview => "悬停窗口预览",
         Key::ShowRunning => "显示未固定的运行中应用",
         Key::Lock => "锁定布局",
-        Key::Hotkey => "全局快捷键 Ctrl+Alt+D",
+        Key::Hotkey => "全局快捷键开关（组合见 [Hotkeys] Toggle）",
         Key::DotStyle => "0 横条 / 1 圆点",
         Key::PlateRadius => "底盘圆角（%，相对图标边长）",
         Key::BgColor1 => "自定义颜色 1，`-1` = 未启用；值为 COLORREF",

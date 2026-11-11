@@ -43,6 +43,12 @@ impl Config {
             }
         }
         cfg.adapter = Self::sanitize_adapter(ini.get("Graphics", "Adapter").unwrap_or_default());
+        // An unparseable combination falls back to the historical default, so
+        // a typo can never leave the process with no registered hotkey.
+        cfg.hotkey_combo = ini
+            .get("Hotkeys", "Toggle")
+            .and_then(Hotkey::parse)
+            .unwrap_or(Hotkey::DEFAULT);
         cfg.cc_order = ini.get("widgets", "Order").unwrap_or_default().to_owned();
         cfg.language = ini
             .get("general", "Language")
@@ -65,6 +71,7 @@ impl Config {
         // the key: removing it makes "manually set to automatic" invisible in
         // the file, which reads as "never configured" while diagnosing.
         ini.set("Graphics", "Adapter", &self.adapter);
+        ini.set("Hotkeys", "Toggle", self.hotkey_combo.display());
         // The tile order is the opposite: it is only written once dragged.
         // Its default is empty, and an empty line would just add noise to
         // every user's ini.

@@ -3,6 +3,7 @@
 //! Key count and order are fixed; bare int keys live in [`NUMERIC_KEYS`], so a
 //! new key costs one table row instead of a new match arm.
 
+use crate::hotkey::Hotkey;
 use crate::ini::Ini;
 use crate::units;
 
@@ -139,7 +140,10 @@ pub struct Config {
     pub preview: bool,
     pub show_running: bool,
     pub lock: bool,
+    /// Enable the global toggle hotkey. The combination lives in `[Hotkeys]`.
     pub hotkey: bool,
+    /// Key combination for the global toggle, parsed from `[Hotkeys] Toggle`.
+    pub hotkey_combo: Hotkey,
     pub accent_tone: bool,
     pub reflect: bool,
     pub clock: bool,

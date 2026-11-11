@@ -205,27 +205,21 @@ impl App {
         // Queue every icon up front; the worker batches them.
         request_missing_icons(&icons, &dock, &raw);
 
-        // Global `Ctrl+Alt+D` force-toggle. A failed registration (taken by
-        // another app) is only a warning.
-        if dock.cfg.hotkey {
-            let ok = unsafe {
-                RegisterHotKey(
-                    Some(hwnd),
-                    1,
-                    HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_ALT.0),
-                    u32::from(b'D'),
-                )
-            };
-            if ok.is_err() {
-                eprintln!("快捷键 Ctrl+Alt+D 注册失败（可能被占用），强制收起不可用。");
-            }
-        }
+        // Global toggle: the combination comes from `[Hotkeys] Toggle`.
+        let global_hotkey = nooksill_platform::hotkey::GlobalHotkey::register(
+            hwnd,
+            dock.cfg.hotkey_combo,
+            dock.cfg.hotkey,
+        );
+        let hotkey_applied = (dock.cfg.hotkey_combo, dock.cfg.hotkey);
 
         let smoke = SmokeFx::with_gpu(&gpu);
         let mut app = Self {
             hwnd,
             gpu,
             frame,
+            global_hotkey,
+            hotkey_applied,
             dock,
             paths,
             raw,

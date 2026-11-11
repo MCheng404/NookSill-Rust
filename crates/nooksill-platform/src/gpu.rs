@@ -8,6 +8,8 @@ use windows::Win32::Graphics::Dxgi::{
 
 /// DXGI reports a software adapter through this flag, not through its name.
 const SOFTWARE_FLAG: u32 = DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32;
+/// An iGPU reserves up to ~512 MB; any recent discrete card exceeds 1 GB.
+const DISCRETE_VRAM_MB: usize = 1024;
 
 /// Adapter class. A heuristic for sorting and labels, never a logic branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -117,7 +119,7 @@ pub fn adapters() -> Vec<AdapterInfo> {
 fn classify(flags: u32, dedicated_mb: usize) -> AdapterKind {
     if flags & SOFTWARE_FLAG != 0 {
         AdapterKind::Software
-    } else if dedicated_mb >= 1024 {
+    } else if dedicated_mb >= DISCRETE_VRAM_MB {
         AdapterKind::Discrete
     } else if dedicated_mb > 0 {
         AdapterKind::Integrated

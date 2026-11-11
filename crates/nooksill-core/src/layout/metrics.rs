@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// Empirical geometry budget: zoom overflow, label bubbles and side reserve.
+const MIN_FIT: f32 = 0.25;
+const ZOOM_OVERFLOW_SLOTS: f32 = 6.0;
+const LABEL_BUBBLE_SCALE: f32 = 0.55;
+const LABEL_BUBBLE_PAD: f32 = 34.0;
+const SHADOW_PAD: f32 = 8.0;
+const VERTICAL_LABEL_ROOM: f32 = 170.0;
+const SIDE_RESERVE: f32 = 260.0;
+
 /// Widget kind.
 ///
 /// The declared order is config data: `WideMask` uses the index as a bit
@@ -370,7 +379,7 @@ pub fn calc_metrics(cfg: &Config, dpi: i32, n_items: usize, n_sep: usize, work: 
     let mut fit = 1.0_f32;
     if wb > limit && (wb - 2.0 * pad_x0).abs() > f32::EPSILON {
         // Too many icons for the screen: shrink everything, floor at 25%.
-        fit = clampf((limit - 2.0 * pad_x0) / (wb - 2.0 * pad_x0), 0.25, 1.0);
+        fit = clampf((limit - 2.0 * pad_x0) / (wb - 2.0 * pad_x0), MIN_FIT, 1.0);
     }
 
     let s = s0 * fit;
@@ -394,15 +403,16 @@ pub fn calc_metrics(cfg: &Config, dpi: i32, n_items: usize, n_sep: usize, work: 
     let widget_extra = widgets.extra;
 
     // Above the bar: zoom overflow plus half an icon for the label bubble.
-    let mut overhang = (z - s - pad).max(0.0) + s * 0.55 + 34.0 + 8.0;
+    let mut overhang =
+        (z - s - pad).max(0.0) + s * LABEL_BUBBLE_SCALE + LABEL_BUBBLE_PAD + SHADOW_PAD;
     if !cfg.edge.is_horizontal() {
-        // Vertical edges put labels inward; reserve 170 px for long names.
-        overhang += 170.0;
+        // Vertical edges put labels inward; reserve room for long names.
+        overhang += VERTICAL_LABEL_ROOM;
     }
 
-    let mut w = wb * fit + (z - s) * 6.0 + s + 260.0 + widget_extra;
+    let mut w = wb * fit + (z - s) * ZOOM_OVERFLOW_SLOTS + s + SIDE_RESERVE + widget_extra;
     if n_items == 0 {
-        w = wb + 260.0;
+        w = wb + SIDE_RESERVE;
     }
     if w > along {
         w = along;

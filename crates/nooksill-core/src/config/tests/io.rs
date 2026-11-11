@@ -108,3 +108,26 @@ fn every_key_roundtrips_through_ini() {
         );
     }
 }
+
+/// The hotkey combination round-trips; a malformed value never leaves the
+/// process without a usable shortcut.
+#[test]
+fn toggle_hotkey_roundtrips_and_falls_back() {
+    let mut c = Config::defaults();
+    c.hotkey_combo = crate::hotkey::Hotkey::parse("Win+Shift+F8").expect("valid combo");
+    let shown = c.hotkey_combo.display();
+    let mut ini = Ini::new();
+    c.write_ini(&mut ini);
+    assert_eq!(ini.get("Hotkeys", "Toggle"), Some(shown.as_str()));
+    assert_eq!(Config::from_ini(&ini).hotkey_combo, c.hotkey_combo);
+
+    ini.set("Hotkeys", "Toggle", "Ctrl+Nope");
+    assert_eq!(
+        Config::from_ini(&ini).hotkey_combo,
+        crate::hotkey::Hotkey::DEFAULT
+    );
+    assert_eq!(
+        Config::from_ini(&Ini::new()).hotkey_combo,
+        crate::hotkey::Hotkey::DEFAULT
+    );
+}

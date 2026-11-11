@@ -51,7 +51,7 @@
    19 MB 的缓冲在 wgpu 下还会放大成 +64 MB（见 `BUILD.md` 的基线表）。
    这推翻了"GPU 路线必然吃 150 MB"的判断。曾据此提议换 `egui_glow`
    （ADR-011），**已否决**：保留 `egui-wgpu` 单栈。显卡选择的落点是
-   `[Graphics] Adapter`（ADR-012）。
+   `[Graphics] Adapter`（ADR-012）与 `[Hotkeys] Toggle`（ADR-078）。
 
 3. **DPI 必须自己声明。** 进程不声明 per-monitor v2 时，Windows 会把窗口位图
    整体拉伸，`GetClientRect` 与物理像素对不上，表面尺寸与客户区错位

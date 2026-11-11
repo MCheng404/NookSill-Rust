@@ -138,6 +138,10 @@ pub struct SettingsState {
     pub update: UpdateView,
     /// Address typed into the "add web app" field.
     pub url_input: String,
+    /// Text in the global hotkey field; initialised from `cfg` on first paint.
+    pub hotkey_input: String,
+    /// Whether the last hotkey text failed to parse.
+    pub hotkey_error: bool,
     /// Icon folder selected on the library page (empty = none).
     pub icon_dir: String,
     /// Top bar search text; when non-empty only matching nav labels are shown.
@@ -206,6 +210,8 @@ impl Default for SettingsState {
             version_clicks: 0,
             update: UpdateView::default(),
             url_input: String::new(),
+            hotkey_input: String::new(),
+            hotkey_error: false,
             icon_dir: String::new(),
             row_bands: Vec::new(),
             items: Vec::new(),

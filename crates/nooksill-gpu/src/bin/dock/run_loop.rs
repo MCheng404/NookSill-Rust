@@ -5,6 +5,19 @@ use super::sys::{dump_geometry, pump};
 use super::*;
 
 impl App {
+    /// Rebind the global hotkey when `[Hotkeys] Toggle` or its switch changes.
+    ///
+    /// A failed rebind rolls back inside `GlobalHotkey` and is logged once;
+    /// marking it applied prevents retrying a taken combination every frame.
+    fn sync_global_hotkey(&mut self) {
+        let want = (self.dock.cfg.hotkey_combo, self.dock.cfg.hotkey);
+        if want == self.hotkey_applied {
+            return;
+        }
+        self.global_hotkey.rebind(want.0, want.1);
+        self.hotkey_applied = want;
+    }
+
     /// Message loop; returns only on `WM_QUIT`.
     ///
     /// Each step reports whether this round needs a frame. Order matters: the
@@ -18,6 +31,8 @@ impl App {
             // thread and every `FrameRenderer` need it immediately; sync per
             // frame so a settings change applies without a restart.
             nooksill_gpu::frost::set_illusion(self.dock.cfg.get_i32(Key::FROST_ILLUSION) != 0);
+            // A settings edit changes the combination without a restart.
+            self.sync_global_hotkey();
 
             // 1. Drain the queue; one frame per message would jitter.
             match pump(&mut msg) {
