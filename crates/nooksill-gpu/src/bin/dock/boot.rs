@@ -172,7 +172,7 @@ impl App {
             );
         }
 
-        let gpu = Gpu::new("")?;
+        let gpu = Gpu::new(&dock.cfg.adapter)?;
         nooksill_gpu::gpu::set_msaa_preference(dock.cfg.get_i32(Key::MSAA));
         let frame = FrameRenderer::new(&gpu, win_w as u32, win_h as u32, ppp)?;
         let start = Instant::now();

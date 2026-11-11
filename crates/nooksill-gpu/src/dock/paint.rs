@@ -3,13 +3,12 @@
 use super::*;
 
 impl Dock {
-    /// Insert index for an external drop.
+    /// Insert index for an external drop in logical dock axes.
     ///
-    /// Counts icon centres left of the point; `usize::MAX` excludes nothing.
-    /// The axis is x for horizontal docks and y for vertical ones.
+    /// `u` is the along-bar coordinate; callers already map window pixels.
+    /// `usize::MAX` excludes no icon from the centre count.
     #[must_use]
-    pub fn drop_index_at(&self, x: f32, y: f32) -> usize {
-        let u = if self.cfg.edge.is_horizontal() { x } else { y };
+    pub fn drop_index_at(&self, u: f32, _v: f32) -> usize {
         self.place_for(u, usize::MAX)
     }
 

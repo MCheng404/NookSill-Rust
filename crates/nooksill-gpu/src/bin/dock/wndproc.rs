@@ -4,6 +4,15 @@ use super::drag::dock_cursor;
 use super::sys::{arm_mouse_leave, dock_ptr, physical_xy};
 use super::*;
 
+/// Mouse message position mapped into the dock's logical axes.
+fn logical_xy(dock: *mut Dock, lparam: LPARAM) -> (f32, f32) {
+    let (px, py) = physical_xy(lparam);
+    if dock.is_null() {
+        return (px, py);
+    }
+    unsafe { (*dock).logical_point(px, py) }
+}
+
 pub(super) unsafe extern "system" fn wndproc(
     hwnd: HWND,
     msg: u32,
@@ -33,8 +42,8 @@ pub(super) unsafe extern "system" fn wndproc(
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_MOUSEMOVE => {
-            let (u, v) = physical_xy(lparam);
             let ptr = dock_ptr(hwnd);
+            let (u, v) = logical_xy(ptr, lparam);
             if !ptr.is_null() {
                 unsafe {
                     (*ptr).mouse = (u, v);
@@ -94,12 +103,17 @@ pub(super) unsafe extern "system" fn wndproc(
             let mut pt = POINT::default();
             let has_pt = unsafe { GetCursorPos(&raw mut pt) }.is_ok()
                 && unsafe { ScreenToClient(hwnd, &raw mut pt) }.as_bool();
+            let ptr = dock_ptr(hwnd);
             let (x, y) = if has_pt {
-                (pt.x as f32, pt.y as f32)
+                let p = (pt.x as f32, pt.y as f32);
+                if ptr.is_null() {
+                    p
+                } else {
+                    unsafe { (*ptr).logical_point(p.0, p.1) }
+                }
             } else {
                 (f32::MAX, 0.0)
             };
-            let ptr = dock_ptr(hwnd);
             if !ptr.is_null() {
                 unsafe {
                     (*ptr).push_dropped_paths(files, x, y);
@@ -114,15 +128,16 @@ pub(super) unsafe extern "system" fn wndproc(
         WM_SETCURSOR => {
             let ptr = dock_ptr(hwnd);
             if !ptr.is_null() {
-                if let Some((u, v)) = nooksill_gpu::cursor::client_pos(hwnd) {
+                if let Some((px, py)) = nooksill_gpu::cursor::client_pos(hwnd) {
+                    let (u, v) = (*ptr).logical_point(px, py);
                     dock_cursor(&*ptr, u, v);
                 }
             }
             LRESULT(1)
         }
         WM_LBUTTONDOWN => {
-            let (u, v) = physical_xy(lparam);
             let ptr = dock_ptr(hwnd);
+            let (u, v) = logical_xy(ptr, lparam);
             if !ptr.is_null() {
                 // `SetCapture` on a hit: all later mouse messages come here,
                 // so the button-up is not lost when the pointer leaves the
@@ -139,8 +154,8 @@ pub(super) unsafe extern "system" fn wndproc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let (u, v) = physical_xy(lparam);
             let ptr = dock_ptr(hwnd);
+            let (u, v) = logical_xy(ptr, lparam);
             if !ptr.is_null() {
                 unsafe {
                     // **Settle the click before releasing the capture.** The
@@ -188,8 +203,8 @@ pub(super) unsafe extern "system" fn wndproc(
         }
         // Middle button forces a new instance.
         WM_MBUTTONUP => {
-            let (u, v) = physical_xy(lparam);
             let ptr = dock_ptr(hwnd);
+            let (u, v) = logical_xy(ptr, lparam);
             if !ptr.is_null() {
                 unsafe {
                     (*ptr).force_click(u, v);
@@ -235,8 +250,8 @@ pub(super) unsafe extern "system" fn wndproc(
         // menu because a modal window must not block in the procedure.
         WM_RBUTTONDOWN => LRESULT(0),
         WM_RBUTTONUP => {
-            let (u, v) = physical_xy(lparam);
             let ptr = dock_ptr(hwnd);
+            let (u, v) = logical_xy(ptr, lparam);
             if !ptr.is_null() {
                 unsafe {
                     (*ptr).request_menu(u, v);

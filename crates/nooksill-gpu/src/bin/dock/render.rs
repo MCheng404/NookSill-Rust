@@ -112,7 +112,10 @@ impl App {
             // the same union used for cursor and occlusion tests.
             bar: dock.hot_phys(),
             offset: dock.hide_offset(),
-            cursor: dock.hover.then_some(dock.mouse),
+            // Smoke works in window pixels; the dock stores logical axes.
+            cursor: dock
+                .hover
+                .then(|| dock.window_point(dock.mouse.0, dock.mouse.1)),
             now_s: self.start.elapsed().as_secs_f64(),
         };
         let smoke = &mut self.smoke;

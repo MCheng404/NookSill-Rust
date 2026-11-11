@@ -65,8 +65,8 @@ impl Dock {
 
     /// Record a dropped batch and the drop point (called from `WndProc`).
     ///
-    /// `x`/`y` are client physical pixels. The first message of a batch sets
-    /// the anchor, since one drop can arrive as several `WM_DROPFILES`.
+    /// `x`/`y` are logical dock axes. The first message of a batch sets the
+    /// anchor, since one drop can arrive as several `WM_DROPFILES`.
     pub fn push_dropped_paths(&mut self, paths: Vec<String>, x: f32, y: f32) {
         if self.dropped_paths.is_empty() {
             self.dropped_at = Some(self.drop_index_at(x, y));
@@ -115,6 +115,7 @@ impl Dock {
     /// Group under the drop point, if any.
     ///
     /// Returns a `dock.items` index; the caller checks it is within `raw`.
+    /// Takes logical axes, like `hit_at`.
     #[must_use]
     pub fn drop_group_at(&self, x: f32, y: f32) -> Option<usize> {
         let i = self.hit_at(x, y)?;

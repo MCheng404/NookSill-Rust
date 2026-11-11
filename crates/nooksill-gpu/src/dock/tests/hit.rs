@@ -205,3 +205,68 @@ fn input_marks_dirty() {
     assert!(dock.take_dirty());
     assert!(!dock.take_dirty(), "取走之后应当清零");
 }
+
+/// Window pixels and logical dock axes round-trip on all four edges.
+#[test]
+fn point_mapping_roundtrips_on_every_edge() {
+    let mut dock = settled_dock(3);
+    for edge in [Edge::Bottom, Edge::Top, Edge::Left, Edge::Right] {
+        dock.cfg.edge = edge;
+        dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        for (u, v) in [(120.0, 24.0), (dock.metrics.lh as f32 * 0.4, 8.0)] {
+            let (px, py) = dock.window_point(u, v);
+            let (u2, v2) = dock.logical_point(px, py);
+            assert!((u2 - u).abs() < 0.01, "{edge:?}: u {u2} != {u}");
+            assert!((v2 - v).abs() < 0.01, "{edge:?}: v {v2} != {v}");
+        }
+    }
+}
+
+/// A window-space click on a vertical dock still reaches the right slot.
+#[test]
+fn vertical_dock_hit_uses_logical_axes() {
+    for edge in [Edge::Left, Edge::Right] {
+        let mut dock = settled_dock(3);
+        dock.cfg.edge = edge;
+        dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        let s = dock.metrics.s;
+        let logical = (
+            dock.geom.slot_l[1] + s / 2.0,
+            dock.geom.icon_bottom - s / 2.0,
+        );
+        let (px, py) = dock.window_point(logical.0, logical.1);
+        let (u, v) = dock.logical_point(px, py);
+        assert_eq!(
+            dock.hit_at(u, v),
+            Some(1),
+            "{edge:?}: 窗口坐标没落到第 1 槽"
+        );
+
+        let (l, t, r, b) = dock.slot_screen_rect(1, 100, 200).expect("第二个槽位");
+        assert!(
+            ((r - l) as f32 - dock.metrics.bar_h).abs() <= 2.0,
+            "{edge:?}: 横向应是栏体厚度"
+        );
+        assert!(
+            ((b - t) as f32 - dock.metrics.s).abs() <= 2.0,
+            "{edge:?}: 纵向应是槽宽"
+        );
+        assert!(l >= 100 && t >= 200, "{edge:?}: 矩形跑出窗口");
+    }
+}
+
+/// Widget-card anchors transpose too, or popups open on the wrong side.
+#[test]
+fn vertical_widget_anchor_is_transposed() {
+    for edge in [Edge::Left, Edge::Right] {
+        let mut dock = settled_dock(1);
+        dock.cfg.edge = edge;
+        dock.cfg.clock = true;
+        dock.update(96, nooksill_core::layout::REF_FRAME_MS);
+        let (l, t, r, b) = dock
+            .widget_screen_rect(layout::WidgetKind::Clock, 100, 200)
+            .expect("时钟卡片");
+        assert!(b - t > r - l, "{edge:?}: 竖排卡片应是竖长矩形");
+        assert!(l >= 100.0 && t >= 200.0, "{edge:?}: 锚点跑出窗口");
+    }
+}

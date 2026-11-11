@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Reject non-ASCII commit messages before Git writes the object.
+
+set -uo pipefail
+
+if [ "${SKIP_GATE:-0}" = "1" ]; then
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+./scripts/check-commit-msg.sh "$1"

@@ -28,12 +28,13 @@ git config core.autocrlf false
 
 | 时机 | 命令 | 跑什么 | 耗时量级 |
 |---|---|---|---|
-| 每次提交（自动） | `.githooks/pre-commit` | 注释语言 + 单文件规模 + `fmt --check` + `clippy -D warnings` | 秒 |
-| 提交前 / 合并前 | `./scripts/build.sh --gate` | 上面四项 + `cargo test` | 十几秒 |
+| 每次提交（自动） | `.githooks/pre-commit` + `.githooks/commit-msg` | 注释语言 + 单文件规模 + **提交信息纯 ASCII** + `fmt --check` + `clippy -D warnings` | 秒 |
+| 提交前 / 合并前 | `./scripts/build.sh --gate` | 上面各项（文本检查跑 `--self-test`）+ `cargo test` | 十几秒 |
 | 发版 | `./scripts/build.sh --release` | release 构建（LTO + `opt-level=z`） | 一分钟 |
 
-两个文本门禁是纯扫描，不依赖 MSVC，本地钩子、CI 的 `gate` job 与
-`--gate` 跑的是同一批脚本（都先跑 `--self-test` 再扫仓库）。
+三个文本门禁都是纯扫描，不依赖 MSVC：本地钩子、CI 的 `gate` job 与
+`--gate` 跑同一批脚本（先跑 `--self-test` 再扫内容）。提交信息检查在
+`commit-msg` 钩子里检查消息文件，在 CI 里检查 HEAD 的 subject 与正文。
 
 `pre-commit` **故意不含测试**：全量测试要链接 7 个 crate 的测试二进制，
 放进提交钩子的结果一定是被 `--no-verify` 绕过，那还不如不放。
@@ -57,7 +58,10 @@ git commit --no-verify ...   # git 原生逃生口，钩子完全不执行
 
 ## 四、提交信息
 
-格式：`类型: 一句话`（中文，不超过 72 字符，句末不加句号）。
+**提交信息全用英文、纯 ASCII**（subject 与正文都算）。格式 `type: one-line summary`，
+不超过 72 字符，句末不加句号；正文同样用英文，禁止中文标点与全角字符。
+门禁 `scripts/check-commit-msg.sh` 在 `.githooks/commit-msg` 与 CI 里拦截非 ASCII，
+`--self-test` 守住「注释行 / scissors 后内容不参与检查」这两条例外。
 
 | 类型 | 用于 |
 |---|---|
@@ -69,14 +73,16 @@ git commit --no-verify ...   # git 原生逃生口，钩子完全不执行
 | `test` | 只改测试 |
 | `chore` | 构建、依赖、仓库配置 |
 
-正文（可选，但 `fix` / `perf` / `refactor` 建议写）回答三个问题：
+正文（可选，但 `fix` / `perf` / `refactor` 建议写）用英文回答三个问题：
+改了什么、依据是什么、怎么验证的。
 
 ```
-fix: 时钟开启时栏体右端被裁
+fix: stop clipping the right edge when the clock is enabled
 
-原因：calc_metrics 把 clock_extra 算进了逻辑宽度，但布局没减掉它。
-影响：GDI+ 版与 GPU 版都偏右，宽度越窄越明显。
-验证：cargo test -p nooksill-core layout
+Root cause: calc_metrics added clock_extra to the logical width, but the
+layout never subtracted it. Both the GDI+ and GPU paths shift right, and the
+error grows as the bar narrows.
+Verification: cargo test -p nooksill-core layout
 ```
 
 性能类改动必须带**同机、同配置**的前后数字，否则下一个人没法判断

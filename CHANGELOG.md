@@ -134,16 +134,60 @@
 - 「同步回读对小 Dock 仍划算」这一判断的前提是重绘有明确终止点；若将来改动 illusion 的时间参数化，需重新评估。
 - 依据来源：wgpu 30 / egui 0.37 / W3C WGSL / Microsoft Learn / Rust Edition Guide 与 API Guidelines / Elm 官方指南 / Intel 与 Rastergrid 的高斯优化文章 / SIGGRAPH Asia 2024，共 40 余条一手文献，逐条对应 ADR-075。
 
+### 工程（续）
+
+- CI 的四个 JS action 升级到声明 `runs.using: node24` 的版本：`actions/checkout@v4→v6`、
+  `ilammy/msvc-dev-cmd@v1→step-security/msvc-dev-cmd@v1.13.1`、
+  `actions/upload-artifact@v4→v6`、`softprops/action-gh-release@v2→v3`。依据：
+  GitHub 的 Node 20 弃用公告、逐个 `action.yml` 的运行时核实，以及输入项兼容性核对；
+  上一个 CI run 的 gate job 曾给出该弃用告警。
+- `i18n/en.rs`(599) / `zh_cn.rs`(592) 按字母拆成 `en/{first,second}.rs` 与
+  `zh_cn/{first,second}.rs`，用 const 块在编译期拼回**单一** `TEXT` 切片：
+  `lookup` / `has_key` / 完整性测试与公开路径都不变。依据：`include!` 在数组里注入
+  多项会被 `incomplete_include` 拒绝（rustc 实测），而分段查询会改公开 API；见 ADR-076。
+- `i18n::tests` 的源码扫描从 `line.split("//")` 换成词法剥离 `strip_comments()`：
+  跳过字符串、转义引号、字符字面量、行注释与嵌套块注释，新增 1 条回归测试。
+  依据：原实现会截断字符串里的 URL，也拦不住块注释里的假调用点。
+- 生产 panic 审查：按 `#[cfg(test)]` 边界与测试文件路径精确扫描后，生产代码零
+  `unwrap` / `expect` / `panic!` 残留（仅 `json.rs` 自定义的 `Parser::expect` 返回 `Result`）。
+
+### 纵向停靠与图形选择（2026-11-11）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 判断区域 | `layout::to_logical` 此前定义了却无人调用：WndProc、OLE 拖放、光标判定把窗口 `(x,y)` 直接当逻辑 `(u,v)`。现在所有输入在边界经 `Dock::logical_point` 转成逻辑轴，`dock.mouse` 也统一存逻辑坐标 | `map_rect` / `to_logical` 的互逆契约（`core/layout/tests/metrics.rs`）；新增四边往返测试 |
+| 弹窗锚点 | `slot_screen_rect` / `widget_screen_rect` 补 `map_rect`，纵向停靠不再把逻辑矩形当窗口矩形；`group_under` 把逻辑点转窗口点再比 `icon_rect` | 同上；`dock/tests/hit.rs` 新增尺寸断言 |
+| 拖放落点 | `drop_index_at` 删掉「横排取 x、竖向取 y」的窗口坐标分支，统一用逻辑 `u` | 输入坐标契约统一 |
+| 纵向表现 | 悬停标签的边界钳制改用 `physical_size(edge, …)`（纵向窗口宽高交换）；`physical_xy` 按 `i16` 解析 LPARAM，捕获拖出窗口时不再得到 65535 | `core::layout::physical_size`；Win32 `MAKEPOINTS` 语义 |
+| 手动显卡不生效 | `boot.rs` 硬编码 `Gpu::new("")`，忽略 `[Graphics] Adapter`；改为 `Gpu::new(&dock.cfg.adapter)` | 配置读写链路核对 |
+| 判断通用化 | 软件适配器从「名字含 Microsoft Basic…」改为 DXGI `DXGI_ADAPTER_FLAG_SOFTWARE`；`pick_by_name` 在名字不匹配时按 PCI `(vendor, device)` 兜底；`Selection::Pinned` 记录配置名，`matches_config` 不再用设备名做模糊包含 | Microsoft Learn `DXGI_ADAPTER_FLAG` / `DXGI_ADAPTER_DESC1`；wgpu 30 `AdapterInfo.vendor/device` 官方语义（ADR-077） |
+
+- `dock_shot` 增加可选停靠边参数；离屏出图核对底 `1225×247`、左/右 `374×900`，栏体贴边与图标竖排正常。
+
+### 提交信息改为纯英文
+
+- `CONTRIBUTING.md` 第四节、提交信息示例全部英文化；规定 subject 与正文均为 ASCII 英文，
+  `type: one-line summary` ≤ 72 字符、句末无句号。
+- 新增 `scripts/check-commit-msg.sh`（带 `--self-test`）与 `.githooks/commit-msg`：
+  剥掉 Git 的 `#` 注释行与 scissors 之后的内容后检查非 ASCII 字符。
+  `./scripts/build.sh --gate` 由五步扩为六步（注释 → 规模 → 提交信息 → fmt → clippy → 测试），
+  CI 的 `gate` job 增加 `commit message` 步骤，检查 HEAD 的 subject 与正文。
+- 依据：仓库其它文本规则（注释语言、单文件规模）都由钩子 + CI 自测守住，
+  提交信息此前只写在文档里，且旧规范明确写「中文」。历史提交不重写，从本轮起生效。
+
 ### 验证
 
-`./scripts/build.sh --gate` 五步全绿。测试总数 565：
-`nooksill-core` 281、`nooksill-gpu` 169（+15 ignored，GPU/窗口类）
+`./scripts/build.sh --gate` 六步全绿。测试总数 569：
+`nooksill-core` 282、`nooksill-gpu` 172（+15 ignored，GPU/窗口类）
 + `nooksill-dock` 7、`nooksill-platform` 72（+6 ignored）、
-`nooksill-settings` 6 + 28 + 2。新增 `text::tests`（3）与 `frame::tests`（1）。
+`nooksill-settings` 6 + 28 + 2。新增 `text::tests`（3）、`frame::tests`（1）、
+`i18n::tests::strip_comments_only_removes_real_comments`（1）
+与 3 条四边坐标回归测试。
 
-`crates/` 下 268 个 `.rs`、55311 行，生产代码最大 599 行（`i18n/en.rs`），
-无文件超过 600 行门禁。离屏基线 `panels_shot` 7 张出图正常，
-`dock_shot` / `settings_shot` 沿用上一轮基线。
+`crates/` 下 272 个 `.rs`、55439 行，生产代码最大 594 行（`dock/paint.rs`），
+无文件超过 600 行门禁；翻译表拆分后最大数据段 313 行。离屏基线
+`panels_shot` 7 张出图正常，`dock_shot` / `settings_shot` 沿用上一轮基线。
+CI run `43039955569` 的 gate（3m20s）与 debug（1m58s）均通过。
 
 ---
 

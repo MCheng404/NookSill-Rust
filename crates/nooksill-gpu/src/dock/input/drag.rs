@@ -77,6 +77,8 @@ impl Dock {
     /// Tests the icon square, not the wider slot, so the slot edge does not
     /// swallow a drop next to the group.
     pub(in crate::dock) fn group_under(&self, u: f32, v: f32, exclude: usize) -> Option<usize> {
+        // icon_rect is in window pixels; input arrives in logical dock axes.
+        let (px, py) = self.window_point(u, v);
         for (i, it) in self.items.iter().enumerate() {
             if i == exclude || it.kind != ItemKind::Group || it.cur <= 1.0 {
                 continue;
@@ -86,7 +88,7 @@ impl Dock {
             };
             // 4 px slack; the gaps between icons are too narrow otherwise.
             let pad = 4.0;
-            if u >= ix - pad && u <= ix + iw + pad && v >= iy - pad && v <= iy + ih + pad {
+            if px >= ix - pad && px <= ix + iw + pad && py >= iy - pad && py <= iy + ih + pad {
                 return Some(i);
             }
         }

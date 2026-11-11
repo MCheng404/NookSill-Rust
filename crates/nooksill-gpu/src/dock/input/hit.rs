@@ -3,6 +3,26 @@
 use super::*;
 
 impl Dock {
+    /// Window physical pixels to logical (along-bar, from-edge) coordinates.
+    ///
+    /// Win32 reports client pixels; `layout` works in dock axes, which swap
+    /// and flip on the left/right/top edges.
+    #[must_use]
+    pub fn logical_point(&self, px: f32, py: f32) -> (f32, f32) {
+        let lh = self.metrics.lh as f32;
+        if lh <= 0.0 {
+            return (px, py);
+        }
+        layout::to_logical(self.cfg.edge, px, py, lh)
+    }
+
+    /// Logical coordinates back to window physical pixels.
+    #[must_use]
+    pub fn window_point(&self, u: f32, v: f32) -> (f32, f32) {
+        let (x, y, _, _) = layout::map_rect(self.cfg.edge, u, v, 0.0, 0.0, self.metrics.lh as f32);
+        (x, y)
+    }
+
     /// Screen rectangle of one slot, physical pixels.
     ///
     /// Slot geometry is window-relative, so popups need the window offset.
@@ -17,11 +37,19 @@ impl Dock {
         let r = self.geom.slot_r.get(index)?;
         let top = self.geom.bar_top;
         let bottom = self.geom.bar_bottom;
+        let (x, y, w, h) = layout::map_rect(
+            self.cfg.edge,
+            *l,
+            top,
+            *r - *l,
+            bottom - top,
+            self.metrics.lh as f32,
+        );
         Some((
-            win_x + l.round() as i32,
-            win_y + top.round() as i32,
-            win_x + r.round() as i32,
-            win_y + bottom.round() as i32,
+            win_x + x.round() as i32,
+            win_y + y.round() as i32,
+            win_x + (x + w).round() as i32,
+            win_y + (y + h).round() as i32,
         ))
     }
 
@@ -72,12 +100,20 @@ impl Dock {
             let left = m
                 .widgets
                 .left_of(i, self.geom.bar_l, self.geom.bar_w, m.gap)?;
-            let w = m.widgets.width_of(k)? as f32;
+            let width = m.widgets.width_of(k)? as f32;
+            let (x, y, w, h) = layout::map_rect(
+                self.cfg.edge,
+                left,
+                self.geom.bar_top,
+                width,
+                m.bar_h,
+                m.lh as f32,
+            );
             return Some((
-                left + win_x as f32,
-                self.geom.bar_top + win_y as f32,
-                left + w + win_x as f32,
-                self.geom.bar_top + m.bar_h + win_y as f32,
+                x + win_x as f32,
+                y + win_y as f32,
+                x + w + win_x as f32,
+                y + h + win_y as f32,
             ));
         }
         None

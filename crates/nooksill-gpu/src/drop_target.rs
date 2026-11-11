@@ -54,7 +54,8 @@ impl DockDropTarget {
         if !p.is_null() {
             // SAFETY: Runs on the UI thread with the Dock alive and not mutably
             // borrowed: the main loop is not re-entered during `DragOver`.
-            unsafe { (*p).set_external_drop(x, y) }
+            let (u, v) = unsafe { (*p).logical_point(x, y) };
+            unsafe { (*p).set_external_drop(u, v) }
         }
     }
 }
@@ -160,10 +161,11 @@ impl IDropTarget_Impl for DockDropTarget_Impl {
         if !p.is_null() {
             // Clear the reserved slot before consuming the paths, otherwise the
             // insertion marker survives into the next frame.
+            let (u, v) = unsafe { (*p).logical_point(x, y) };
             unsafe {
                 (*p).clear_external_drop();
                 if !files.is_empty() {
-                    (*p).push_dropped_paths(files.clone(), x, y);
+                    (*p).push_dropped_paths(files.clone(), u, v);
                 }
             }
         }

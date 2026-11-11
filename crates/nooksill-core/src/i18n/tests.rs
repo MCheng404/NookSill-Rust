@@ -100,12 +100,8 @@ fn every_call_site_key_is_registered() {
     let mut found = 0;
     for path in files {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        // Strip comments but keep the file as one string: a call may wrap.
-        let code: String = text
-            .lines()
-            .map(|line| line.split("//").next().unwrap_or(""))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Keep the file as one string: rustfmt can wrap a call across lines.
+        let code = strip_comments(&text);
         for key in call_keys(&code) {
             assert!(
                 has_key(&key),
@@ -162,6 +158,88 @@ fn switch_language_and_fall_back_to_english() {
     assert_eq!(language(), Language::En);
 
     set_language(Language::En);
+}
+
+/// Blank out comments without touching string literals; byte offsets stay put.
+fn strip_comments(text: &str) -> String {
+    let src = text.as_bytes();
+    let mut out = Vec::with_capacity(src.len());
+    let mut i = 0;
+    let mut depth = 0usize;
+    while i < src.len() {
+        let c = src[i];
+        if depth > 0 {
+            if c == b'/' && i + 1 < src.len() && src[i + 1] == b'*' {
+                depth += 1;
+                out.extend_from_slice(b"  ");
+                i += 2;
+                continue;
+            }
+            if c == b'*' && i + 1 < src.len() && src[i + 1] == b'/' {
+                depth -= 1;
+                out.extend_from_slice(b"  ");
+                i += 2;
+                continue;
+            }
+            out.push(if c == b'\n' { b'\n' } else { b' ' });
+            i += 1;
+            continue;
+        }
+        if c == b'"'
+            || (c == b'\'' && i + 2 < src.len() && (src[i + 2] == b'\'' || src[i + 1] == b'\\'))
+        {
+            let quote = c;
+            out.push(c);
+            i += 1;
+            while i < src.len() {
+                let d = src[i];
+                out.push(d);
+                if d == b'\\' && i + 1 < src.len() {
+                    out.push(src[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                if d == quote {
+                    break;
+                }
+            }
+            continue;
+        }
+        if c == b'/' && i + 1 < src.len() && src[i + 1] == b'/' {
+            while i < src.len() && src[i] != b'\n' {
+                out.push(b' ');
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'/' && i + 1 < src.len() && src[i + 1] == b'*' {
+            depth = 1;
+            out.extend_from_slice(b"  ");
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+#[test]
+fn strip_comments_only_removes_real_comments() {
+    let source = r#"let url = "http://example.com"; t("Real"); // t("Fake")
+/* t("Block") */ t("After");
+/* outer /* t("Nested") */ */ t("Deep");
+let q = "a\"//b"; t("Escaped");
+let c = '/'; t("Char");
+"#;
+    let code = strip_comments(source);
+    for key in ["Real", "After", "Deep", "Escaped", "Char"] {
+        assert!(code.contains(&format!("t(\"{key}\")")), "lost {key}");
+    }
+    for key in ["Fake", "Block", "Nested"] {
+        assert!(!code.contains(&format!("t(\"{key}\")")), "kept {key}");
+    }
 }
 
 #[test]

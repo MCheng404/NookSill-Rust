@@ -511,9 +511,9 @@ impl Dock {
             Edge::Right => (ix - 10.0 * k - w, iy + ih / 2.0 - h / 2.0),
             Edge::Bottom => (ix + iw / 2.0 - w / 2.0, iy - 8.0 * k - h),
         };
-        // Clamp 4 px inside the window.
-        let win_w = m.lw as f32;
-        let win_h = m.lh as f32;
+        // Clamp 4 px inside the window; vertical docks swap width and height.
+        let (win_w, win_h) = layout::physical_size(self.cfg.edge, m.lw, m.lh);
+        let (win_w, win_h) = (win_w as f32, win_h as f32);
         if x < 4.0 * k {
             x = 4.0 * k;
         }

@@ -4,6 +4,7 @@
 //! ```text
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp
 //! cargo run -p nooksill-gpu --example dock_shot -- out.bmp light
+//! cargo run -p nooksill-gpu --example dock_shot -- out.bmp dark - - left
 //! ```
 //!
 //! Same render path as the app (`FrameRenderer` + `Dock::paint`), minus
@@ -33,6 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let demo_grad = args.next().as_deref() == Some("grad");
     // `insert` simulates an external file dropped between cells 2 and 3.
     let show_insert = args.next().as_deref() == Some("insert");
+    // Optional dock edge; a placeholder (`-`) keeps earlier flags positional.
+    let edge = args.next().unwrap_or_default();
     let ppp = 1.25_f32;
 
     let mut cfg = Config::defaults();
@@ -49,6 +52,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.apply_i32(Key::GRAD_A3, 90);
         cfg.apply_i32(Key::BgMode, 1);
     }
+    cfg.apply_i32(
+        Key::Edge,
+        match edge.as_str() {
+            "top" => 1,
+            "left" => 2,
+            "right" => 3,
+            _ => 0,
+        },
+    );
     cfg.border = true;
     cfg.theme = nooksill_core::config::DockTheme::Dark;
     cfg.mode = nooksill_core::config::DockMode::Always;

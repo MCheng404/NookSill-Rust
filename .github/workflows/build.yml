@@ -10,6 +10,7 @@ name: build
 # 同一套）。CI 不在这里拼任何字符串。
 #
 # 关掉 Pre-Release 的两种方式（测试流程用，不想让 Releases 页多一条）：
+# Every JS action below declares runs.using: node24; Node 20 was removed from runners.
 #   1. 仓库变量 DEBUG_PUBLISH = artifact（Settings → Variables）
 #   2. 手动触发时把 publish 选成 artifact（只影响这一次）
 
@@ -46,14 +47,14 @@ jobs:
     name: gate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: step-security/msvc-dev-cmd@v1.13.1
 
-      # Same two text gates as scripts/build.sh --gate; bash ships grep -P on
+      # Same text gates as scripts/build.sh --gate; bash ships grep -P on
       # the Windows runner, so no extra toolchain is needed.
       - name: source gates
         shell: bash
@@ -62,6 +63,16 @@ jobs:
           ./scripts/check-comments.sh
           ./scripts/check-size.sh --self-test
           ./scripts/check-size.sh
+
+      # The local commit-msg hook only covers local commits; CI checks the
+      # subject and body of HEAD so a pushed non-ASCII message is caught too.
+      - name: commit message
+        shell: bash
+        run: |
+          ./scripts/check-commit-msg.sh --self-test
+          msg="$(mktemp)"
+          git log -1 --pretty=%B > "$msg"
+          ./scripts/check-commit-msg.sh "$msg"
 
       - name: fmt
         run: cargo fmt --all -- --check
@@ -84,12 +95,12 @@ jobs:
     steps:
       # 构建号取 `git rev-list --count HEAD`，所以需要完整历史 —— 否则
       # shallow clone 里永远是 1，本地与 CI 的号会分成两套，没法比大小。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: step-security/msvc-dev-cmd@v1.13.1
 
       - name: package
         shell: bash
@@ -113,7 +124,7 @@ jobs:
       # 产物无条件上传：即便是"仅 Actions"模式，测试也要有东西可下。
       # 给的是 .exe 与 .sha256 两个裸文件 —— GitHub 的 artifact 存储内部
       # 仍然是 zip 容器（它的机制，改不了），但下载解出来的就是这两个文件。
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: NookSill-${{ steps.ver.outputs.value }}-win64-debug
           path: |
@@ -169,10 +180,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: step-security/msvc-dev-cmd@v1.13.1
 
       - name: tag matches Cargo version
         id: ver
@@ -202,7 +213,7 @@ jobs:
           awk -v v="$version" 'index($0, "## " v) == 1 { p = 1; next } /^## / { p = 0 } p' CHANGELOG.md > notes.md
           wc -l notes.md
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: NookSill ${{ steps.ver.outputs.version }}
           # 裸 exe + 校验和，不打 zip。

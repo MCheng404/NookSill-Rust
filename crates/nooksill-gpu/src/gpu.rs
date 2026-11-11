@@ -44,8 +44,8 @@ impl std::error::Error for GpuError {}
 pub enum Selection {
     /// Configured as automatic.
     Auto,
-    /// Matched by name.
-    Pinned,
+    /// A name was configured and resolved to this device (by name or PCI id).
+    Pinned { wanted: String },
     /// A name was configured but not found; fell back to automatic.
     Fallback {
         wanted: String,
@@ -62,7 +62,7 @@ impl Selection {
     pub fn describe(&self) -> String {
         match self {
             Self::Auto => nooksill_core::i18n::t("Automatic").to_owned(),
-            Self::Pinned => nooksill_core::i18n::t("Selected by config").to_owned(),
+            Self::Pinned { .. } => nooksill_core::i18n::t("Selected by config").to_owned(),
             Self::Fallback { wanted, available } => {
                 const SHOW: usize = 3;
                 let head: Vec<&str> = available.iter().take(SHOW).map(String::as_str).collect();
@@ -93,22 +93,17 @@ impl Selection {
         matches!(self, Self::Fallback { .. })
     }
 
-    /// Whether the ini `[Graphics] Adapter` still matches the adapter picked at
-    /// startup.
+    /// Whether the ini `[Graphics] Adapter` still matches the choice made at
+    /// startup; a change means the device must be rebuilt on the next start.
     ///
-    /// The device is created once per process, so runtime config edits never
-    /// switch it; the settings UI warns about the required restart instead.
-    /// `actual` is `Gpu::info.name`, which wgpu may suffix with a vendor name,
-    /// hence the mutual-contains comparison used in `pick_by_name` too.
+    /// Comparing against the configured name, not the device name, keeps this
+    /// correct when DXGI and wgpu name the same hardware differently.
     #[must_use]
-    pub fn matches_config(&self, configured: &str, actual: &str) -> bool {
+    pub fn matches_config(&self, configured: &str, _actual: &str) -> bool {
         match self {
-            Self::Auto => configured.is_empty(),
-            Self::Fallback { wanted, .. } => wanted.eq_ignore_ascii_case(configured),
-            Self::Pinned => {
-                let a = configured.trim().to_lowercase();
-                let b = actual.trim().to_lowercase();
-                !a.is_empty() && (a == b || a.contains(&b) || b.contains(&a))
+            Self::Auto => configured.trim().is_empty(),
+            Self::Pinned { wanted } | Self::Fallback { wanted, .. } => {
+                wanted.trim().eq_ignore_ascii_case(configured.trim())
             }
         }
     }
@@ -181,7 +176,12 @@ impl Gpu {
             (pick_auto(&instance)?, Selection::Auto)
         } else {
             match pick_by_name(&instance, wanted) {
-                Some(adapter) => (adapter, Selection::Pinned),
+                Some(adapter) => (
+                    adapter,
+                    Selection::Pinned {
+                        wanted: wanted.to_owned(),
+                    },
+                ),
                 None => {
                     let available: Vec<String> =
                         pollster::block_on(instance.enumerate_adapters(backends))
@@ -279,25 +279,35 @@ fn pick_auto(instance: &wgpu::Instance) -> Result<wgpu::Adapter, GpuError> {
     .map_err(|e| GpuError::Wgpu(format!("找不到可用适配器: {e}")))
 }
 
-/// Pick by name.
-///
-/// Exact match (case-insensitive) first, then mutual containment: wgpu may
-/// append a vendor suffix while the user picked the raw DXGI name.
+/// Pick by name, then by PCI ids when DXGI and wgpu disagree on the name.
 fn pick_by_name(instance: &wgpu::Instance, wanted: &str) -> Option<wgpu::Adapter> {
-    let needle = wanted.to_lowercase();
+    let needle = wanted.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
     let adapters = pollster::block_on(instance.enumerate_adapters(requested_backends()));
+    let name_matches = |name: &str| {
+        let name = name.to_lowercase();
+        name == needle || name.contains(&needle) || needle.contains(&name)
+    };
 
-    let exact = adapters
+    let index = adapters
         .iter()
-        .position(|a| a.get_info().name.to_lowercase() == needle);
-    let index = exact.or_else(|| {
-        adapters.iter().position(|a| {
-            let name = a.get_info().name.to_lowercase();
-            name.contains(&needle) || needle.contains(&name)
-        })
-    })?;
+        .position(|a| name_matches(&a.get_info().name));
+    if let Some(index) = index {
+        return adapters.into_iter().nth(index);
+    }
 
-    adapters.into_iter().nth(index)
+    // The settings list comes from DXGI; its PCI pair is a vendor-neutral
+    // identity that wgpu exposes as AdapterInfo.vendor / device.
+    let (vendor, device) = nooksill_platform::gpu::adapters()
+        .into_iter()
+        .find(|a| name_matches(&a.name))
+        .map(|a| (a.vendor, a.device_id))?;
+    adapters.into_iter().find(|a| {
+        let info = a.get_info();
+        info.vendor == vendor && info.device == device
+    })
 }
 
 #[cfg(test)]
@@ -337,11 +347,15 @@ mod tests {
         assert!(fb.matches_config("不存在的卡", actual));
         assert!(!fb.matches_config("AMD", actual));
 
-        // A vendor suffix still identifies the same card.
-        assert!(Selection::Pinned.matches_config("AMD Radeon", actual));
-        assert!(Selection::Pinned.matches_config("AMD Radeon(TM) 610M", actual));
-        assert!(!Selection::Pinned.matches_config("NVIDIA RTX 5070", actual));
-        assert!(!Selection::Pinned.matches_config("", actual));
+        // The configured name is the contract, even if wgpu names the device
+        // differently (the PCI-id path can select such an adapter).
+        let pinned = Selection::Pinned {
+            wanted: "AMD Radeon(TM) 610M".to_owned(),
+        };
+        assert!(pinned.matches_config("AMD Radeon(TM) 610M", actual));
+        assert!(pinned.matches_config("  amd radeon(tm) 610m  ", "Totally different name"));
+        assert!(!pinned.matches_config("NVIDIA RTX 5070", actual));
+        assert!(!pinned.matches_config("", actual));
     }
 
     #[test]

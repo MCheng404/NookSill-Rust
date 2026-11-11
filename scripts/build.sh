@@ -11,7 +11,7 @@
 #   ./scripts/build.sh --check        # cargo check (fastest feedback)
 #   ./scripts/build.sh --clippy       # clippy -D warnings
 #   ./scripts/build.sh --fmt          # format check
-#   ./scripts/build.sh --gate         # comments, size, fmt, clippy, tests
+#   ./scripts/build.sh --gate         # comments, size, commit msg, fmt, clippy, tests
 #   ./scripts/build.sh --exe          # print the binary path
 #   ./scripts/build.sh --version      # print the pinned build version
 #   ./scripts/package.sh [--release]  # build and package into dist/
@@ -76,15 +76,17 @@ case "$ACTION" in
     gate)
         # All steps run before reporting, so one pass shows every problem.
         status=0
-        echo "== 1/5 comments =="
+        echo "== 1/6 comments =="
         ./scripts/check-comments.sh --self-test && ./scripts/check-comments.sh || status=1
-        echo "== 2/5 size =="
+        echo "== 2/6 size =="
         ./scripts/check-size.sh --self-test && ./scripts/check-size.sh || status=1
-        echo "== 3/5 fmt =="
+        echo "== 3/6 commit msg =="
+        ./scripts/check-commit-msg.sh --self-test || status=1
+        echo "== 4/6 fmt =="
         cargo fmt --all -- --check || status=1
-        echo "== 4/5 clippy =="
+        echo "== 5/6 clippy =="
         cargo clippy --target "$TARGET" --workspace --all-targets -- -D warnings ${EXTRA[@]+"${EXTRA[@]}"} || status=1
-        echo "== 5/5 test =="
+        echo "== 6/6 test =="
         cargo test --target "$TARGET" --workspace --lib --tests ${EXTRA[@]+"${EXTRA[@]}"} || status=1
         echo
         if [ "$status" -eq 0 ]; then

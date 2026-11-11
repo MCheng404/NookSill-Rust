@@ -72,9 +72,12 @@ GetUserDefaultUILanguage ─┴→ i18n::configure → AtomicU8 → t() / fmt()
 文案放在 `core` 是因为四个 crate 都依赖它，而 `core` 零依赖、不碰 Win32；
 系统语言由 `platform::locale` 读一次，启动时与配置合成进程级语言。英文文案
 自身就是键，同时是底层语言：翻译表按英文键排序、二分查找，缺项回退英文。
-每种语言一个独立 `.rs`，加语言 = 加一个文件 + `Language` 加一项。动态文案走
-`fmt(key, args)` 的 `{0}` 占位，译文可以自己决定语序；`i18n::tests` 扫全部
-源码，保证每个调用点都登记在 `en.rs::TEXT`，翻译表不含野键。
+每种语言一个骨架 `.rs`：英文与简体中文的键表按字母分段放在 `en/` 与 `zh_cn/`
+（`first.rs` / `second.rs`），由骨架里的 const 块在编译期拼回**单一** `TEXT`
+切片，所以 `lookup` 仍是二分查找、公开路径不变（ADR-076）。加语言 =
+加一个骨架 + `Language` 加一项。动态文案走 `fmt(key, args)` 的 `{0}` 占位，
+译文可以自己决定语序；`i18n::tests` 扫全部源码，保证每个调用点都登记在
+`en.rs::TEXT`、翻译表不含野键，并守住分段拼接后的有序性。
 
 不随语言切换的三类：农历 / 节气 / 干支的名称（文化数据，面板标签已本地化）、控制台日志与 Win32
 诊断串、测试断言消息。繁体表有意保持部分翻译，用于验证回退链。
@@ -284,9 +287,10 @@ async 运行时带来的调度开销与栈占用都不划算。
    与下一轮组合）。另外 egui 的 `Event::Text("\n")` 会被忽略，换行只能
    靠 `Event::Key{Enter}` —— 多行框别再往 `WM_CHAR` 里塞换行。
 9. **拖放落点走 `GetCursorPos + ScreenToClient`**，不用 `DragQueryPoint`
-   （坐标系文档不明确）。落点换算插入下标时，四边停靠的纵向轴不同：
-   横排取 `x`，左/右停靠取 `y`。一批 `WM_DROPFILES` 只认第一条落点。
-   拿不到光标就退回追加末尾，不能退化成插到第 0 位。
+   （坐标系文档不明确）。窗口像素先在 `Dock::logical_point` 转成逻辑轴，
+   `drop_index_at` 只认沿栏的 `u`；四边不再各写一套 x/y 分支。一批
+   `WM_DROPFILES` 只认第一条落点。拿不到光标就退回追加末尾，不能退化成
+   插到第 0 位。
 10. **没有周期动画的面板，`render()` 末尾必须把 `next_repaint` 推到未来**。
     这些窗口全靠事件把闹钟设回 `now`；若只设不推进，`due()` 在可见期间
     恒为真，主循环会把整个 Dock 拖进 60 fps 常驻提交。要周期动画的
@@ -369,9 +373,10 @@ async 运行时带来的调度开销与栈占用都不划算。
     DPI 无关的，重复缩放会让它在 150% 下变大 1.5 倍。ini 里的旧值是
     物理像素，由 `Config::migrate_units`（v3 → v4）一次性换算。
 
-24. **面向用户的文案只有一条出口**：`core::i18n::t / fmt`，英文文案即键。新增文案必须在 `i18n/en.rs::TEXT` 登记（有序、无重复），中文放 `i18n/zh_cn.rs`，缺项自动回退英文；`i18n::tests` 扫源码守住登记完整性，`options.rs` 的测试守住下拉选项常量。下拉表只存英文、由 `combo` 一处翻译；用显示文案做命令分派要写成 guard 比较，不能进 `match` 模式。窗口标题是创建期的 Win32 字符串，语言变化时已打开的设置窗口要显式 `SetWindowTextW`。
+24. **面向用户的文案只有一条出口**：`core::i18n::t / fmt`，英文文案即键。新增文案必须登记在 `i18n/en/` 的对应字母段（拼接后有序、无重复），中文放 `i18n/zh_cn/` 的对应段，缺项自动回退英文；`i18n::tests` 扫源码守住登记完整性，`options.rs` 的测试守住下拉选项常量。下拉表只存英文、由 `combo` 一处翻译；用显示文案做命令分派要写成 guard 比较，不能进 `match` 模式。窗口标题是创建期的 Win32 字符串，语言变化时已打开的设置窗口要显式 `SetWindowTextW`。
 25. **控件 ID 不是显示文案**：`Id::unique` 哈希传入的内容，翻译后的 label 会随语言变化而改变控件身份。ID 盐只用语义键（下标、动作编号、固定字符串）；egui 0.37 里 `Id::new` 已弃用，不要改回去。
 26. **GPU 回读的每条返回路径都要 `unmap()`**，且 `Device::poll` 必须带超时。`unmap()` 会取消此前的 `map_async`，漏掉会让下一帧提交失败；`wait_indefinitely()` 在驱动挂起时会永久卡住 UI 线程（ADR-075）。
+27. **Dock 内部只有一种坐标：逻辑轴 `(u,v)`**（`u` 沿栏、`v` 离屏幕边缘）。Win32 给的是窗口像素，必须在 WndProc / `DockDropTarget` / `cursor::client_pos` 这些边界经 `logical_point` 转换；反过来屏幕矩形（`slot_screen_rect`、`widget_screen_rect`、`hot_phys`、`icon_rect`）必须走 `map_rect`。唯一例外是烟雾光标的窗口像素，用 `window_point` 转回。漏掉 `to_logical`，靠左/靠右时命中、放大、拖放与弹窗锚点会整体错位（ADR-077）。
 
 ## 八、与 C 版的模块映射
 
@@ -442,12 +447,13 @@ async 运行时带来的调度开销与栈占用都不划算。
 `Dock` 的方法仍是同一类型上的 `impl`，probe 的三个设备模块仍以 `super::`
 访问 crate root 的定义。
 
-规模门禁把 `i18n/en.rs`(599) 与 `zh_cn.rs`(592) 顶到上限：再加文案会撞线，
-届时按字母段拆 `en/` / `zh_cn/`，不要放宽门禁。
+规模门禁不允许给纯数据表留白名单：`en.rs`(599) / `zh_cn.rs`(592) 已按字母段
+拆到 `en/` / `zh_cn/`，骨架各 30 行左右、数据段各约 300 行，靠 const 块拼回
+单一 `TEXT`（ADR-076）。再加文案只需放进正确的字母段。
 
 新增的 `core/src/i18n/` 按同一套手法集中组织：`mod.rs`（语言状态、查表、
-`fmt`）、`en.rs` / `zh_cn.rs` / `zh_tw.rs`（各语言独立数据）、`tests.rs`。
-`platform/src/locale.rs` 只负责读系统 LANGID，不含任何文案。
+`fmt`）、`en.rs` / `zh_cn.rs`（骨架 + 分段数据）、`zh_tw.rs`（部分翻译）、
+`tests.rs`。`platform/src/locale.rs` 只负责读系统 LANGID，不含任何文案。
 
 测试文件同样拆：`tests.rs` → `tests/{mod,分组}.rs`，共享辅助函数留在
 `tests/mod.rs`，子模块首行 `use super::*;` 继承父模块的导入。

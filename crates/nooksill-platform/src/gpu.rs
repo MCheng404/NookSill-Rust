@@ -2,7 +2,12 @@
 //! DXGI is used because the settings UI needs no GPU layer, and it supplies the
 //! same names the wgpu DX12 backend matches. Selection stays in `nooksill-gpu`.
 
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+};
+
+/// DXGI reports a software adapter through this flag, not through its name.
+const SOFTWARE_FLAG: u32 = DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32;
 
 /// Adapter class. A heuristic for sorting and labels, never a logic branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,7 +91,7 @@ pub fn adapters() -> Vec<AdapterInfo> {
             continue;
         }
         let dedicated_mb = desc.DedicatedVideoMemory / (1024 * 1024);
-        let kind = classify(&name, dedicated_mb);
+        let kind = classify(desc.Flags, dedicated_mb);
         let info = AdapterInfo {
             name,
             vendor: desc.VendorId,
@@ -105,13 +110,12 @@ pub fn adapters() -> Vec<AdapterInfo> {
     out
 }
 
-/// Classify by name and video memory size.
+/// DXGI flags decide software adapters; dedicated memory splits the rest.
 ///
-/// The 1 GB threshold works because an iGPU may reserve 256-512 MB (an AMD 610M
-/// reports 485 MB) while any recent discrete card exceeds 1 GB. A wrong guess
-/// only mislabels the UI.
-fn classify(name: &str, dedicated_mb: usize) -> AdapterKind {
-    if name.contains("Microsoft Basic Render") || name.contains("Microsoft Basic Display") {
+/// The 1 GB threshold works because an iGPU may reserve 256-512 MB while any
+/// recent discrete card exceeds 1 GB. A wrong guess only mislabels the UI.
+fn classify(flags: u32, dedicated_mb: usize) -> AdapterKind {
+    if flags & SOFTWARE_FLAG != 0 {
         AdapterKind::Software
     } else if dedicated_mb >= 1024 {
         AdapterKind::Discrete
@@ -124,23 +128,18 @@ fn classify(name: &str, dedicated_mb: usize) -> AdapterKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{adapters, classify, AdapterKind};
+    use super::{adapters, classify, AdapterKind, SOFTWARE_FLAG};
 
     #[test]
-    fn classify_uses_vendor_neutral_heuristics() {
-        assert_eq!(
-            classify("AMD Radeon(TM) 610M", 485),
-            AdapterKind::Integrated
-        );
-        assert_eq!(
-            classify("NVIDIA GeForce RTX 5070 Laptop GPU", 7891),
-            AdapterKind::Discrete
-        );
-        assert_eq!(
-            classify("Microsoft Basic Render Driver", 0),
-            AdapterKind::Software
-        );
-        assert_eq!(classify("Some Virtual GPU", 0), AdapterKind::Other);
+    fn classify_uses_dxgi_flags_not_adapter_names() {
+        assert_eq!(classify(0, 485), AdapterKind::Integrated);
+        assert_eq!(classify(0, 7891), AdapterKind::Discrete);
+        assert_eq!(classify(SOFTWARE_FLAG, 0), AdapterKind::Software);
+        // A software adapter with reported VRAM is still software.
+        assert_eq!(classify(SOFTWARE_FLAG, 4096), AdapterKind::Software);
+        assert_eq!(classify(0, 0), AdapterKind::Other);
+        // Other DXGI flags must not be mistaken for the software bit.
+        assert_eq!(classify(1, 2048), AdapterKind::Discrete);
     }
 
     #[test]

@@ -148,8 +148,9 @@ pub(super) fn item_from_drop(path: &str) -> Option<Item> {
 /// Do not divide by ppp: dock geometry is physical too, or hit tests shift by
 /// one DPI factor.
 pub(super) fn physical_xy(lparam: LPARAM) -> (f32, f32) {
-    let x = (lparam.0 & 0xFFFF) as f32;
-    let y = ((lparam.0 >> 16) & 0xFFFF) as f32;
+    // Mouse coordinates are signed 16-bit, including while capture is active.
+    let x = (lparam.0 & 0xFFFF) as i16 as f32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
     (x, y)
 }
 

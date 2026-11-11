@@ -25,9 +25,10 @@ source scripts/env.sh              # 必须。注入 INCLUDE/LIB/PATH + CC/CXX/A
 ./scripts/build.sh --test          # 全部测试（跳过 doctest）
 ./scripts/build.sh --clippy        # -D warnings
 ./scripts/build.sh --fmt           # 仅检查格式
-./scripts/build.sh --gate          # 五步门禁：注释 + 规模 + fmt + clippy + 测试
+./scripts/build.sh --gate          # 六步门禁：注释 + 规模 + 提交信息 + fmt + clippy + 测试
 ./scripts/check-comments.sh        # 只跑注释门禁
 ./scripts/check-size.sh            # 只跑单文件规模门禁
+./scripts/check-commit-msg.sh <file> # 只跑提交信息检查（--self-test 跑自测）
 ./scripts/build.sh --exe           # 打印产物路径
 ./scripts/build.sh --version       # 打印本次构建钉住的版本号
 ./scripts/package.sh [--release]   # 构建 + 按版本号打包到 dist/（CI 用同一脚本）
@@ -107,7 +108,7 @@ scripts/version.rs ──┬── crates/nooksill-core/build.rs  →  env!("NOO
 | `nooksill-dock` | `target/x86_64-pc-windows-msvc/{debug,release}/nooksill-dock.exe` | Dock 主程序。ADR-035 删除 GDI+ 老实现后**唯一**的 Dock 可执行文件 |
 | `probe` | 同目录 `probe.exe` | 显存/后端探针，只建设备不建窗口（`scripts/probe-mem.sh`） |
 | `settings_shot` | `cargo run -p nooksill-gpu --example settings_shot -- <出图.bmp>` | 离屏渲染任意一页设置界面，走真实 `FrameRenderer` |
-| `dock_shot` | `cargo run -p nooksill-gpu --example dock_shot -- <出图.bmp> [light] [grad]` | 离屏渲染 Dock 栏（含倒影/边框），倒影走与真实窗口同一条 `mirror_rows` |
+| `dock_shot` | `cargo run -p nooksill-gpu --example dock_shot -- <出图.bmp> [light] [grad] [insert] [bottom/top/left/right]` | 离屏渲染 Dock 栏（含倒影/边框），倒影走与真实窗口同一条 `mirror_rows`；最后一项可选，用于核对四边停靠 |
 
 `Cargo.toml` 里 `[[bin]]` 是显式声明的；`src/bin/` 下没有其它自动发现的可执行文件。
 README 里早期提过的 `nooksill-spike`、`NookSill.exe` 都已在 ADR-035 / ADR-036 删除。
@@ -281,9 +282,13 @@ cargo run -q -p nooksill-core --example config_table     # 重新生成 CONFIG.m
 
 | job | 触发 | 干什么 |
 |---|---|---|
-| `gate` | 每次 push（任意分支）/ PR | 注释 / 规模两个文本门禁（bash）→ `fmt --check` → `clippy -D warnings` → `--lib --tests`，与本地 `--gate` 同一批命令 |
+| `gate` | 每次 push（任意分支）/ PR | 注释 / 规模 / 提交信息三个文本门禁（bash，含 `--self-test`）→ `fmt --check` → `clippy -D warnings` → `--lib --tests`，与本地 `--gate` 同一批命令 |
 | `debug` | 每次 push（任意分支）/ 手动触发 | `package.sh`（构建号 = `git rev-list --count HEAD`，与本地同一套）→ 上传 Actions 产物（`NookSill-<ver>-win64-debug.exe` + `.sha256`，保留 14 天）；默认**再发一条 rolling Pre-Release** |
 | `release` | 推 `v*` 标签 | 校验标签与 `Cargo.toml` 一致 → `package.sh --release` → 发**正式 Release**（资产是裸 exe + `.sha256`；非草稿、非预发布、抢 `Latest`） |
+
+四个 JS action 都声明 `runs.using: node24`（逐个核对上游 `action.yml`）：
+`checkout@v6`、`step-security/msvc-dev-cmd@v1.13.1`、`upload-artifact@v6`、
+`action-gh-release@v3`。升级时先核实目标版本的运行时与输入项，不要只按大版本号猜。
 
 ### 8.1 Debug 的两个出口
 

@@ -1023,3 +1023,38 @@
 - 明确否决：`lerp_to` 已用 `1-(1-k)^(dt/16.67)`，改 `1-exp(-k·dt)` 属重复劳动；`illusion.p.t` 已由真实 dt 线性推进且以 `t>=1.0` 停止，改指数形式会渐近不到 1.0、导致永不停止重绘；异步/双缓冲回读与 DComp+swapchain 需重写 `Offscreen` 生命周期、帧序与倒影绑定，而小窗口同步回读常 1–2 ms，收益不足。
 
 **代价**：文本省略由 egui 决定，断字位置可能与旧的逐字符实现略有差异（已用 `panels_shot` 7 张出图核对）；200 ms 回读超时在驱动异常时丢一帧、下帧重试，取代无限挂起；egui 请求重绘期间会开启 1 ms 定时器精度，功耗略升，空闲仍为零帧。保持同步回读意味着 UI 线程仍有每帧一次阻塞点，若将来出现持续 60 fps 全屏动画或改动 illusion 的时间参数化（破坏重绘终止条件），必须重新评估异步化；保持全局 atomics 意味着多实例场景需重新设计配置同步。
+
+---
+
+## ADR-076 · 翻译表分段存储，编译期拼回单一公开切片
+
+**决定**：
+- `en.rs` / `zh_cn.rs` 只留骨架；英文键与简体译文按字母顺序分到 `en/{first,second}.rs`、`zh_cn/{first,second}.rs`，每段约 300 行。
+- 两个骨架用 const 块把分段拼成**单一** `TEXT` 切片；`lookup`、`has_key`、完整性测试与所有公开路径不变。
+- 不用 `include!` 注入数组元素，也不把查询改成分段二分。
+
+**依据**：
+- 规模门禁把生产 `.rs` 限在 600 行，`en.rs`(599) / `zh_cn.rs`(592) 已贴线，新增一条文案即失败；放宽门禁或加白名单会让规则失去意义（ADR-075 已拒绝同类做法）。
+- rustc 实测：`const X: &[&str] = &[include!("frag.rs")];` 且片段含多个逗号分隔项时报 `error: include macro expected single expression in source`（`incomplete_include` 默认 deny）。
+- 分段二分要改 `Language::table()` 的返回类型，波及 `mod.rs`、`tests.rs` 与多个断言；const 块只动两个骨架文件。
+- Rust const 上下文支持 while 循环与数组索引，拼接在编译期完成，运行期零分配、零额外查找。
+
+**代价**：const 块在编译期复制约 600 个静态引用，编译开销可忽略，但骨架不如单个字面量直观；新增键必须放进正确的字母段，顺序由 `i18n::tests` 的有序性断言守住。若某一段再逼近 600 行，继续按字母细分即可。
+
+---
+
+## ADR-077 · 坐标只在边界转换，显卡判断只用结构化字段
+
+**决定**：
+- `Dock` 内部统一使用逻辑轴 `(u,v)`：Win32 的窗口像素在 WndProc、`DockDropTarget`、`cursor::client_pos` 三处边界经 `Dock::logical_point`（`layout::to_logical`）转换；反过来所有屏幕/窗口矩形经 `map_rect` 输出。烟雾光标是唯一需要窗口像素的消费者，用 `window_point` 转回。
+- 删掉 `drop_index_at` 里「横排取 x、竖向取 y」的窗口坐标分支，四边统一用逻辑 `u`；`group_under` 把逻辑点转成窗口点再与 `icon_rect` 比较。
+- 启动时设备创建读取 `[Graphics] Adapter`（`Gpu::new(&dock.cfg.adapter)`），不再硬编码空串。
+- 软件适配器由 DXGI `DXGI_ADAPTER_FLAG_SOFTWARE` 位判定，不再匹配厂商/驱动名；名字匹配失败时按 PCI `(vendor, device)` 兜底；`Selection::Pinned` 保存配置名，`matches_config` 只比配置是否变化。
+
+**依据**：
+- `layout::map_rect` 与 `to_logical` 是互逆契约，`core/layout/tests/metrics.rs::edge_mapping_roundtrips` 四边验证；此前 `to_logical` 在主程序中零调用，导致靠左/靠右时鼠标窗口像素被当成逻辑轴，命中、放大、拖放、弹窗锚点整体错位。新增 `dock/tests/hit.rs` 的四边往返与矩形转置断言。
+- Microsoft Learn：`DXGI_ADAPTER_FLAG_SOFTWARE = 2` 表示软件适配器，`DXGI_ADAPTER_DESC1.Flags` 是该类型的成员 → https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ne-dxgi-dxgi_adapter_flag 、 https://learn.microsoft.com/en-us/windows/win32/api/dxgi/ns-dxgi-dxgi_adapter_desc1 。名字字符串不是稳定标识（不同驱动、语言、后端会变）。
+- wgpu 30 `AdapterInfo.vendor/device` 是后端特异的 PCI id，`device_type` 是结构化设备类型 → https://docs.rs/wgpu-types/30.0.0/src/wgpu_types/adapter.rs.html 。DXGI 与 wgpu DX12 后端都以 PCI id 标识同一块硬件，故可做名字之外的稳定匹配。
+- Win32 鼠标 `LPARAM` 低/高 16 位是有符号 `i16`（`MAKEPOINTS`），`SetCapture` 拖出窗口时必须按有符号解析，否则得到 65535。
+
+**代价**：所有新增输入入口都必须先转换坐标，漏一处就回到旧 bug；`physical_xy` 改为有符号后菜单窗口也受影响（正向修复）。PCI 兜底只在名字匹配失败时才枚举 DXGI，启动多一次同步枚举，且在非 DX12 后端（Vulkan/GL）id 表示可能不同，名字匹配仍优先。独显/核显分档仍依赖专用显存阈值——DXGI 没有设备类型字段，这一档只影响 UI 排序与标签，不参与设备选择。
