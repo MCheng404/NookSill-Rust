@@ -189,14 +189,17 @@ pub(super) fn maybe_prompt(state: &mut SettingsState, cfg: &nooksill_core::confi
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(90)
         .collect();
+    // Show the upgrade path explicitly: a beta build can carry a lower-looking
+    // version triple than the stable install it was cut from.
     let mut modal = Modal::new(
         nooksill_core::i18n::t("Update available"),
         &nooksill_core::i18n::fmt(
-            "{0} is available on the {1} channel.",
-            &[version.as_str(), channel],
+            "{0} → {1} is available to download.",
+            &[nooksill_core::VERSION, version.as_str()],
         ),
     )
     .with_detail(&detail);
+    modal.badge = channel.to_owned();
     modal.actions = vec![
         ModalAction::primary(
             nooksill_core::i18n::t("Download and verify"),

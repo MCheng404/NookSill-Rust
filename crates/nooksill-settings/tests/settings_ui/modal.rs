@@ -63,6 +63,20 @@ fn 不再提示写回配置而不是本地状态() {
 }
 
 #[test]
+fn 更新弹窗显示版本路径与通道徽标() {
+    let mut h = new_harness();
+    offer(&mut h);
+    let modal = h.state().ui.modal.as_ref().expect("popup open");
+    assert!(
+        modal.body.contains(nooksill_core::VERSION),
+        "应显示当前版本：{}",
+        modal.body
+    );
+    assert!(modal.body.contains("2.1.0"), "应显示目标版本");
+    assert_eq!(modal.badge, "稳定版", "通道要有可见标识");
+}
+
+#[test]
 fn 点击弹窗内部不会误关() {
     let mut h = new_harness();
     offer(&mut h);

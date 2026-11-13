@@ -203,7 +203,9 @@ fn rate_limit_error_is_readable() {
             ("retry-after".to_owned(), "37".to_owned()),
         ],
     };
-    assert!(http::rate_limited(&res).to_string().contains("37"));
+    let (err, wait) = http::rate_limited(&res, 0);
+    assert!(err.to_string().contains("37"));
+    assert_eq!(wait, 37);
 }
 
 #[test]
@@ -282,4 +284,16 @@ fn tampered_staged_file_is_rejected() {
         .with_file_name("NookSill.update.marker");
     let _ = std::fs::remove_file(marker);
     let _ = std::fs::remove_file(staged);
+}
+
+#[test]
+fn rate_limit_backoff_is_persisted_and_cleared() {
+    let path = cache::sibling("NookSill.retry.cache");
+    let _ = std::fs::remove_file(&path);
+    assert!(cache::retry_until().is_none());
+    cache::remember_retry(999_999_999);
+    assert_eq!(cache::retry_until(), Some(999_999_999));
+    cache::clear_retry();
+    assert!(cache::retry_until().is_none());
+    let _ = std::fs::remove_file(path);
 }

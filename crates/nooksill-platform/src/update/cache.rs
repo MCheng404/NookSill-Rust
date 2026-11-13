@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 const RELEASE_CACHE: &str = "NookSill.releases.cache";
 const MIRROR_CACHE: &str = "NookSill.mirror.cache";
+const RETRY_CACHE: &str = "NookSill.retry.cache";
 
 /// A file beside the running exe, so all update files stay on one volume.
 pub(crate) fn sibling(name: &str) -> PathBuf {
@@ -40,4 +41,21 @@ pub(crate) fn sticky_mirror() -> Option<String> {
 
 pub(crate) fn remember_mirror(base: &str) {
     let _ = std::fs::write(sibling(MIRROR_CACHE), base);
+}
+
+/// UTC epoch seconds before which no metadata request should be sent.
+pub(crate) fn retry_until() -> Option<u64> {
+    std::fs::read_to_string(sibling(RETRY_CACHE))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+pub(crate) fn remember_retry(until: u64) {
+    let _ = std::fs::write(sibling(RETRY_CACHE), until.to_string());
+}
+
+pub(crate) fn clear_retry() {
+    let _ = std::fs::remove_file(sibling(RETRY_CACHE));
 }

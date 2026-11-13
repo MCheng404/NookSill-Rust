@@ -203,11 +203,11 @@ impl WidgetStrip {
         if self.on_left {
             // Lay out right-to-left from the bar's left edge.
             let mut u = bar_l - gap_w;
-            for j in (0..self.len).rev() {
+            for (j, slot) in self.items.iter().take(self.len).enumerate().rev() {
                 // `build` fills the first `len` slots but the fields are public;
                 // a hole must resolve to `None`, not panic the UI.
-                let (_, wj) = self.items[j]?;
-                u -= wj as f32;
+                let (_, wj) = slot.as_ref()?;
+                u -= *wj as f32;
                 if j == i {
                     return Some(u);
                 }
@@ -217,12 +217,12 @@ impl WidgetStrip {
         } else {
             // Lay out left-to-right from the bar's right edge.
             let mut u = bar_l + bar_w + gap_w;
-            for j in 0..self.len {
+            for (j, slot) in self.items.iter().take(self.len).enumerate() {
                 if j == i {
                     return Some(u);
                 }
-                let (_, wj) = self.items[j]?;
-                u += wj as f32 + gap_w;
+                let (_, wj) = slot.as_ref()?;
+                u += *wj as f32 + gap_w;
             }
             None
         }

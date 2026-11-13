@@ -14,6 +14,8 @@ use nooksill_platform::update::{self, Channel};
 pub(super) enum UpdateMsg {
     /// One line of progress text.
     Status(String),
+    /// The daily check finished successfully; store its UTC day stamp.
+    Checked(i32),
     /// A new version was found, with the release info the download needs.
     Available(Box<update::Release>),
     /// Already up to date, nothing to download.
@@ -29,8 +31,30 @@ impl App {
         Channel::from_i32(self.dock.cfg.get_i32(Key::UPD_CHANNEL))
     }
 
-    /// Starts the update check on a thread and returns to the main loop.
+    /// Starts a manual check; it does not advance the daily stamp.
     pub(super) fn start_update_check(&mut self) {
+        self.spawn_check(None);
+    }
+
+    /// One automatic check per calendar day, started during boot.
+    ///
+    /// The day stamp is written only after a successful answer: a rate-limited
+    /// or offline check must not consume the whole day's retry budget.
+    pub(super) fn maybe_auto_check(&mut self) {
+        if self.dock.cfg.get_i32(Key::UPD_CHK) == 0 {
+            return;
+        }
+        let day = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 86_400) as i32)
+            .unwrap_or(0);
+        if self.dock.cfg.get_i32(Key::UPD_LAST) == day {
+            return;
+        }
+        self.spawn_check(Some(day));
+    }
+
+    fn spawn_check(&mut self, day: Option<i32>) {
         if self.update_rx.is_some() {
             return;
         }
@@ -43,6 +67,9 @@ impl App {
             ));
             match update::latest_release(channel) {
                 Ok(rel) => {
+                    if let Some(day) = day {
+                        let _ = tx.send(UpdateMsg::Checked(day));
+                    }
                     let installed = update::Version::parse(nooksill_core::VERSION);
                     // Channel selection is explicit now: a stable install can
                     // opt into beta, and a beta install can opt out.
@@ -58,26 +85,6 @@ impl App {
                 }
             }
         });
-    }
-
-    /// One automatic check per calendar day, started during boot.
-    ///
-    /// `UpdLast` stores UTC days so a machine that sleeps across midnight does
-    /// not check again on every wake in the same day.
-    pub(super) fn maybe_auto_check(&mut self) {
-        if self.dock.cfg.get_i32(Key::UPD_CHK) == 0 {
-            return;
-        }
-        let day = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.as_secs() / 86_400) as i32)
-            .unwrap_or(0);
-        if self.dock.cfg.get_i32(Key::UPD_LAST) == day {
-            return;
-        }
-        self.dock.cfg.apply_i32(Key::UPD_LAST, day);
-        self.touch_cfg();
-        self.start_update_check();
     }
 
     /// Downloads: picks a mirror by the switches (no direct connection when
@@ -153,6 +160,10 @@ impl App {
                 .map(|sw| sw.state.update.clone())
                 .unwrap_or_default();
             match msg {
+                UpdateMsg::Checked(day) => {
+                    self.dock.cfg.apply_i32(Key::UPD_LAST, day);
+                    self.touch_cfg();
+                }
                 UpdateMsg::Status(text) => {
                     view.status = text;
                     view.busy = true;

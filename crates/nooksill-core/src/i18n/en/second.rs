@@ -291,6 +291,7 @@ pub const TEXT: &[&str] = &[
     "{0} paths could not be recognised",
     "{0} to-dos",
     "{0} {1}  To-do {2}/{3}",
+    "{0} → {1} is available to download.",
     "{0}-{1}-{2}  {3}{4}",
     "− 1 minute",
     "＋ Add to-do…",

@@ -329,11 +329,13 @@ fn paint_icons(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
             );
         }
         let (r, gr, b) = palette(i, cfg.get_i32(Key::UI_ACCENT));
+        let face = icon_rect.shrink((size * 0.10).max(0.5));
         painter.rect_filled(
-            icon_rect.shrink((size * 0.10).max(0.5)),
+            face,
             CornerRadius::same((size * 0.22).round() as u8),
             Color32::from_rgb(r, gr, b),
         );
+        paint_glyph(painter, face, i);
         if dots && i % 2 == 0 {
             let below = if g.vertical {
                 icon_rect.right_center() + Vec2::new(3.0, 0.0)
@@ -353,6 +355,48 @@ fn paint_icons(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
                 );
             } else {
                 painter.circle_filled(below, (size * 0.055).max(1.5), c);
+            }
+        }
+    }
+}
+
+/// A small monochrome sign on each colour plate, so the sketch reads as app
+/// icons rather than a colour swatch. Four shapes, repeated deterministically.
+fn paint_glyph(painter: &egui::Painter, rect: Rect, i: usize) {
+    let fg = Color32::from_rgba_unmultiplied(255, 255, 255, 170);
+    let c = rect.center();
+    let s = rect.width().min(rect.height());
+    let stroke = Stroke::new((s * 0.05).clamp(1.0, 3.0), fg);
+    match i % 4 {
+        0 => {
+            painter.circle_filled(c, s * 0.16, fg);
+        }
+        1 => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, Vec2::splat(s * 0.34)),
+                CornerRadius::same((s * 0.08).round() as u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+        2 => {
+            for k in -1..=1 {
+                let y = c.y + k as f32 * s * 0.13;
+                painter.line_segment(
+                    [egui::pos2(c.x - s * 0.18, y), egui::pos2(c.x + s * 0.18, y)],
+                    stroke,
+                );
+            }
+        }
+        _ => {
+            for dx in [-1.0_f32, 1.0] {
+                for dy in [-1.0_f32, 1.0] {
+                    painter.circle_filled(
+                        c + Vec2::new(dx * s * 0.12, dy * s * 0.12),
+                        s * 0.055,
+                        fg,
+                    );
+                }
             }
         }
     }

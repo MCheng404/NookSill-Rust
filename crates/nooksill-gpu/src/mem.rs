@@ -33,9 +33,12 @@ impl MemStats {
         if queried.is_err() {
             return Self::default();
         }
+        let working_set = counters.WorkingSetSize;
         Self {
-            working_set: counters.WorkingSetSize,
-            peak_working_set: counters.PeakWorkingSetSize,
+            working_set,
+            // Windows can report a peak that lags a just-grown working set, so
+            // the peak is clamped to the current value.
+            peak_working_set: counters.PeakWorkingSetSize.max(working_set),
             private: counters.PrivateUsage,
         }
     }

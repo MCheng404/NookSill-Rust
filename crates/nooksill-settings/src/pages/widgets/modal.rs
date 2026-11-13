@@ -37,6 +37,8 @@ impl ModalAction {
 #[derive(Clone, Debug)]
 pub struct Modal {
     pub title: String,
+    /// Short channel or status tag drawn as a pill beside the title.
+    pub badge: String,
     pub body: String,
     pub detail: String,
     pub actions: Vec<ModalAction>,
@@ -50,6 +52,7 @@ impl Modal {
     pub fn new(title: &str, body: &str) -> Self {
         Self {
             title: title.to_owned(),
+            badge: String::new(),
             body: body.to_owned(),
             detail: String::new(),
             actions: Vec::new(),
@@ -137,7 +140,25 @@ pub(crate) fn render_modal(
             .max_rect(inner)
             .layout(Layout::top_down(Align::Min)),
     );
-    card.label(RichText::new(&modal.title).size(18.0).strong());
+    card.horizontal(|ui| {
+        ui.label(RichText::new(&modal.title).size(18.0).strong());
+        if !modal.badge.is_empty() {
+            let w = (modal.badge.chars().count() as f32 * 11.0 + 18.0).max(40.0);
+            let (pill, _) = ui.allocate_exact_size(Vec2::new(w, 20.0), Sense::hover());
+            ui.painter().rect_filled(
+                pill,
+                CornerRadius::same(10),
+                ui.visuals().selection.bg_fill.linear_multiply(0.75),
+            );
+            ui.painter().text(
+                pill.center(),
+                egui::Align2::CENTER_CENTER,
+                &modal.badge,
+                FontId::proportional(10.0),
+                ui.visuals().strong_text_color(),
+            );
+        }
+    });
     card.add_space(8.0);
     card.label(RichText::new(&modal.body).size(13.0));
     if !modal.detail.is_empty() {
