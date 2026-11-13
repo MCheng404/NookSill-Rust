@@ -181,7 +181,14 @@ pub(super) fn maybe_prompt(state: &mut SettingsState, cfg: &nooksill_core::confi
     } else {
         view.version.clone()
     };
-    let detail: String = view.notes.chars().take(140).collect();
+    // One or two lines at most: a long release body would push the buttons
+    // out of the fixed-height card.
+    let detail: String = view
+        .notes
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(90)
+        .collect();
     let mut modal = Modal::new(
         nooksill_core::i18n::t("Update available"),
         &nooksill_core::i18n::fmt(

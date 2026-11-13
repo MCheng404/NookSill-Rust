@@ -63,6 +63,17 @@ fn 不再提示写回配置而不是本地状态() {
 }
 
 #[test]
+fn 点击弹窗内部不会误关() {
+    let mut h = new_harness();
+    offer(&mut h);
+    // The veil covers the whole window; a click on the title is still inside
+    // the panel and must not be treated as "click away".
+    h.get_by_label("有可用更新").click();
+    h.run();
+    assert!(h.state().ui.modal.is_some(), "点标题不应关闭弹窗");
+}
+
+#[test]
 fn 通用弹窗可承载任意标题与动作() {
     let mut h = new_harness();
     let mut modal = Modal::new("Custom title", "Custom body");

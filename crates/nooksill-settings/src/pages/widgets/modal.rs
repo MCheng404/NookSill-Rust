@@ -93,7 +93,14 @@ pub(crate) fn render_modal(
         .clamp(300.0, 470.0)
         .min(rect.width() - 24.0)
         .max(240.0);
-    let h = 224.0_f32.min(rect.height() - 24.0).max(150.0);
+    // A short card has no detail line; keeping the height tied to the content
+    // avoids a large empty band under the actions.
+    let wanted: f32 = if modal.detail.is_empty() {
+        184.0
+    } else {
+        206.0
+    };
+    let h = wanted.min(rect.height() - 24.0).max(150.0);
     let panel = Rect::from_center_size(rect.center(), Vec2::new(w, h));
     let radius = CornerRadius::same(22);
     painter.rect_filled(
@@ -142,7 +149,7 @@ pub(crate) fn render_modal(
                 .color(card.visuals().weak_text_color()),
         );
     }
-    card.add_space(10.0);
+    card.add_space(6.0);
 
     if let Some(key) = modal.suppress_key {
         let mut off = cfg.get_i32(key) == 0;
@@ -155,25 +162,27 @@ pub(crate) fn render_modal(
         }
     }
 
-    // Right-to-left keeps the primary action on the right, matching the
-    // window's close button and the rest of the settings rows.
-    card.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        for action in &modal.actions {
-            let btn = egui::Button::new(RichText::new(&action.label).size(12.5))
-                .corner_radius(CornerRadius::same(10))
-                .min_size(Vec2::new(96.0, 30.0));
-            let btn = if action.primary {
-                btn.fill(ui.visuals().selection.bg_fill)
-            } else {
-                btn.fill(field_bg(ui))
-            };
-            if ui.add(btn).clicked() {
-                if let Some(cmd) = &action.command {
-                    out.command = Some(cmd.clone());
+    // Bottom-up pins the actions to the lower edge; right-to-left puts the
+    // primary action on the right, matching the window's close button.
+    card.with_layout(Layout::bottom_up(Align::Min), |ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            for action in &modal.actions {
+                let btn = egui::Button::new(RichText::new(&action.label).size(12.5))
+                    .corner_radius(CornerRadius::same(10))
+                    .min_size(Vec2::new(96.0, 30.0));
+                let btn = if action.primary {
+                    btn.fill(ui.visuals().selection.bg_fill)
+                } else {
+                    btn.fill(field_bg(ui))
+                };
+                if ui.add(btn).clicked() {
+                    if let Some(cmd) = &action.command {
+                        out.command = Some(cmd.clone());
+                    }
+                    state.modal = None;
                 }
-                state.modal = None;
             }
-        }
+        });
     });
 
     if modal.dismissible {
@@ -197,7 +206,14 @@ pub(crate) fn render_modal(
         close.widget_info(|| {
             WidgetInfo::labeled(egui::Role::Button, true, nooksill_core::i18n::t("Close"))
         });
-        if close.clicked() || veil.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // The veil covers the whole window, including the panel's empty areas.
+        // Only a click outside the panel counts as "click away"; otherwise a
+        // click on the title text would dismiss the modal.
+        let outside = veil.clicked()
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| !panel.contains(p));
+        if close.clicked() || outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             state.modal = None;
         }
     }

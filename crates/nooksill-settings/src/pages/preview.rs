@@ -6,10 +6,14 @@
 
 use egui::{Align2, Color32, CornerRadius, FontId, Rect, Stroke, Ui, Vec2};
 use nooksill_core::color;
-use nooksill_core::config::{BgMode, Config, DockTheme, Key};
+use nooksill_core::config::{BgMode, Config, DockTheme, Edge, Key};
 
-/// Canvas height, including the caption row.
-const H: f32 = 176.0;
+/// Total height of the caption row, canvas and trailing gap.
+const H: f32 = 158.0;
+/// Height of the caption label above the canvas.
+const CAPTION_H: f32 = 22.0;
+/// Room above the bar for the hover name bubble.
+const LABEL_ROOM: f32 = 26.0;
 /// How many sample icons the sketch holds.
 const ICONS: usize = 7;
 /// Inset from the canvas edges.
@@ -32,9 +36,10 @@ pub(super) fn preview(cfg: &Config, ui: &mut Ui) {
     ui.label(
         egui::RichText::new(nooksill_core::i18n::t("Live preview"))
             .small()
-            .weak(),
+            .strong(),
     );
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, H - 22.0), egui::Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(width, H - CAPTION_H - 10.0), egui::Sense::hover());
     let painter = ui.painter();
     let dark = match cfg.theme {
         DockTheme::Light => false,
@@ -49,11 +54,25 @@ pub(super) fn preview(cfg: &Config, ui: &mut Ui) {
     paint_bar(painter, cfg, &geom, dark);
     paint_icons(painter, cfg, &geom, dark);
     if cfg.reflect && !geom.vertical {
-        paint_reflection(painter, cfg, &geom, dark);
+        paint_reflection(painter, cfg, &geom);
     }
     if cfg.get_i32(Key::Labels) != 0 {
         paint_label(painter, &geom, dark);
     }
+    // Drawn last so the rounded corner stays visible over the wallpaper.
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(16),
+        Stroke::new(
+            1.0,
+            if dark {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 22)
+            } else {
+                Color32::from_rgba_unmultiplied(23, 26, 35, 18)
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
     ui.add_space(10.0);
 }
 
@@ -70,20 +89,20 @@ fn wallpaper(painter: &egui::Painter, rect: Rect, dark: bool, frost: bool) {
     let blobs: [(f32, f32, f32, Color32); 3] = [
         (
             0.24,
-            0.66,
-            0.30,
+            0.62,
+            0.34,
             Color32::from_rgba_unmultiplied(75, 104, 190, if dark { 70 } else { 60 }),
         ),
         (
             0.72,
-            0.38,
-            0.26,
+            0.36,
+            0.30,
             Color32::from_rgba_unmultiplied(190, 96, 140, if dark { 60 } else { 52 }),
         ),
         (
             0.52,
             0.86,
-            0.22,
+            0.26,
             Color32::from_rgba_unmultiplied(70, 160, 150, if dark { 52 } else { 44 }),
         ),
     ];
@@ -101,7 +120,7 @@ fn wallpaper(painter: &egui::Painter, rect: Rect, dark: bool, frost: bool) {
                     c.r(),
                     c.g(),
                     c.b(),
-                    (c.a() as f32 / 8.0).round() as u8,
+                    (c.a() as f32 * (1.0 - t) * 0.24).round() as u8,
                 ),
             );
         }
@@ -122,14 +141,11 @@ fn geometry(cfg: &Config, rect: Rect) -> Geom {
     let gap = (cfg.get_i32(Key::Spacing) as f32).max(0.0);
     let pad = (cfg.get_i32(Key::Padding) as f32).max(0.0);
     let radius = (cfg.get_i32(Key::Radius) as f32).max(0.0);
-    let vertical = matches!(
-        cfg.edge,
-        nooksill_core::config::Edge::Left | nooksill_core::config::Edge::Right
-    );
+    let vertical = matches!(cfg.edge, Edge::Left | Edge::Right);
 
     let span = ICONS as f32 * icon + (ICONS - 1) as f32 * gap + 2.0 * pad;
     let avail = if vertical {
-        (rect.height() - 40.0).max(1.0)
+        (rect.height() - LABEL_ROOM - 16.0).max(1.0)
     } else {
         (rect.width() - 2.0 * INSET - 16.0).max(1.0)
     };
@@ -145,29 +161,50 @@ fn geometry(cfg: &Config, rect: Rect) -> Geom {
     } else {
         (bar_w, bar_h)
     };
-    let edge = cfg.edge;
-    let center = match edge {
-        nooksill_core::config::Edge::Bottom => {
-            rect.center() + Vec2::new(0.0, (rect.height() - h) * 0.5 - 6.0)
-        }
-        nooksill_core::config::Edge::Top => {
-            rect.center() - Vec2::new(0.0, (rect.height() - h) * 0.5 - 18.0)
-        }
-        nooksill_core::config::Edge::Left => {
-            rect.center() - Vec2::new((rect.width() - w) * 0.5 - 6.0, 0.0)
-        }
-        nooksill_core::config::Edge::Right => {
-            rect.center() + Vec2::new((rect.width() - w) * 0.5 - 6.0, 0.0)
-        }
+
+    // Reserve room for the mirrored row: without it the reflection would be
+    // painted onto the cards below the canvas.
+    let mirror = if cfg.reflect && !vertical {
+        icon * (cfg.get_i32(Key::REFL_SIZE) as f32 / 100.0).clamp(0.1, 1.0)
+            + (cfg.get_i32(Key::REFL_GAP) as f32).max(0.0)
+    } else {
+        0.0
+    };
+    let free = (rect.height() - LABEL_ROOM - h - mirror).max(0.0);
+    let bias = match cfg.edge {
+        Edge::Top => 0.08,
+        Edge::Bottom => 0.72,
+        _ => 0.42,
+    };
+    let bar_top = rect.top() + LABEL_ROOM + free * bias;
+    let x = match cfg.edge {
+        Edge::Left => rect.left() + INSET + w * 0.5,
+        Edge::Right => rect.right() - INSET - w * 0.5,
+        _ => rect.center().x,
     };
     Geom {
         icon,
         gap,
         pad,
         radius,
-        bar: Rect::from_center_size(center, Vec2::new(w.max(1.0), h.max(1.0))),
+        bar: Rect::from_center_size(
+            egui::pos2(x, bar_top + h * 0.5),
+            Vec2::new(w.max(1.0), h.max(1.0)),
+        ),
         vertical,
     }
+}
+
+/// How far a vertical strip at `p` must be inset to stay inside a rounded end.
+fn round_inset(p: f32, lo: f32, hi: f32, r: f32) -> f32 {
+    if r <= 0.0 {
+        return 0.0;
+    }
+    let d = (p - lo).min(hi - p).max(0.0);
+    if d >= r {
+        return 0.0;
+    }
+    r - (r * r - (r - d) * (r - d)).max(0.0).sqrt()
 }
 
 /// Bar plate: solid, two-stop gradient or a frosted wash, with optional edge.
@@ -192,27 +229,35 @@ fn paint_bar(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
             );
         }
         BgMode::Gradient => {
-            let steps = (g.bar.width().max(g.bar.height()) / 3.0)
+            let steps = (g.bar.width().max(g.bar.height()) / 2.0)
                 .round()
-                .clamp(1.0, 160.0) as usize;
+                .clamp(1.0, 200.0) as usize;
             let along_x = !g.vertical;
             let total = if along_x {
                 g.bar.width()
             } else {
                 g.bar.height()
             };
+            let step = total / steps as f32;
             for i in 0..steps {
                 let t = i as f32 / steps as f32;
                 let c = lerp(a, b, t);
+                let p0 = t * total;
+                let p1 = p0 + step;
+                // Strips shrink towards both rounded ends, so no square corner
+                // leaks outside the bar's radius.
+                let lo = if along_x { g.bar.left() } else { g.bar.top() };
+                let inset = round_inset(p0, 0.0, total, g.radius)
+                    .max(round_inset(p1, 0.0, total, g.radius));
                 let strip = if along_x {
-                    Rect::from_min_size(
-                        g.bar.min + Vec2::new(total * t, 0.0),
-                        Vec2::new((total / steps as f32).max(1.0) + 1.0, g.bar.height()),
+                    Rect::from_min_max(
+                        egui::pos2(lo + p0, g.bar.top() + inset),
+                        egui::pos2(lo + p1 + 1.0, g.bar.bottom() - inset),
                     )
                 } else {
-                    Rect::from_min_size(
-                        g.bar.min + Vec2::new(0.0, total * t),
-                        Vec2::new(g.bar.width(), (total / steps as f32).max(1.0) + 1.0),
+                    Rect::from_min_max(
+                        egui::pos2(g.bar.left() + inset, lo + p0),
+                        egui::pos2(g.bar.right() - inset, lo + p1 + 1.0),
                     )
                 };
                 painter.rect_filled(
@@ -221,7 +266,6 @@ fn paint_bar(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
                     Color32::from_rgba_unmultiplied(c.0, c.1, c.2, alpha),
                 );
             }
-            painter.rect_filled(g.bar, radius, Color32::TRANSPARENT);
         }
         BgMode::Frost => {
             painter.rect_filled(
@@ -294,7 +338,7 @@ fn paint_icons(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
             let below = if g.vertical {
                 icon_rect.right_center() + Vec2::new(3.0, 0.0)
             } else {
-                icon_rect.center() + Vec2::new(0.0, g.bar.height() * 0.5 - 3.0)
+                icon_rect.center() + Vec2::new(0.0, g.bar.height() * 0.5 - 8.0)
             };
             let c = if dark {
                 Color32::from_rgb(235, 238, 245)
@@ -315,10 +359,10 @@ fn paint_icons(painter: &egui::Painter, cfg: &Config, g: &Geom, dark: bool) {
 }
 
 /// A low-opacity mirrored row under the bar; only the bottom edge supports it.
-fn paint_reflection(painter: &egui::Painter, cfg: &Config, g: &Geom, _dark: bool) {
+fn paint_reflection(painter: &egui::Painter, cfg: &Config, g: &Geom) {
     let strength = (cfg.get_i32(Key::REFL_OPACITY) as f32 / 100.0).clamp(0.0, 1.0);
     let size = g.icon * (cfg.get_i32(Key::REFL_SIZE) as f32 / 100.0).clamp(0.1, 1.0);
-    let gap = cfg.get_i32(Key::REFL_GAP) as f32;
+    let gap = (cfg.get_i32(Key::REFL_GAP) as f32).max(0.0);
     let alpha = (strength * 90.0).round() as u8;
     for i in 0..ICONS {
         let along = i as f32 * (g.icon + g.gap) + g.pad + g.icon * 0.5;
@@ -387,4 +431,54 @@ fn palette(i: usize, accent: i32) -> (u8, u8, u8) {
         return (color::red(c), color::green(c), color::blue(c));
     }
     BASE[i % BASE.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn canvas() -> Rect {
+        Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(600.0, H - CAPTION_H - 10.0))
+    }
+
+    #[test]
+    fn round_inset_only_shrinks_near_the_ends() {
+        assert!((round_inset(0.0, 0.0, 100.0, 10.0) - 10.0).abs() < 1e-3);
+        assert!((round_inset(100.0, 0.0, 100.0, 10.0) - 10.0).abs() < 1e-3);
+        assert_eq!(round_inset(50.0, 0.0, 100.0, 10.0), 0.0);
+        assert_eq!(round_inset(5.0, 0.0, 100.0, 0.0), 0.0);
+    }
+
+    /// Reflection, hover bubble and the bar itself must stay inside the canvas
+    /// for every material, edge and reflection switch; otherwise the sketch
+    /// paints over the settings cards below it.
+    #[test]
+    fn bar_bubble_and_reflection_never_leave_the_canvas() {
+        let rect = canvas();
+        for (bg, edge, reflect) in [
+            (BgMode::Frost, Edge::Bottom, false),
+            (BgMode::Gradient, Edge::Bottom, true),
+            (BgMode::Solid, Edge::Top, true),
+            (BgMode::Frost, Edge::Left, false),
+            (BgMode::Frost, Edge::Right, false),
+        ] {
+            let mut cfg = Config::defaults();
+            cfg.bg_mode = bg;
+            cfg.edge = edge;
+            cfg.reflect = reflect;
+            let g = geometry(&cfg, rect);
+            assert!(g.bar.min.x >= rect.min.x - 0.5, "{bg:?} {edge:?} left");
+            assert!(g.bar.max.x <= rect.max.x + 0.5, "{bg:?} {edge:?} right");
+            assert!(g.bar.min.y >= rect.min.y + 22.0, "{bg:?} {edge:?} bubble");
+            assert!(g.bar.max.y <= rect.max.y, "{bg:?} {edge:?} bottom");
+            if reflect && !g.vertical {
+                let size = g.icon * (cfg.get_i32(Key::REFL_SIZE) as f32 / 100.0).clamp(0.1, 1.0);
+                let gap = (cfg.get_i32(Key::REFL_GAP) as f32).max(0.0);
+                assert!(
+                    g.bar.max.y + gap + size <= rect.max.y + 0.5,
+                    "{bg:?} {edge:?} reflection spills out"
+                );
+            }
+        }
+    }
 }
