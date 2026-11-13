@@ -41,8 +41,9 @@ fn notes_entry_follows_the_switch() {
         autostart: None,
         add_items: false,
         notes: true,
+        windows: Vec::new(),
     };
-    let on = Menu::build(None, false, false, opts).expect("应当有菜单");
+    let on = Menu::build(None, false, false, opts.clone()).expect("应当有菜单");
     assert!(on.entries.iter().any(|e| e.cmd == MenuCmd::Notes));
     let off = Menu::build(
         None,
@@ -153,8 +154,9 @@ fn blank_area_offers_settings_and_exit() {
         autostart: None,
         add_items: false,
         notes: false,
+        windows: Vec::new(),
     };
-    let m = Menu::build(None, false, false, opts).expect("应当有菜单");
+    let m = Menu::build(None, false, false, opts.clone()).expect("应当有菜单");
     let cmds: Vec<MenuCmd> = m.entries.iter().map(|e| e.cmd).collect();
     assert_eq!(
         cmds,
@@ -176,6 +178,7 @@ fn blank_menu_offers_new_items_when_enabled() {
             autostart: None,
             add_items: true,
             notes: false,
+            windows: Vec::new(),
         },
     )
     .expect("应当有菜单");
@@ -201,6 +204,7 @@ fn autostart_entry_reflects_state_and_reserves_a_gutter() {
             autostart: Some(true),
             add_items: false,
             notes: false,
+            windows: Vec::new(),
         },
     )
     .expect("应当有菜单");
@@ -219,6 +223,7 @@ fn autostart_entry_reflects_state_and_reserves_a_gutter() {
             autostart: Some(false),
             add_items: false,
             notes: false,
+            windows: Vec::new(),
         },
     )
     .expect("应当有菜单");
@@ -239,6 +244,7 @@ fn autostart_entry_reflects_state_and_reserves_a_gutter() {
             autostart: None,
             add_items: false,
             notes: false,
+            windows: Vec::new(),
         },
     )
     .expect("应当有菜单");
@@ -258,6 +264,7 @@ fn item_menu_ignores_dock_level_options() {
             autostart: Some(true),
             add_items: true,
             notes: false,
+            windows: Vec::new(),
         },
     )
     .expect("应当有菜单");
@@ -403,8 +410,9 @@ fn cmd_at_is_bounds_checked() {
         autostart: None,
         add_items: false,
         notes: false,
+        windows: Vec::new(),
     };
-    let m = Menu::build(None, false, false, opts).expect("应当有菜单");
+    let m = Menu::build(None, false, false, opts.clone()).expect("应当有菜单");
     assert_eq!(m.cmd_at(0), Some(MenuCmd::ExitDock));
     assert_eq!(m.cmd_at(9), None);
 }

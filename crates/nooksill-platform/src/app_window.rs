@@ -110,7 +110,7 @@ pub fn exe_of_window(hwnd: HWND) -> Option<String> {
 /// `by_pid` caches pid to exe for this pass: an app with five windows otherwise
 /// costs five `OpenProcess` calls, and the scan runs every 1.2 s.
 struct Collect {
-    map: HashMap<String, HWND>,
+    map: HashMap<String, Vec<AppWindow>>,
     by_pid: HashMap<u32, Option<String>>,
 }
 
@@ -128,13 +128,35 @@ impl Collect {
     }
 }
 
-/// Enumerate app windows as `lowercase exe path -> first window`.
+/// Bring `hwnd` to the front, restoring it first when minimised.
 ///
-/// Keys are lowercase because Windows paths are case-insensitive and APIs differ
-/// in casing. "First" is `EnumWindows` order, top-down in Z order, which is the
-/// app's topmost window and the right click target.
+/// Returns false when Windows refuses the foreground change (focus stealing
+/// rules); the caller has nothing better to try.
+pub fn activate_window(hwnd: isize) -> bool {
+    let h = HWND(hwnd as *mut core::ffi::c_void);
+    if h.is_invalid() {
+        return false;
+    }
+    // SAFETY: `h` came from `EnumWindows`; a dead window simply fails.
+    unsafe {
+        if IsIconic(h).as_bool() {
+            let _ = ShowWindow(h, SW_RESTORE);
+        }
+        SetForegroundWindow(h).as_bool()
+    }
+}
+
+/// One top-level window of an app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppWindow {
+    /// Raw `HWND` as an integer; the caller casts back.
+    pub hwnd: isize,
+    pub title: String,
+}
+
+/// Every app window grouped by lowercase exe path, in `EnumWindows` (Z) order.
 #[must_use]
-pub fn running_apps() -> HashMap<String, HWND> {
+pub fn running_windows() -> HashMap<String, Vec<AppWindow>> {
     let mut ctx = Collect {
         map: HashMap::new(),
         by_pid: HashMap::new(),
@@ -145,6 +167,22 @@ pub fn running_apps() -> HashMap<String, HWND> {
         let _ = EnumWindows(Some(collect_proc), LPARAM((&raw mut ctx) as isize));
     }
     ctx.map
+}
+
+/// Enumerate app windows as `lowercase exe path -> first window`.
+///
+/// Keys are lowercase because Windows paths are case-insensitive and APIs differ
+/// in casing. "First" is `EnumWindows` order, top-down in Z order, which is the
+/// app's topmost window and the right click target.
+#[must_use]
+pub fn running_apps() -> HashMap<String, HWND> {
+    running_windows()
+        .into_iter()
+        .filter_map(|(exe, windows)| {
+            let first = windows.first()?;
+            Some((exe, HWND(first.hwnd as *mut core::ffi::c_void)))
+        })
+        .collect()
 }
 
 unsafe extern "system" fn collect_proc(hwnd: HWND, lparam: LPARAM) -> windows::core::BOOL {
@@ -159,8 +197,15 @@ unsafe extern "system" fn collect_proc(hwnd: HWND, lparam: LPARAM) -> windows::c
     if is_uwp_host(&exe) {
         return true.into();
     }
-    // One window per app is enough; activating it is all we do.
-    ctx.map.entry(exe.to_lowercase()).or_insert(hwnd);
+    // Every window is kept: the menu offers the others when an app has more
+    // than one. `running_apps` still takes the first for plain activation.
+    ctx.map
+        .entry(exe.to_lowercase())
+        .or_default()
+        .push(AppWindow {
+            hwnd: hwnd.0 as isize,
+            title: window_title(hwnd),
+        });
     true.into()
 }
 

@@ -90,6 +90,28 @@ impl Menu {
                     "打开"
                 };
                 entries.push(MenuEntry::new(label, MenuCmd::Open, false, false));
+                // Several windows of one app: pick one here instead of hunting
+                // through Alt+Tab. Titles are free text, so they are shortened
+                // to keep the menu narrow.
+                if opts.windows.len() > 1 {
+                    for (k, window) in opts.windows.iter().take(8).enumerate() {
+                        let title = window.title.trim();
+                        let label = if title.is_empty() {
+                            format!("#{}", k + 1)
+                        } else {
+                            title.chars().take(28).collect::<String>()
+                        };
+                        entries.push(MenuEntry::new(
+                            &label,
+                            MenuCmd::ActivateWindow(window.hwnd),
+                            false,
+                            false,
+                        ));
+                    }
+                    if let Some(last) = entries.last_mut() {
+                        last.sep_after = true;
+                    }
+                }
                 if kind == ItemKind::Folder {
                     entries.push(MenuEntry::new(
                         "在资源管理器中打开",

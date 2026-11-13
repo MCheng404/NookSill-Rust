@@ -30,6 +30,8 @@ pub enum MenuCmd {
     OpenInExplorer,
     /// Ask the app to quit (running non-item apps only).
     QuitApp,
+    /// Bring one specific window to the front (an app with several windows).
+    ActivateWindow(isize),
     /// Insert a separator after this item.
     AddSepAfter,
     /// Pin a running temporary item into the Dock (writes config).
@@ -120,8 +122,10 @@ const MIN_W: f32 = 190.0;
 pub const RADIUS: f32 = 10.0;
 
 /// Build switches, taken from the `Mn*` config keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuOpts {
+    /// Other windows of this app, in Z order; empty or one entry hides the list.
+    pub windows: Vec<nooksill_platform::app_window::AppWindow>,
     /// `MnAuto`: show `Run at login`, value = currently enabled. `None` = hidden.
     pub autostart: Option<bool>,
     /// `MnAdd`: blank-area menu offers add file / folder / new.
@@ -137,6 +141,7 @@ impl Default for MenuOpts {
             autostart: None,
             add_items: true,
             notes: true,
+            windows: Vec::new(),
         }
     }
 }

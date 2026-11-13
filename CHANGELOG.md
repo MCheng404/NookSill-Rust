@@ -156,6 +156,17 @@
 | 上限 | 一次最多预览 80 个条目 | 解码在 UI 线程同步执行，条目极多时会把设置窗口冻住几秒 |
 | 验收 | 2 项单测（等比例缩小 + 采样点、放大/零值是 no-op、竖图保比例） | |
 
+### 多窗口列表（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 枚举 | `app_window::running_windows()` 按 Z 序保留每个 exe 的**全部**顶层窗口（句柄 + 标题）；`running_apps()` 改为取每组第一个，原有行为不变 | 原来 `or_insert` 只留一个窗口，同应用多开时无法选择另一个 |
+| 菜单 | `MenuOpts.windows` + `MenuCmd::ActivateWindow(isize)`；条目右键在「打开」之后列出其余窗口（最多 8 个，标题截 28 字），单窗口不出现 | 浏览窗口比 Alt+Tab 快；单窗口时列表只是噪音 |
+| 激活 | `app_window::activate_window(hwnd)`：最小化先 `SW_RESTORE`，再 `SetForegroundWindow`；焦点规则拒绝时返回 false，调用方忽略 | 没有更好的补救手段 |
+| 验收 | 2 项菜单测试（多窗口列出并可激活、单窗口不列） | |
+
+**「一次性完成全部项目」的范围核对**：本轮把剩余项按实际代码核了一遍——`Key::SB_` 的 44 处引用**全部**在键表与测试里，顶部状态栏确实零实现，它需要独立窗口 + 第二个 AppBar + 弹出层 + 九个子开关；组面板拖出需要实现 `IDataObject`（`CF_HDROP`）+ 阻塞式 `DoDragDrop`。这两项各自是完整组件，塞进同一次改动里无法验证，已在 `PORTING.md` 标注为独立轮次，不假装完成。
+
 ### 验证（2026-11-13）
 
 - `./scripts/build.sh --gate`（rustc **1.100.0**）：**630 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。

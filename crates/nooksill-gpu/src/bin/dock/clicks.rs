@@ -117,10 +117,17 @@ impl App {
         // `MnAuto` / `MnAdd` / `MnNotes` decide which entries appear. Autostart
         // is read live from the registry because the user may have changed it
         // in Task Manager.
+        // Enumerated on demand: the menu opens on a click, and one pass is a
+        // few milliseconds. Cheaper than mirroring the scanner's state.
+        let windows = target
+            .map(|it| it.path.to_lowercase())
+            .and_then(|exe| nooksill_platform::app_window::running_windows().remove(&exe))
+            .unwrap_or_default();
         let opts = nooksill_gpu::menu::MenuOpts {
             autostart: (self.dock.cfg.get_i32(Key::MN_AUTO) != 0).then(theme::get_autostart),
             add_items: self.dock.cfg.get_i32(Key::MN_ADD) != 0,
             notes: self.dock.cfg.get_i32(Key::MN_NOTES) != 0,
+            windows,
         };
         let Some(menu) = Menu::build(target, running, temp, opts) else {
             return Ok(false);
@@ -464,6 +471,10 @@ impl App {
             }
             MenuCmd::Notes => {
                 eprintln!("`Notes` 走错了路径：它应当在主循环里被处理");
+            }
+            MenuCmd::ActivateWindow(hwnd) => {
+                // Focus rules can refuse this; nothing better to try.
+                let _ = nooksill_platform::app_window::activate_window(hwnd);
             }
             MenuCmd::NewGroup | MenuCmd::NewFolder => {
                 eprintln!("`{cmd:?}` 走错了路径：它应当在主循环里被处理");
