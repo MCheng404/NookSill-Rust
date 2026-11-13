@@ -336,6 +336,21 @@ pub struct UpdateView {
     pub notes: String,
     /// The offered release belongs to the beta channel.
     pub prerelease: bool,
+    /// Bytes received by the download in progress.
+    pub bytes_done: u64,
+    /// Asset size from release metadata; 0 means unknown.
+    pub bytes_total: u64,
+}
+
+impl UpdateView {
+    /// `None` outside an active download, or when the server gave no size.
+    #[must_use]
+    pub fn progress(&self) -> Option<f32> {
+        if !self.busy || self.bytes_total == 0 {
+            return None;
+        }
+        Some((self.bytes_done as f32 / self.bytes_total as f32).clamp(0.0, 1.0))
+    }
 }
 
 /// Result of one frame.

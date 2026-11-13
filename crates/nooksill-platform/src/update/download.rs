@@ -17,7 +17,13 @@ const MAX_ATTEMPTS: usize = 3;
 ///
 /// A `206` appends; a `200` means the server ignored `Range` and the file must
 /// be truncated, otherwise the concatenation would silently corrupt the exe.
-fn fetch(base: &str, asset: &Asset, part: &Path, expected_size: u64) -> Result<(), UpdateError> {
+fn fetch(
+    base: &str,
+    asset: &Asset,
+    part: &Path,
+    expected_size: u64,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<(), UpdateError> {
     let url = mirror::url(base, &asset.url);
     let mut resume = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
     if expected_size > 0 {
@@ -39,6 +45,8 @@ fn fetch(base: &str, asset: &Asset, part: &Path, expected_size: u64) -> Result<(
         let mut opened = false;
         let mut seen_status = 0u32;
         let mut file: Option<std::fs::File> = None;
+        let mut written = 0u64;
+        let mut last_report = 0u64;
         let result = net::get_stream(
             &url,
             &headers,
@@ -63,9 +71,19 @@ fn fetch(base: &str, asset: &Asset, part: &Path, expected_size: u64) -> Result<(
                         }
                         _ => return Err(net::NetError::Sink),
                     }
+                    written = if status == 206 { resume } else { 0 };
+                    last_report = written;
+                    on_progress(written, expected_size);
                 }
                 if let Some(f) = file.as_mut() {
                     f.write_all(chunk).map_err(|_| net::NetError::Sink)?;
+                }
+                written += chunk.len() as u64;
+                // Throttle to 256 KiB: a 35 MB asset would otherwise queue
+                // hundreds of UI messages for no visible gain.
+                if written.saturating_sub(last_report) >= 256 * 1024 {
+                    on_progress(written, expected_size);
+                    last_report = written;
                 }
                 Ok(())
             },
@@ -74,6 +92,10 @@ fn fetch(base: &str, asset: &Asset, part: &Path, expected_size: u64) -> Result<(
             let _ = f.flush();
         }
         drop(file);
+        let complete = matches!(&result, Ok(r) if r.status == 200 || r.status == 206);
+        if complete {
+            on_progress(written, expected_size);
+        }
 
         match result {
             Ok(res) if res.status == 200 || res.status == 206 => return Ok(()),
@@ -133,7 +155,11 @@ fn ordered_bases(preferred: &str) -> Vec<String> {
 
 /// Download + verify. The first base producing a hash-matching file wins; a
 /// checksum mismatch switches sources instead of retrying the same bytes.
-pub fn stage(base: &str, release: &Release) -> Result<PathBuf, UpdateError> {
+pub fn stage(
+    base: &str,
+    release: &Release,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<PathBuf, UpdateError> {
     let mut last = String::from("no usable source");
     for candidate in ordered_bases(base) {
         let Ok(expected) = expected_digest(&candidate, release) else {
@@ -141,7 +167,13 @@ pub fn stage(base: &str, release: &Release) -> Result<PathBuf, UpdateError> {
             continue;
         };
         let part = staging::part_path(&expected, &release.tag);
-        if let Err(e) = fetch(&candidate, &release.exe, &part, release.exe.size) {
+        if let Err(e) = fetch(
+            &candidate,
+            &release.exe,
+            &part,
+            release.exe.size,
+            on_progress,
+        ) {
             last = e.to_string();
             continue;
         }

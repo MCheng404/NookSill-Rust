@@ -126,6 +126,27 @@ pub(super) fn status_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             ui.label(RichText::new(text).small().weak());
             ui.add_space(6.0);
 
+            if let Some(fraction) = view.progress() {
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .desired_width(ui.available_width())
+                        .show_percentage(),
+                );
+                let done = view.bytes_done as f64 / (1024.0 * 1024.0);
+                let total = view.bytes_total as f64 / (1024.0 * 1024.0);
+                let done_text = format!("{done:.1}");
+                let total_text = format!("{total:.1}");
+                ui.label(
+                    RichText::new(nooksill_core::i18n::fmt(
+                        "{0} / {1} MB",
+                        &[done_text.as_str(), total_text.as_str()],
+                    ))
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(6.0);
+            }
+
             ui.horizontal(|ui| {
                 if view.busy {
                     ui.label(RichText::new(nooksill_core::i18n::t("Please wait…")).small());

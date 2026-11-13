@@ -714,7 +714,7 @@ SbPopFrost SbAutoOpaque TaskPeek FrostHold AnimSpeed FanReverse LogCollect
 | 5 | ~~托盘图标~~ | — | ✅ 已做（`platform::tray`，左键显隐 / 右键菜单 / RAII 注销） | — |
 | 6 | ~~磨砂玻璃背景~~ | — | ✅ 已做（`frost::Live` 抓屏线程 + `chrome::rounded_frost` 按件取样，由 `App::step_frost` 用「抓到一帧」驱动；不动时零帧，窗口排除出捕获见 ADR-080） | — |
 | 7 | 图标解码（PNG/JPEG） | 小 | `icon_src` 目前只认 `.ico`（shell 图像列表） | 加 WIC 解码即可；注意别为此引入 `image` crate |
-| 8 | 更新进度条 | 小 | 更新卡片只有一行文字 | `mirror_rows` 那套回读缓冲里顺手能算进度，但要先把下载改成流式 |
+| 8 | ~~更新进度条~~ | — | ✅ 已做（`net::get_stream` 逐块 sink → `UpdateMsg::Progress` → `UpdateView::progress()` → 状态卡片进度条 + 字节数；256 KiB 节流，未知大小时不显示） | — |
 | — | 窗口动画 | — | 逐帧改别人 HWND，§9.4 已论证 | **不做** |
 | — | `Guardian` 守护进程 | — | 要第二个常驻进程 | **不做** |
 | — | `MinStyle` 最小化动画风格 | — | 依赖窗口动画 | **不做** |

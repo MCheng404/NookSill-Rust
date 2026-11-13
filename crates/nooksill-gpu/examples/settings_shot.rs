@@ -15,8 +15,8 @@
 //! `accent=RRGGBB`, `feather=<px>`, `nodiscs`, `noroundrect`, `modal` (an
 //! available update, so the popup is shown), `beta` (select the beta channel),
 //! `gradient` (gradient bar material), `mirror` (icon reflection), `ready`
-//! (a verified download, so the install popup is shown), and a bare number to
-//! scale the UI.
+//! (a verified download, so the install popup is shown), `progress` (a
+//! download in flight), and a bare number to scale the UI.
 //!
 //! Needs no window and no monitor, only a working DX12 adapter.
 
@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gradient = rest.iter().any(|a| a == "gradient");
     let mirror = rest.iter().any(|a| a == "mirror");
     let ready = rest.iter().any(|a| a == "ready");
+    let progress = rest.iter().any(|a| a == "progress");
     // Focus is normally granted by a click, so request it from memory instead.
     let focus = rest.iter().any(|a| a == "focus");
     // A bare number is a percentage (150 -> 1.5). Fonts and every element scale
@@ -111,6 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if ready {
         state.update.ready = true;
+    }
+    if progress {
+        state.update.busy = true;
+        state.update.bytes_done = 18 * 1024 * 1024;
+        state.update.bytes_total = 32 * 1024 * 1024;
+        state.update.status = nooksill_core::i18n::fmt(
+            "Downloading from {0}…",
+            &[nooksill_core::i18n::t("GitHub direct")],
+        );
     }
     // `accent=RRGGBB`; -1 in the config means follow the system colour.
     if let Some(hex) = rest.iter().find_map(|a| a.strip_prefix("accent=")) {

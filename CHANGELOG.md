@@ -86,15 +86,26 @@
 | 已就绪弹窗验收 | `settings_shot` 增 `ready` 开关；离屏截图确认标题、「已就绪」徽标、两行正文、「重启并更新 / 稍后」按钮在无 detail 行的 184 高度下完整无截断 | 上一轮只有 kittest 逻辑覆盖，视觉没验过；项目约定不靠人肉截图 |
 | 回归 | `release_cache_is_written_atomically_and_can_be_cleared`（写回读、tmp 已 rename、清除有效） | 守住房原子写这条不变量 |
 
+### 更新进度条（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 流式进度 | 新增 `stage_with_progress()`；`download::fetch` 在 sink 里累计字节，每 256 KiB 回报一次，完成时补报最后一次 | `net::get_stream` 已是逐块回调，PORTING Backlog #8 的前置条件「先把下载改成流式」已满足；不节流会给 35 MB 的包排几百条 UI 消息 |
+| 消息通道 | `UpdateMsg::Progress { done, total }` → `pump_update` 写入 `UpdateView` | 后台线程只发纯数据，文案与绘制仍归 UI 线程 |
+| 纯状态 | `UpdateView::progress()` 仅在 `busy && total > 0` 时返回 `0..=1` 并夹紧 | 检查阶段、服务器未给大小、下载结束后都不该有进度条 |
+| 卡片 | 「更新」状态卡片加 `ProgressBar` + 百分比 + `{0} / {1} MB` 字节数 | 下载期间按钮已禁用，需要可见反馈 |
+| 验收 | `settings_shot` 增 `progress` 开关；离屏截图确认 56%、18.0 / 32.0 MB、按钮禁用；2 项新测试 | 项目约定不靠人肉截图 |
+| 台账 | PORTING Backlog #8 划掉 | 台账按代码实际存在与否标，不按计划标 |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**609 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 83 / `settings` 8+42+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**611 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 83 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
 - `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
-- `nooksill-settings` kittest 42 项布局与交互契约，含二级导航的过滤/返回/点击优先级与 11 项更新弹窗断言（默认弹出、稍后关闭、动作只发命令、自动更新与关提示时不弹、不再提示写回配置、通用弹窗复用、重开窗口重置机会、点内部不误关、版本路径与通道徽标、已就绪弹窗、自动更新不弹已就绪）；`preview` 另有 2 项几何不变量单测。
+- `nooksill-settings` kittest 44 项布局与交互契约，含二级导航的过滤/返回/点击优先级、11 项更新弹窗断言、2 项下载进度断言；`preview` 另有 2 项几何不变量单测。
 - CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。
 - 本地 `package.sh` 的 debug 与 release 两条路径均通过；`cargo clean` 后冷启动重建（清掉 14.5 GiB / 26471 个产物）门禁仍全绿。
 - 真实网络：`update_check -- beta` 第一次返回限流并写下退避，第二次短路返回「本次未发起请求」；后续复验仍为出口 IP 限流，属环境事实而非代码缺陷。
-- 离屏截图验收 10 张（深/浅色外观、弹窗、更新策略、渐变+倒影、徽标与图标字形、已就绪弹窗），走真实 `FrameRenderer` + `settings_win::shell`。
+- 离屏截图验收 11 张（深/浅色外观、弹窗、更新策略、渐变+倒影、徽标与图标字形、已就绪弹窗、下载进度），走真实 `FrameRenderer` + `settings_win::shell`。
 
 ### Dock 交互
 

@@ -10,3 +10,4 @@ mod layout;
 mod modal;
 mod pages;
 mod performance;
+mod progress;

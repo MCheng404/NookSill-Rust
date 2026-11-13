@@ -14,6 +14,8 @@ use nooksill_platform::update::{self, Channel};
 pub(super) enum UpdateMsg {
     /// One line of progress text.
     Status(String),
+    /// Bytes received so far, and the asset size from the release metadata.
+    Progress { done: u64, total: u64 },
     /// The daily check finished successfully; store its UTC day stamp.
     Checked(i32),
     /// A new version was found, with the release info the download needs.
@@ -126,7 +128,9 @@ impl App {
                 "Downloading from {0}…",
                 &[label],
             )));
-            match update::stage(&base, &release) {
+            match update::stage_with_progress(&base, &release, &mut |done, total| {
+                let _ = tx.send(UpdateMsg::Progress { done, total });
+            }) {
                 Ok(path) => {
                     let _ = tx.send(UpdateMsg::Staged(path));
                 }
@@ -168,7 +172,14 @@ impl App {
                     view.status = text;
                     view.busy = true;
                 }
+                UpdateMsg::Progress { done, total } => {
+                    view.bytes_done = done;
+                    view.bytes_total = total;
+                    view.busy = true;
+                }
                 UpdateMsg::Available(release) => {
+                    view.bytes_done = 0;
+                    view.bytes_total = 0;
                     let kind = if release.prerelease {
                         nooksill_core::i18n::t("New pre-release")
                     } else {

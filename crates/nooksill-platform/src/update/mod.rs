@@ -153,7 +153,16 @@ pub fn pick_mirror(target: &str, test_all: bool, allow_direct: bool) -> Option<S
 
 /// Download + verify. Returns the staged file, ready to be swapped in.
 pub fn stage(base: &str, release: &Release) -> Result<PathBuf, UpdateError> {
-    download::stage(base, release)
+    download::stage(base, release, &mut |_, _| {})
+}
+
+/// [`stage`] with byte-level progress reports for the UI thread.
+pub fn stage_with_progress(
+    base: &str,
+    release: &Release,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<PathBuf, UpdateError> {
+    download::stage(base, release, on_progress)
 }
 
 /// Where a staged update lives: next to the running exe, so the final `move`

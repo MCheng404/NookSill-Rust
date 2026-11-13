@@ -287,6 +287,7 @@ pub const TEXT: &[&str] = &[
     "a newer version",
     "{0} (current)",
     "{0} / {1} GB free",
+    "{0} / {1} MB",
     "{0} is available on the {1} channel.",
     "{0} items",
     "{0} items already on the Dock",
