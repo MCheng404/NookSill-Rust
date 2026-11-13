@@ -14,16 +14,21 @@ mod icons;
 mod interaction;
 mod items;
 mod library;
+mod nav;
 mod options;
 mod performance;
 mod position;
+mod preview;
+mod update;
 mod widgets;
 
 use egui::Ui;
 use nooksill_core::config::Config;
 use nooksill_core::item::Item;
 
+pub use nav::{NavGroup, NavItem};
 pub(crate) use widgets::Ctx;
+pub use widgets::{Modal, ModalAction};
 
 /// Settings pages, in sidebar order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,11 +45,13 @@ pub enum Page {
     Items,
     Library,
     Add,
+    UpdatePolicy,
+    UpdateNetwork,
     About,
 }
 
 impl Page {
-    pub const ALL: [Page; 12] = [
+    pub const ALL: [Page; 14] = [
         Page::General,
         Page::Appearance,
         Page::Position,
@@ -56,6 +63,8 @@ impl Page {
         Page::Items,
         Page::Library,
         Page::Add,
+        Page::UpdatePolicy,
+        Page::UpdateNetwork,
         Page::About,
     ];
 
@@ -73,6 +82,8 @@ impl Page {
             Page::Items => nooksill_core::i18n::t("Items"),
             Page::Library => nooksill_core::i18n::t("Icon Library"),
             Page::Add => nooksill_core::i18n::t("Add"),
+            Page::UpdatePolicy => nooksill_core::i18n::t("Update policy"),
+            Page::UpdateNetwork => nooksill_core::i18n::t("Network"),
             Page::About => nooksill_core::i18n::t("About"),
         }
     }
@@ -104,6 +115,12 @@ impl Page {
             Page::Add => {
                 nooksill_core::i18n::t("Add things to the Dock, import and export the config.")
             }
+            Page::UpdatePolicy => {
+                nooksill_core::i18n::t("Release channel, update popup and automatic updates.")
+            }
+            Page::UpdateNetwork => {
+                nooksill_core::i18n::t("DNS checks, mirror selection and experimental switches.")
+            }
             Page::About => nooksill_core::i18n::t("Version, project URL, author and licence."),
         }
     }
@@ -114,6 +131,14 @@ impl Page {
 #[derive(Clone, Debug)]
 pub struct SettingsState {
     pub page: Page,
+    /// Open group; while set, the sidebar shows its content tabs instead.
+    pub sub: Option<NavGroup>,
+    /// Primary page to restore when the back row is pressed.
+    pub return_page: Page,
+    /// The one modal on screen, drawn above a softened settings surface.
+    pub modal: Option<Modal>,
+    /// The update popup has already been offered in this window session.
+    pub update_prompted: bool,
     /// Monitor names, filled by the platform layer.
     pub monitors: Vec<String>,
     /// Real autostart state read from the registry, not the config value.
@@ -192,6 +217,10 @@ impl Default for SettingsState {
     fn default() -> Self {
         Self {
             page: Page::General,
+            sub: None,
+            return_page: Page::General,
+            modal: None,
+            update_prompted: false,
             monitors: vec![nooksill_core::i18n::t("Primary monitor").to_owned()],
             auto_start: false,
             config_dir: String::new(),
@@ -298,6 +327,12 @@ pub struct UpdateView {
     pub ready: bool,
     /// A request is in flight; buttons are disabled.
     pub busy: bool,
+    /// Version text of the offered release, for the popup.
+    pub version: String,
+    /// Release notes, trimmed by the popup.
+    pub notes: String,
+    /// The offered release belongs to the beta channel.
+    pub prerelease: bool,
 }
 
 /// Result of one frame.
@@ -312,6 +347,8 @@ pub struct Outcome {
 /// The status line is drawn by the window layer, not here.
 pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> Outcome {
     let mut out = Outcome::default();
+    normalize_nav(state);
+    update::maybe_prompt(state, cfg);
     {
         let mut ctx = Ctx {
             cfg,
@@ -328,7 +365,11 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
         let rect = ui.available_rect_before_wrap();
         // Navigation height is the window height; past `MAX_LABELS` rows it is
         // capped and the rest scrolls.
-        let nav_h = if Page::ALL.len() > widgets::MAX_LABELS {
+        let rows = match ctx.state.sub {
+            Some(group) => group.tabs().len() + 1,
+            None => NavItem::PRIMARY.len(),
+        };
+        let nav_h = if rows > widgets::MAX_LABELS {
             (widgets::MAX_LABELS as f32 * (widgets::NAV_ITEM_H + 3.0) + 20.0).min(rect.height())
         } else {
             rect.height()
@@ -384,6 +425,11 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
         let page = ctx.state.page;
         widgets::page_header(&mut content_ui, page);
         content_ui.add_space(8.0);
+        // Above the scrolling cards, so the sketch stays visible while the
+        // settings below it are scrolled.
+        if ctx.state.sub.is_some_and(NavGroup::shows_preview) {
+            preview::preview(ctx.cfg, &mut content_ui);
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(&mut content_ui, |ui| match page {
@@ -398,12 +444,33 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
                 Page::Items => items::page(&mut ctx, ui),
                 Page::Library => library::page(&mut ctx, ui),
                 Page::Add => add::page(&mut ctx, ui),
+                Page::UpdatePolicy => update::policy_page(&mut ctx, ui),
+                Page::UpdateNetwork => update::network_page(&mut ctx, ui),
                 Page::About => about::page(&mut ctx, ui),
             });
 
         // Bubbles last: every row's hover and click state is settled by now, so
-        // the bubble never lags a frame behind.
+        // the bubble never lags a frame behind. The modal goes above both.
         widgets::render_tip(ui, ctx.state);
+        widgets::render_modal(ui, ctx.cfg, ctx.state, ctx.out);
     }
     out
+}
+
+/// A page owned by a group is always shown with that group's tab strip, even
+/// when the host sets `page` directly (headless tests do this).
+fn normalize_nav(state: &mut SettingsState) {
+    match state.sub {
+        None => {
+            if let Some(group) = NavGroup::containing(state.page) {
+                state.return_page = Page::General;
+                state.sub = Some(group);
+            }
+        }
+        Some(group) => {
+            if !group.tabs().contains(&state.page) {
+                state.sub = NavGroup::containing(state.page);
+            }
+        }
+    }
 }

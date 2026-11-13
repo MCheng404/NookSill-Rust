@@ -42,5 +42,15 @@ UI language follows the Windows display language by default. Override it in
 Settings → General → Language or with `[general] Language` in `NookSill.ini`;
 English is the base language and the fallback for untranslated strings.
 
+## Updates
+
+Settings → Updates & network selects the **stable** or **beta** channel. The
+beta channel follows the rolling `dev` pre-release; the stable channel follows
+`v*` releases. Update checks are daily and conditional (ETag), downloads are
+resumable and verified against the release asset's SHA-256 digest. With
+automatic updates enabled the new build is swapped in on the next launch, with
+no popup and no restart prompt. See [`BUILD.md`](BUILD.md) §8.4 and
+[`CONFIG.md`](CONFIG.md) for the `[advanced] Upd*` keys.
+
 ## License
 GNU General Public License v3.0 or Later (`GPL-3.0-or-later`). Full Text in [`LICENSE`](LICENSE). Settings → 关于 Shows the Same Declaration.

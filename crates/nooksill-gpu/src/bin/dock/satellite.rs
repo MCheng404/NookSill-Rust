@@ -61,6 +61,9 @@ pub(super) fn ensure_settings<'a>(
     }
     // An error points at the logic bug better than a panic.
     let sw = slot.as_mut().ok_or("settings window not initialised")?;
+    // Each open is a fresh chance to show a pending update; dismissing the
+    // popup only suppresses it for the current window session.
+    sw.state.update_prompted = false;
     Ok(&mut **sw)
 }
 

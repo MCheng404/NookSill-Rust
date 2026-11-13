@@ -107,4 +107,8 @@ fn numeric_defaults_match_upstream() {
     assert_eq!(Config::defaults().get_i32(Key::HPAD), 12);
     assert_eq!(c.get_i32(Key::SEP_GAP), 4);
     assert_eq!(Config::defaults().get_i32(Key::SEP_GAP), 4);
+    // Updater switches.
+    assert_eq!(c.get_i32(Key::UPD_CHANNEL), 0);
+    assert_eq!(c.get_i32(Key::UPD_PROMPT), 1);
+    assert_eq!(c.get_i32(Key::UPD_AUTO), 0);
 }

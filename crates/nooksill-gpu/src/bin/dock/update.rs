@@ -1,6 +1,11 @@
-//! Self-update: checking, downloading and staging a new build.
+//! Self-update: channel selection, daily background checks, staged installs.
+//!
+//! The worker only sends plain data; translation and window wake-ups belong to
+//! the UI thread. Automatic updates never quit the process: the staged binary
+//! is swapped in after the normal shutdown path runs.
 
 use super::*;
+use nooksill_platform::update::{self, Channel};
 
 /// Messages the updater thread sends back to the main thread.
 ///
@@ -10,7 +15,7 @@ pub(super) enum UpdateMsg {
     /// One line of progress text.
     Status(String),
     /// A new version was found, with the release info the download needs.
-    Available(Box<nooksill_platform::update::Release>),
+    Available(Box<update::Release>),
     /// Already up to date, nothing to download.
     UpToDate,
     /// Download and verification finished, the file waits on disk for the swap.
@@ -20,24 +25,29 @@ pub(super) enum UpdateMsg {
 }
 
 impl App {
+    fn update_channel(&self) -> Channel {
+        Channel::from_i32(self.dock.cfg.get_i32(Key::UPD_CHANNEL))
+    }
+
     /// Starts the update check on a thread and returns to the main loop.
     pub(super) fn start_update_check(&mut self) {
         if self.update_rx.is_some() {
             return;
         }
+        let channel = self.update_channel();
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         std::thread::spawn(move || {
             let _ = tx.send(UpdateMsg::Status(
                 nooksill_core::i18n::t("Checking…").to_owned(),
             ));
-            match nooksill_platform::update::latest_release() {
+            match update::latest_release(channel) {
                 Ok(rel) => {
-                    let installed =
-                        nooksill_platform::update::Version::parse(nooksill_core::VERSION);
-                    // Channel rule: a stable release never offers a
-                    // prerelease (see `update::is_offered`).
-                    if installed.is_some_and(|v| nooksill_platform::update::is_offered(&rel, &v)) {
+                    let installed = update::Version::parse(nooksill_core::VERSION);
+                    // Channel selection is explicit now: a stable install can
+                    // opt into beta, and a beta install can opt out.
+                    let offered = installed.is_some_and(|v| update::is_offered(&rel, &v, channel));
+                    if offered {
                         let _ = tx.send(UpdateMsg::Available(Box::new(rel)));
                     } else {
                         let _ = tx.send(UpdateMsg::UpToDate);
@@ -48,6 +58,26 @@ impl App {
                 }
             }
         });
+    }
+
+    /// One automatic check per calendar day, started during boot.
+    ///
+    /// `UpdLast` stores UTC days so a machine that sleeps across midnight does
+    /// not check again on every wake in the same day.
+    pub(super) fn maybe_auto_check(&mut self) {
+        if self.dock.cfg.get_i32(Key::UPD_CHK) == 0 {
+            return;
+        }
+        let day = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 86_400) as i32)
+            .unwrap_or(0);
+        if self.dock.cfg.get_i32(Key::UPD_LAST) == day {
+            return;
+        }
+        self.dock.cfg.apply_i32(Key::UPD_LAST, day);
+        self.touch_cfg();
+        self.start_update_check();
     }
 
     /// Downloads: picks a mirror by the switches (no direct connection when
@@ -65,15 +95,15 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         std::thread::spawn(move || {
-            let allow_direct =
-                !(secure_dns && nooksill_platform::update::dns_looks_poisoned("github.com"));
+            let allow_direct = !(secure_dns && update::dns_looks_poisoned("github.com"));
             let _ = tx.send(UpdateMsg::Status(if allow_direct {
                 nooksill_core::i18n::t("Benchmarking mirrors…").to_owned()
             } else {
                 nooksill_core::i18n::t("System DNS looks poisoned; using mirrors only…").to_owned()
             }));
-            let base =
-                nooksill_platform::update::pick_mirror(&release.sha256.url, test_all, allow_direct);
+            // The exe asset is the download target; the checksum asset is only
+            // a fallback when the API has no digest.
+            let base = update::pick_mirror(&release.exe.url, test_all, allow_direct);
             let Some(base) = base else {
                 let _ = tx.send(UpdateMsg::Failed(
                     nooksill_core::i18n::t("No usable mirror").to_owned(),
@@ -87,9 +117,9 @@ impl App {
             };
             let _ = tx.send(UpdateMsg::Status(nooksill_core::i18n::fmt(
                 "Downloading from {0}…",
-                &[label.to_string().as_str()],
+                &[label],
             )));
-            match nooksill_platform::update::stage(&base, &release) {
+            match update::stage(&base, &release) {
                 Ok(path) => {
                     let _ = tx.send(UpdateMsg::Staged(path));
                 }
@@ -113,7 +143,9 @@ impl App {
             return;
         }
 
+        let auto = self.dock.cfg.get_i32(Key::UPD_AUTO) != 0;
         let mut finished = false;
+        let mut auto_download = false;
         for msg in messages {
             let mut view = self
                 .settings_slot
@@ -133,14 +165,22 @@ impl App {
                     };
                     view.status = nooksill_core::i18n::fmt(
                         "Found {0} {1}",
-                        &[
-                            kind.to_string().as_str(),
-                            release.version.text.to_string().as_str(),
-                        ],
+                        &[kind, release.version.text.as_str()],
                     );
+                    view.version = release.version.text.clone();
+                    view.notes = release.notes.clone();
+                    view.prerelease = release.prerelease;
                     view.available = true;
                     view.busy = false;
                     self.update_release = Some(*release);
+                    // A new offer is a new reason to prompt, but automatic
+                    // updates skip the popup entirely.
+                    if !auto {
+                        if let Some(sw) = self.settings_slot.as_mut() {
+                            sw.state.update_prompted = false;
+                        }
+                    }
+                    auto_download = auto;
                     finished = true;
                 }
                 UpdateMsg::UpToDate => {
@@ -150,17 +190,24 @@ impl App {
                     finished = true;
                 }
                 UpdateMsg::Staged(path) => {
-                    view.status =
+                    view.status = if auto {
+                        nooksill_core::i18n::t("Downloaded and verified; applies on next start")
+                    } else {
                         nooksill_core::i18n::t("Downloaded and verified; applies after restart")
-                            .to_owned();
+                    }
+                    .to_owned();
                     view.ready = true;
                     view.busy = false;
-                    self.update_staged = Some(path);
+                    self.update_staged = Some(path.clone());
+                    if auto {
+                        // No quit message: the swap runs after the destructors.
+                        self.pending_update = Some(path);
+                        self.pending_silent = true;
+                    }
                     finished = true;
                 }
                 UpdateMsg::Failed(why) => {
-                    view.status =
-                        nooksill_core::i18n::fmt("Failed: {0}", &[why.to_string().as_str()]);
+                    view.status = nooksill_core::i18n::fmt("Failed: {0}", &[why.as_str()]);
                     view.busy = false;
                     finished = true;
                 }
@@ -172,6 +219,9 @@ impl App {
         }
         if finished {
             self.update_rx = None;
+        }
+        if auto_download {
+            self.start_update_download();
         }
     }
 
@@ -185,6 +235,7 @@ impl App {
         // `main` after `App` is dropped: `process::exit` skips the
         // destructors, so the AppBar ABM_REMOVE and the config write are lost.
         self.pending_update = Some(staged);
+        self.pending_silent = false;
         // SAFETY: `PostQuitMessage` only queues a WM_QUIT on this thread.
         unsafe { PostQuitMessage(0) };
     }

@@ -11,6 +11,7 @@
 mod button;
 mod card;
 mod combo;
+mod modal;
 mod motion;
 mod pickers;
 mod row;
@@ -24,6 +25,8 @@ mod tests;
 pub(crate) use button::{button, small_button};
 pub(crate) use card::card;
 pub(crate) use combo::combo;
+pub(crate) use modal::render_modal;
+pub use modal::{Modal, ModalAction};
 pub(crate) use pickers::{accent_row, color_row};
 pub(crate) use row::{render_tip, row};
 pub(crate) use sidebar::sidebar;

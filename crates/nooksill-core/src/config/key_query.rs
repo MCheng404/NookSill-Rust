@@ -180,6 +180,10 @@ impl Key {
         Key::PANEL_OPACITY,
         Key::PANEL_OVERLAY,
         Key::FROST_ILLUSION,
+        // Updater switches.
+        Key::UPD_CHANNEL,
+        Key::UPD_PROMPT,
+        Key::UPD_AUTO,
     ];
 
     /// Every key that needs reading and writing: the row-order table first,

@@ -2,6 +2,8 @@
 //!
 //! WinHTTP brings the system proxy, the OS trust store, redirects and HTTP/1.1,
 //! so no TLS stack or extra crate is linked. Only `GET` is implemented.
+//! `get_raw` exposes status and headers for conditional requests; `get_stream`
+//! writes chunks while they arrive so a partial download can be resumed.
 
 use std::fmt;
 
@@ -10,7 +12,8 @@ use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
     WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
-    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+    WINHTTP_QUERY_STATUS_CODE,
 };
 
 /// Body caps. API answers and DoH replies are kilobytes; a release asset is a
@@ -29,6 +32,8 @@ pub enum NetError {
     Status(u32),
     /// Body exceeded the caller's cap.
     TooLarge(usize),
+    /// The caller's chunk writer refused the data.
+    Sink,
 }
 
 impl fmt::Display for NetError {
@@ -38,17 +43,37 @@ impl fmt::Display for NetError {
             Self::Win32(what) => write!(f, "{what} 失败"),
             Self::Status(code) => write!(f, "HTTP {code}"),
             Self::TooLarge(cap) => write!(f, "响应超过 {} MB 上限", cap / (1024 * 1024)),
+            Self::Sink => write!(f, "写入下载文件失败"),
         }
     }
 }
 
 impl std::error::Error for NetError {}
 
-/// A response we care about: status plus the whole body.
+/// Chunk writer used by streaming downloads; the first argument is the status.
+type Sink<'a> = &'a mut dyn FnMut(u32, &[u8]) -> Result<(), NetError>;
+
+/// A response we care about: status, lowercase header names and the body.
+///
+/// `bytes` counts everything received, including a streamed body that is not
+/// retained in `body`.
 #[derive(Debug)]
 pub struct Response {
     pub status: u32,
     pub body: Vec<u8>,
+    pub bytes: usize,
+    pub headers: Vec<(String, String)>,
+}
+
+impl Response {
+    /// First value of a header, compared case-insensitively.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// `GET url`, following redirects (WinHTTP does that by default).
@@ -60,6 +85,41 @@ pub fn get(
     headers: &str,
     timeout_ms: i32,
     max_body: usize,
+) -> Result<Response, NetError> {
+    request(url, headers, timeout_ms, max_body, false, None)
+}
+
+/// Like [`get`], but returns 304 / 4xx / 206 responses instead of turning them
+/// into [`NetError::Status`].
+pub fn get_raw(
+    url: &str,
+    headers: &str,
+    timeout_ms: i32,
+    max_body: usize,
+) -> Result<Response, NetError> {
+    request(url, headers, timeout_ms, max_body, true, None)
+}
+
+/// Streams the body into `write` without retaining it in memory. The callback
+/// sees the status first, so a `200` answer to a ranged request can truncate
+/// the partial file while `206` appends to it.
+pub fn get_stream(
+    url: &str,
+    headers: &str,
+    timeout_ms: i32,
+    max_body: usize,
+    write: Sink<'_>,
+) -> Result<Response, NetError> {
+    request(url, headers, timeout_ms, max_body, true, Some(write))
+}
+
+fn request(
+    url: &str,
+    headers: &str,
+    timeout_ms: i32,
+    max_body: usize,
+    allow_raw: bool,
+    mut sink: Option<Sink<'_>>,
 ) -> Result<Response, NetError> {
     let parts = split_url(url).ok_or(NetError::BadUrl)?;
 
@@ -76,12 +136,14 @@ pub fn get(
     };
     let session = Handle::new(session, "WinHttpOpen")?;
     unsafe {
+        // The receive timeout is per packet, not for the whole download; a
+        // stalled transfer is bounded separately by the caller's watchdog.
         let _ = WinHttpSetTimeouts(
             session.raw(),
+            0,
             timeout_ms,
             timeout_ms,
-            timeout_ms,
-            timeout_ms,
+            timeout_ms.max(30_000),
         );
     }
 
@@ -125,11 +187,17 @@ pub fn get(
         .map_err(|_| NetError::Win32("WinHttpReceiveResponse"))?;
 
     let status = status_code(request.raw())?;
-    let body = read_body(request.raw(), max_body)?;
-    if !(200..300).contains(&status) {
+    let heads = raw_headers(request.raw());
+    let (body, bytes) = read_body(request.raw(), max_body, status, &mut sink)?;
+    if !allow_raw && !(200..300).contains(&status) {
         return Err(NetError::Status(status));
     }
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        body,
+        bytes,
+        headers: heads,
+    })
 }
 
 fn status_code(request: *mut core::ffi::c_void) -> Result<u32, NetError> {
@@ -150,8 +218,58 @@ fn status_code(request: *mut core::ffi::c_void) -> Result<u32, NetError> {
     Ok(code)
 }
 
-fn read_body(request: *mut core::ffi::c_void, max_body: usize) -> Result<Vec<u8>, NetError> {
+/// All response headers as lowercase names. The first query with a null buffer
+/// deliberately fails with ERROR_INSUFFICIENT_BUFFER and reports the size.
+fn raw_headers(request: *mut core::ffi::c_void) -> Vec<(String, String)> {
+    let mut len: u32 = 0;
+    let _ = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_RAW_HEADERS_CRLF,
+            PCWSTR::null(),
+            None,
+            &mut len,
+            std::ptr::null_mut(),
+        )
+    };
+    if len < 4 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u16; (len as usize / 2) + 2];
+    let mut used = len + 4;
+    let ok = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_RAW_HEADERS_CRLF,
+            PCWSTR::null(),
+            Some(buf.as_mut_ptr().cast()),
+            &mut used,
+            std::ptr::null_mut(),
+        )
+    }
+    .is_ok();
+    if !ok {
+        return Vec::new();
+    }
+    let chars = (used as usize / 2).saturating_sub(1).min(buf.len());
+    let text = String::from_utf16_lossy(&buf[..chars]);
+    text.split("\r\n")
+        .skip(1)
+        .filter_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            Some((k.trim().to_ascii_lowercase(), v.trim().to_owned()))
+        })
+        .collect()
+}
+
+fn read_body(
+    request: *mut core::ffi::c_void,
+    max_body: usize,
+    status: u32,
+    sink: &mut Option<Sink<'_>>,
+) -> Result<(Vec<u8>, usize), NetError> {
     let mut body = Vec::new();
+    let mut total = 0usize;
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         let mut available: u32 = 0;
@@ -159,7 +277,7 @@ fn read_body(request: *mut core::ffi::c_void, max_body: usize) -> Result<Vec<u8>
         unsafe { WinHttpQueryDataAvailable(request, &raw mut available) }
             .map_err(|_| NetError::Win32("WinHttpQueryDataAvailable"))?;
         if available == 0 {
-            return Ok(body);
+            return Ok((body, total));
         }
         let want = (available as usize).min(chunk.len());
         let mut read: u32 = 0;
@@ -174,10 +292,16 @@ fn read_body(request: *mut core::ffi::c_void, max_body: usize) -> Result<Vec<u8>
         }
         .map_err(|_| NetError::Win32("WinHttpReadData"))?;
         if read == 0 {
-            return Ok(body);
+            return Ok((body, total));
         }
-        body.extend_from_slice(&chunk[..read as usize]);
-        if body.len() > max_body {
+        let part = &chunk[..read as usize];
+        if let Some(write) = sink.as_deref_mut() {
+            write(status, part)?;
+        } else {
+            body.extend_from_slice(part);
+        }
+        total += part.len();
+        if total > max_body {
             return Err(NetError::TooLarge(max_body));
         }
     }
@@ -251,7 +375,7 @@ fn split_url(url: &str) -> Option<Parts<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_url;
+    use super::*;
 
     #[test]
     fn url_parts_are_split() {
@@ -269,5 +393,16 @@ mod tests {
 
         assert!(split_url("ftp://x/y").is_none());
         assert!(split_url("https:///nohost").is_none());
+    }
+
+    #[test]
+    fn header_lookup_is_case_insensitive() {
+        let r = Response {
+            status: 200,
+            body: Vec::new(),
+            bytes: 0,
+            headers: vec![("etag".to_owned(), "W/\"abc\"".to_owned())],
+        };
+        assert_eq!(r.header("ETag"), Some("W/\"abc\""));
     }
 }

@@ -23,7 +23,8 @@ fn 页面切换后能看到该页控件() {
     // Only the appearance page has this slider, so it proves the switch.
     assert_eq!(h.query_all_by_label("图标大小").count(), 0);
 
-    h.get_by_label("外观").click();
+    // Appearance is now the first tab of the Dock group.
+    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
     h.run();
     assert_eq!(h.state().ui.page, Page::Appearance);
     // Both the slider and its label match, hence the `all` query.
@@ -51,7 +52,10 @@ fn 磨砂开关映射到背景材质() {
 #[test]
 fn 重置按钮产出命令而不是直接改配置() {
     let mut h = new_harness();
-    h.get_by_label("添加").click();
+    h.get_by_role_and_label(egui::Role::Tab, "内容与图标库")
+        .click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Tab, "添加").click();
     h.run();
 
     h.get_by_label("恢复默认设置").click();

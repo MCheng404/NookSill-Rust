@@ -1128,3 +1128,72 @@
 - 让渡只在连续动画期间发生：光标闪烁、一次性刷新不算，栏体的烟雾因此不会因为「点了一下输入框」而停住。
 
 **代价**：在设置窗口里拖动或悬停期间，栏体的烟雾会停在原地（窗口大部分被设置窗口挡住，实测交互结束当秒恢复 86.8 帧/秒）。另外设置窗口的连续重绘被限制在一个刷新周期，拖动时的跟随延迟上限从 ~6 ms 变成 ~17 ms —— 换来的是稳定的帧间隔，而不是长短交替。节流值取的是 DWM 报告值，高刷屏上自动变短；若某台机器 `DwmGetCompositionTimingInfo` 失败则回退 16 ms（与既有 `perf::vsync_interval_ms` 一致）。
+
+---
+
+## ADR-082 · 更新通道由用户显式选择，元数据只发一次条件请求
+
+**决定**：
+- `[advanced] UpdChannel`（0 稳定 / 1 测试）是唯一通道判据，不再由「本机是不是 debug 构建」推断。`dev` 滚动预发布属于测试通道，`v*` 正式发布属于稳定通道。
+- 只请求一次 `GET /repos/{owner}/{repo}/releases?per_page=15`，`per_page` 固定；本地按 `draft` / `prerelease` 分流。稳定通道取最高的非预发布；测试通道优先取预发布，没有才回退稳定版。
+- ETag 持久化到 `NookSill.releases.cache`，每次带 `If-None-Match` 原样回传；`304` 复用缓存的响应体。`x-ratelimit-reset` / `retry-after` 翻成「约 N 秒后重试」，不盲目重试。
+- 校验锚点是 API 返回的 `assets[].digest`（`sha256:<hex>`），`.sha256` 资产只作降级；`state != uploaded` 的资产不参与选择。
+
+**依据**：
+- 官方定义 `/releases/latest` 是 "most recent non-prerelease, non-draft release, **sorted by the `created_at` attribute**"，而 `created_at` 是 "the date of the commit used for the release, and not the date when the release was drafted or published"；它既不能当版本号最大的依据，也覆盖不了只有预发布的窗口。
+- 官方措辞："Making a conditional request does not count against your primary rate limit if a `304` response is returned and the request was made while correctly authorized with an `Authorization` header." 该承诺带认证限定，所以未认证客户端仍按低频（每天一次）使用，不把 304 当无限轮询许可证；"A different page size, page number, or filter produces a different response with a different `etag`" 要求 `per_page` 固定。
+- 官方 2025-06 公告："GitHub now automatically computes and displays SHA256 checksums (digests) for all uploaded release assets. These digests are generated at upload time, immutable." 摘要与元数据同源，镜像只做字节搬运。
+- 本项目的 `dev` 构建号与稳定版共用三段版本号（`2.0.0` vs `2.0.0-12-abc1234`），纯版本比较会让测试通道反而选中稳定版；因此 `pick` 按通道分槽、`is_offered` 在测试通道比 dev 构建号。
+
+**代价**：ETag 缓存与上次成功的镜像前缀会写两个小文件到 exe 同目录；便携模式下它们跟着程序走。测试通道在 dev 构建与正式版三段号相同时按构建号判断，"从稳定版切到测试版"会收到一个版本号看起来更低的文件 —— 这是通道切换而不是升级，界面文案用「测试版」而非「新版本」区分。
+
+---
+
+## ADR-083 · 自动更新静默替换，弹窗只是默认提示路径
+
+**决定**：
+- `UpdAuto=1` 时后台检查 → 自动下载校验 → 写 `NookSill.update.marker` → 进程正常退出后由 `cmd` 脚本 `move /Y`，**不**自动重启、**不**弹窗；下次手动启动就是新版本。
+- `UpdPrompt=1`（默认）且 `UpdAuto=0` 时，打开设置界面弹出居中圆角弹窗；「稍后」关掉、「不再提示」把 `UpdPrompt` 写 0。每次重新打开设置窗口重置一次提示机会。
+- `UpdAuto` 优先于 `UpdPrompt`；`UpdChk` / `UpdLast` 从「只存不用」改为启动时按 UTC 天数检查一次。
+- 手动「重启并更新」仍走原来的 `apply_and_restart`（退出后 move + start）。
+
+**依据**：
+- Windows 上正在运行的 exe 被系统锁住，无法原地覆盖；`MOVEFILE_DELAY_UNTIL_REBOOT` 只对管理员进程可用，项目不提权。退出后由外部脚本 move 是唯一不需要提权的路径。
+- 「静默下载、下次启动替换」是用户明确选定的策略：不打断当前会话，也不弹窗。
+- 弹窗的按钮只产出 `Command`，替换、写盘、重启都在主程序；`settings` 保持无副作用，kittest 仍可断言。
+- `UpdChk` / `UpdLast` 在 `PORTING.md` §7.1 已入库但「只存不用」，设置页一旦暴露开关就必须有消费者，不能留空壳。
+
+**代价**：自动更新到用户下次启动之间有一段时间仍跑旧版本；如果进程被强杀（不经过正常退出路径），staged 文件会留到下次启动但不会自动安装，需要用户再触发一次检查。marker 校验会在任何替换前重算 SHA-256，被篡改的文件直接丢弃。
+
+---
+
+## ADR-084 · 设置界面用二级标签复用导航栏，Dock 预览留在纯 UI 层
+
+**决定**：
+- 一级导航 6 项（常规 / Dock 栏 / 性能 / 内容与图标库 / 更新与网络 / 关于）。打开分组时 `SettingsState::sub` 接管：导航栏临时渲染该组的内容标签，底部固定「< 返回」；右侧内容区顶部渲染实时预览 Dock，下面是当前标签的原页面。
+- `Page` 仍是 14 个内容页的枚举，一个页面只有一个渲染函数；`normalize_nav` 保证直接设置 `page` 也会落到正确的分组。`NavItem::PRIMARY` 与 `NavGroup::tabs()` 是唯一的导航数据源。
+- 预览 Dock 是 `pages/preview.rs` 的纯 egui 绘制，每帧读 `Config`；不碰 wgpu、不建窗口、不做副作用。
+- 通用 `Modal` 只承载字符串与 `Command`；弹出时对整窗叠半透明遮罩与散焦光晕，`settings_win::shell` 再叠一层柔化底色。
+
+**依据**：
+- 一级页持续增加会撞上 `MAX_LABELS` 的溢出问题，而右侧内容区在 720 高的窗口里还有余量；二级标签复用导航栏是「不新增一列」前提下提高承载性的唯一办法。
+- `nooksill-settings` 刻意不依赖 wgpu（ADR-003），预览若走真实 `FrameRenderer` 会打穿 crate 边界、让 kittest 需要 GPU；纯 egui 的示意栏体每帧读取同一份 `Config`，与「改滑块下一帧栏体就变」是同一条数据链。
+- ADR-049 的两列手工切分、`available_rect_before_wrap()` 起点、卡片撑满宽度等约束全部保留；kittest 的矩形契约只把「点一级标签」改成「点分组再点标签」。
+- egui 没有帧后模糊器，做真高斯需要两趟渲染并把设置窗口拆成纹理；为一次提示引入 GPU 后处理不划算。
+
+**代价**：预览是示意而非像素级复刻（图标是色块，渐变用窄条近似，磨砂用低对比雾层），不能当截图验收依据；像素级回归仍走 `examples/settings_shot.rs`。遮罩 + 柔化不是真高斯模糊，是视觉上的失焦近似。二级模式下顶部预览固定占 176 逻辑点，滚动区比一级页矮。
+
+---
+
+## ADR-085 · 公开仓库只留源码，非源码内容本机私有化
+
+**决定**：
+- `docs/settings-prototype.html`、`_c.bmp` 与 `dist/` 产物副本移到 `D:\work\MiniDock-private\`，`git rm --cached` 取消追踪，`.gitignore` 补 `/docs/`、`/_c.bmp`、`*.bmp`；`CONTRIBUTING.md` 第五节与 `ARCHITECTURE.md` 的引用同步更新。
+- 公开仓库保留 `crates/`、`Cargo.toml/lock`、`scripts/`、`.github/`、`assets/`、LICENSE 与必要的开源文档；Release 资产与 CI 发布流程**不变**。
+
+**依据**：
+- 用户要求「GitHub 仓库里面只存放源代码，其他内容移到别的地方并且是私人不开放状态」；设计稿、离屏截图与打包产物都不是源码，也没有公开价值。
+- 应用内更新器匿名读取公开 Release 的 exe 与 `.sha256`。GitHub 官方明确 "Never include your app's client secret in client-side code or in code that runs on a user device"，所以发布资产不能整体迁到私有仓库；把「仓库内容」与「发布产物」分开是唯一不破坏更新链路的切法。
+- `dist/` 本来就由 `scripts/package.sh` 每次重新生成，本地保留一份不影响「仓库只放源码」。
+
+**代价**：`docs/settings-prototype.html` 不再随仓库分发，新机器克隆后要拿到视觉基准需要另外复制私有目录；CHANGELOG / DECISIONS 里指向它的历史条目保留原样（历史事实不改）。

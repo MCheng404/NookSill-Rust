@@ -60,6 +60,8 @@ pub(super) fn section_of_numeric(name: &str) -> &'static str {
         "Launchpad" | "LpCols" | "LpRows" => return "widgets.launchpad",
         // System integration: Explorer context menu, tray icon, auto update.
         "PinMenu" | "TrayHide" | "UpdChk" | "UpdLast" => return "advanced",
+        // Updater switches.
+        "UpdChannel" | "UpdPrompt" | "UpdAuto" => return "advanced",
         // Multi-window app mode.
         "MultiMode" => return "behavior",
         // Fan label colors, same group as `FanArc` / `FanGap`.
@@ -282,6 +284,10 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("PanelOverlay", 0, 100, 28, false, false),
     // Experimental temporal reprojection blur, off by default.
     ("FrostIllusion", 0, 1, 0, true, false),
+    // Updater: channel selection, update prompt and silent auto-download.
+    ("UpdChannel", 0, 1, 0, false, false),
+    ("UpdPrompt", 0, 1, 1, true, false),
+    ("UpdAuto", 0, 1, 0, true, false),
 ];
 
 impl Key {
@@ -520,6 +526,12 @@ impl Key {
     /// `FrostIllusion`: experimental temporal reprojection blur; 0 = keep the
     /// plain Gaussian.
     pub const FROST_ILLUSION: Key = Key::Numeric(115);
+    /// `UpdChannel`: 0 = stable channel, 1 = beta channel.
+    pub const UPD_CHANNEL: Key = Key::Numeric(116);
+    /// `UpdPrompt`: show a centered update dialog on opening settings.
+    pub const UPD_PROMPT: Key = Key::Numeric(117);
+    /// `UpdAuto`: download silently and replace on the next launch.
+    pub const UPD_AUTO: Key = Key::Numeric(118);
 
     /// `UiAccentDockIcons`: apply the accent color to dock icons.
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);

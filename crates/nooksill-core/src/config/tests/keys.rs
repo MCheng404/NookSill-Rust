@@ -184,6 +184,9 @@ fn numeric_constants_match_table_rows() {
         (Key::PANEL_OPACITY, "PanelOpacity"),
         (Key::PANEL_OVERLAY, "PanelOverlay"),
         (Key::FROST_ILLUSION, "FrostIllusion"),
+        (Key::UPD_CHANNEL, "UpdChannel"),
+        (Key::UPD_PROMPT, "UpdPrompt"),
+        (Key::UPD_AUTO, "UpdAuto"),
     ];
     for &(key, name) in pairs {
         assert_eq!(key.name(), name, "常量与表行错位");

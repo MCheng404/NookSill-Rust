@@ -7,5 +7,6 @@ mod about;
 mod common;
 mod items;
 mod layout;
+mod modal;
 mod pages;
 mod performance;

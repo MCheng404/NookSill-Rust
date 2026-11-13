@@ -263,6 +263,7 @@ impl App {
             update_release: None,
             update_staged: None,
             pending_update: None,
+            pending_silent: false,
             debug_opened,
             watcher: nooksill_gpu::popup::Watcher::default(),
             panel_was_open: false,
@@ -322,6 +323,9 @@ impl App {
             Ok(t) => app.tray = Some(t),
             Err(e) => eprintln!("托盘图标注册失败（Dock 仍可正常使用）：{e}"),
         }
+        // One background check per day, started only after the window and its
+        // wake-up message are in place.
+        app.maybe_auto_check();
         Ok(Some(app))
     }
 }

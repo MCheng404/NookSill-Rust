@@ -37,7 +37,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         },
     );
 
-    update_card(ctx, ui);
+    super::update::status_card(ctx, ui);
 
     card(
         ctx,
@@ -160,55 +160,6 @@ fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         }
     }
     ui.add_space(7.0);
-}
-
-/// Buttons appear only at stages the update state allows.
-fn update_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
-    card(
-        ctx,
-        ui,
-        nooksill_core::i18n::t("Update"),
-        nooksill_core::i18n::t("Check GitHub for a newer release."),
-        |ctx, ui| {
-            let view = ctx.state.update.clone();
-            let text = if view.status.is_empty() {
-                nooksill_core::i18n::t("Not checked yet").to_owned()
-            } else {
-                view.status.clone()
-            };
-            ui.label(RichText::new(text).small().weak());
-            ui.add_space(6.0);
-
-            ui.horizontal(|ui| {
-                if view.busy {
-                    ui.label(RichText::new(nooksill_core::i18n::t("Please wait…")).small());
-                    return;
-                }
-                super::widgets::button(
-                    ctx,
-                    ui,
-                    nooksill_core::i18n::t("Check for updates"),
-                    Command::CheckUpdate,
-                );
-                if view.available && !view.ready {
-                    super::widgets::button(
-                        ctx,
-                        ui,
-                        nooksill_core::i18n::t("Download and verify"),
-                        Command::DownloadUpdate,
-                    );
-                }
-                if view.ready {
-                    super::widgets::button(
-                        ctx,
-                        ui,
-                        nooksill_core::i18n::t("Restart and update"),
-                        Command::ApplyUpdate,
-                    );
-                }
-            });
-        },
-    );
 }
 
 /// Label on the left, muted value on the right.

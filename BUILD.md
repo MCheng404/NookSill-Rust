@@ -330,3 +330,17 @@ git tag v0.9.26 && git push origin v0.9.26
   同一条代码路径。
 - **标签与版本号强校验**：打错标签（比如 `v0.9.26` 而 Cargo 还是 `0.9.25`）
   直接 fail，而不是发出一个版本号对不上的包。
+
+### 8.4 两个更新通道
+
+应用内更新把这两条发布线当成通道，由 `[advanced] UpdChannel` 选择：
+
+| 通道 | 来源 | CI 触发 | 资产 |
+|---|---|---|---|
+| 稳定版（`0`） | 正式 Release | 推 `v*` 标签 | `NookSill-X.Y.Z-win64.exe` + `.sha256` |
+| 测试版（`1`） | 滚动 Pre-Release | 默认分支每次提交，tag 固定 `dev` | `NookSill-X.Y.Z-<构建号>-<sha>-win64-debug.exe` + `.sha256` |
+
+更新器只请求一次 `GET /releases?per_page=15`，按 `draft` / `prerelease` 本地分流；
+ETag 落盘做条件请求，校验优先用 API 的 `assets[].digest`。所以 CI **不要**改
+`per_page` 或给 `dev` 换成每次一个新 tag —— 前者会让缓存失效，后者会刷屏且
+让测试通道找不到固定入口。Release 资产必须保持公开匿名可读，客户端不能带凭据。

@@ -187,25 +187,43 @@ kittest 无头驱动。结构按"一页一个文件"拆开：
 crates/nooksill-settings/src/
   pages/
     mod.rs         Page 枚举、SettingsState、Command、两列骨架
-    widgets/       共享控件：card / row / toggle / slider / combo / 侧栏
+    nav.rs         一级导航项与分组 -> 内容标签的映射
+    preview.rs     由 Config 每帧驱动的实时预览 Dock（纯 egui）
+    update.rs      更新策略页、网络页、状态卡片与更新弹窗内容
+    widgets/       共享控件：card / row / toggle / slider / combo / 侧栏 / modal
     options.rs     下拉选项表（纯数据）
     items.rs       「条目」页：既有条目的改名/排序/归组/删除（数据由主程序同步快照）
     general.rs     常规      appearance.rs  外观     position.rs   位置
     icons.rs       图标      interaction.rs 交互     extras.rs     附件
     effect.rs      效果      performance.rs 性能     library.rs    图标库
-    add.rs         添加
+    add.rs         添加      about.rs       关于
 ```
 
 加一页设置 = 加一个文件 + `Page` 枚举加一项；加一个设置项 = `core::config`
 加一个键 + 对应页面加一行。**控件长什么样、怎么排版只在 `widgets/` 里改**。
+
+### 二级内容与弹窗
+
+一级导航只有 6 项（常规 / Dock 栏 / 性能 / 内容与图标库 / 更新与网络 / 关于）。
+打开分组时 `SettingsState::sub` 接管：左栏临时渲染该组的内容标签，底部固定
+「< 返回」，右栏顶部渲染**实时预览 Dock**（`pages/preview.rs`，每帧读同一份
+`Config`，不碰 wgpu），下面是该标签原有的页面函数。`normalize_nav()` 保证
+直接设置 `page` 也会落到正确分组，所以一页仍只有一个渲染函数。
+Dock 组的六个标签（含「效果」）都带预览，符合「效果页也渲染预览」的要求。
+
+`Modal` 是纯数据：标题、正文、按钮动作（`Option<Command>`）与一个可选的
+「不再提示」配置键。弹窗在 `settings_ui` 末尾统一绘制，遮罩与散焦光晕盖住整窗，
+`settings_win::shell` 再叠一层柔化底色；动作只写 `Command`，替换文件、写盘与
+重启仍在主程序。详见 ADR-084。
 
 布局不是 `SidePanel` 而是手工切两块 `Rect`（`ui.new_child(max_rect)`）：
 设置窗口外面还套着标题栏，`SidePanel` 按根 Ui 布局会跟标题抢地方。起点用
 `available_rect_before_wrap()` —— `max_rect()` 不随已用内容收缩，用它会把
 两列画到标题上。
 
-视觉基准是 [`docs/settings-prototype.html`](docs/settings-prototype.html)：
-页面、卡片、行与 Rust 端一一对应，改设计先改雏形。**不靠人肉截图验收** ——
+视觉基准是 `settings-prototype.html` 雏形：页面、卡片、行与 Rust 端一一对应，
+改设计先改雏形。该雏形属于非源码内容，已移出公开仓库、保存在本机私有设计
+目录（见 `CONTRIBUTING.md` 第五节）。**不靠人肉截图验收** ——
 
 ```bash
 cargo run -p nooksill-gpu --example settings_shot -- 出图.bmp 外观 [dark]

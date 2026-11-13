@@ -71,3 +71,40 @@ fn frost_illusion_defaults_off_and_roundtrips() {
         "布尔键越界要夹紧"
     );
 }
+
+/// The updater switches keep their defaults, section and round-trip.
+#[test]
+fn updater_switches_default_and_roundtrip() {
+    let c = Config::defaults();
+    assert_eq!(c.get_i32(Key::UPD_CHANNEL), 0, "稳定版通道是默认");
+    assert_eq!(c.get_i32(Key::UPD_PROMPT), 1, "更新弹窗默认开");
+    assert_eq!(c.get_i32(Key::UPD_AUTO), 0, "自动更新默认关");
+    assert_eq!(Key::UPD_CHANNEL.section(), "advanced");
+    assert_eq!(Key::UPD_PROMPT.section(), "advanced");
+    assert_eq!(Key::UPD_AUTO.section(), "advanced");
+    for key in [Key::UPD_CHANNEL, Key::UPD_PROMPT, Key::UPD_AUTO] {
+        assert!(Key::EXTRA.contains(&key));
+        assert!(!Key::ALL.contains(&key));
+    }
+
+    let mut ini = Ini::new();
+    c.write_ini(&mut ini);
+    assert_eq!(ini.get("advanced", "UpdChannel"), Some("0"));
+    assert_eq!(ini.get("advanced", "UpdPrompt"), Some("1"));
+    assert_eq!(ini.get("advanced", "UpdAuto"), Some("0"));
+
+    ini.set("advanced", "UpdChannel", "1");
+    ini.set("advanced", "UpdPrompt", "0");
+    ini.set("advanced", "UpdAuto", "1");
+    let back = Config::from_ini(&ini);
+    assert_eq!(back.get_i32(Key::UPD_CHANNEL), 1);
+    assert_eq!(back.get_i32(Key::UPD_PROMPT), 0);
+    assert_eq!(back.get_i32(Key::UPD_AUTO), 1);
+
+    // Out-of-range values clamp into 0/1.
+    ini.set("advanced", "UpdChannel", "9");
+    ini.set("advanced", "UpdAuto", "-3");
+    let clamped = Config::from_ini(&ini);
+    assert_eq!(clamped.get_i32(Key::UPD_CHANNEL), 1, "通道越界夹紧到 1");
+    assert_eq!(clamped.get_i32(Key::UPD_AUTO), 1, "布尔键非零即 1");
+}

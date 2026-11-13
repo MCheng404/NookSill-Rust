@@ -2,7 +2,7 @@
 //! control alignment.
 
 use egui_kittest::kittest::Queryable;
-use nooksill_settings::{Command, Page};
+use nooksill_settings::{Command, NavGroup, Page};
 
 use super::common::{harness, new_harness};
 
@@ -14,7 +14,8 @@ use super::common::{harness, new_harness};
 #[test]
 fn 导航栏在左且整行可点() {
     let mut h = new_harness();
-    h.get_by_label("外观").click();
+    // The appearance page now lives in the Dock group's second-level tabs.
+    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
     h.run();
     assert_eq!(h.state().ui.page, Page::Appearance);
 
@@ -94,8 +95,8 @@ fn 点击气泡外收起() {
         "前置：气泡应已展开"
     );
 
-    // Click an unrelated spot (the page heading); the click still lands.
-    h.get_by_label("外观").click();
+    // Click an unrelated navigation row; the click still lands.
+    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
     h.run();
 
     assert_eq!(
@@ -130,38 +131,84 @@ fn 点击上一项不会跳回第一页() {
 #[test]
 fn 过滤态点击优先于自动跳页() {
     let mut h = new_harness();
-    h.state_mut().ui.nav_filter = "图".to_owned(); // matches Icons and Library
+    h.state_mut().ui.nav_filter = "图".to_owned(); // matches two groups via their tabs
     h.run();
-    assert_eq!(h.state().ui.page, Page::Icons); // General filtered out, so it jumps
+    // A search that only matches groups must not open one by itself.
+    assert!(h.state().ui.sub.is_none());
 
-    h.get_by_role_and_label(egui::Role::Tab, "图标库").click();
+    h.get_by_role_and_label(egui::Role::Tab, "内容与图标库")
+        .click();
     h.run();
+    assert_eq!(h.state().ui.sub, Some(NavGroup::Content));
     assert_eq!(
         h.state().ui.page,
         Page::Library,
-        "点击的页不能被自动跳页盖掉"
+        "点击的分组必须落到匹配的子标签，不能被自动跳页盖掉"
     );
 }
 
 /// Search shows only matching labels, and a filtered-out current page jumps to
-/// the first match.
+/// the first matching plain page.
 #[test]
 fn 搜索过滤导航并自动切页() {
     let mut h = new_harness();
-    h.state_mut().ui.nav_filter = "图".to_owned();
+    h.state_mut().ui.nav_filter = "性能".to_owned();
     h.run();
 
     assert_eq!(
         h.state().ui.page,
-        Page::Icons,
-        "常规页不含'图'，应自动跳到图标页"
+        Page::Performance,
+        "常规页已被过滤，应自动跳到唯一匹配的一级页"
     );
-    assert_eq!(h.state().ui.nav_filter, "图", "过滤词要一直留在输入框里");
+    assert_eq!(h.state().ui.nav_filter, "性能", "过滤词要一直留在输入框里");
 
-    // Clearing the filter does not move back; the page stays on Icons.
+    // Clearing the filter does not move back; the page stays on Performance.
     h.state_mut().ui.nav_filter = String::new();
     h.run();
-    assert_eq!(h.state().ui.page, Page::Icons);
+    assert_eq!(h.state().ui.page, Page::Performance);
+}
+
+/// Opening a group turns the sidebar into its tabs; the bottom back row
+/// restores the primary column and the page it came from.
+#[test]
+fn 二级导航的返回按钮回到一级() {
+    let mut h = new_harness();
+    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
+    h.run();
+    assert_eq!(h.state().ui.sub, Some(NavGroup::Dock));
+    assert_eq!(h.state().ui.page, Page::Appearance);
+
+    h.get_by_role_and_label(egui::Role::Tab, "位置").click();
+    h.run();
+    assert_eq!(h.state().ui.page, Page::Position);
+
+    h.get_by_role_and_label(egui::Role::Button, "< 返回")
+        .click();
+    h.run();
+    assert!(h.state().ui.sub.is_none(), "返回后应是一级导航");
+    assert_eq!(h.state().ui.page, Page::General, "回到进入前的一级页");
+    h.get_by_role_and_label(egui::Role::Tab, "常规");
+}
+
+/// Every Dock tab renders without a panic, and the live preview stays above
+/// the cards (the sliders still exist below it).
+#[test]
+fn 二级各标签都带预览且内容可见() {
+    let mut h = new_harness();
+    for (tab, label) in [
+        (Page::Appearance, "图标大小"),
+        (Page::Position, "Dock 位置（居中）"),
+        (Page::Effect, "环境烟雾"),
+    ] {
+        h.state_mut().ui.page = tab;
+        h.run();
+        assert_eq!(h.state().ui.sub, Some(NavGroup::Dock));
+        assert!(
+            h.query_all_by_label(label).count() >= 1,
+            "{tab:?} 的控件应仍在"
+        );
+    }
+    assert!(h.query_all_by_label("实时预览").count() >= 1);
 }
 
 /// Autostart uses the same pill switch (`Role::Switch`) as config keys, and

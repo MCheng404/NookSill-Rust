@@ -1,5 +1,5 @@
-//! Renders the settings window offscreen to a BMP, for comparing against
-//! `docs/settings-prototype.html`.
+//! Renders the settings window offscreen to a BMP, for comparing against the
+//! HTML design prototype kept outside the public repository.
 //!
 //! The window is layered, so it is only visible when actually running, and
 //! whether a layout is right should not depend on a hand-taken screenshot.

@@ -163,9 +163,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // config and releases the single-instance lock), then hand over the
     // replacement script: it waits for this process to exit.
     let pending = app.pending_update.take();
+    let silent = app.pending_silent;
     drop(app);
     if let Some(staged) = pending {
-        nooksill_platform::update::apply_and_restart(&staged)?;
+        // Automatic updates only swap the file; the next manual launch starts
+        // the new build. Manual "restart and update" also restarts here.
+        if silent {
+            nooksill_platform::update::install_on_exit(&staged)?;
+        } else {
+            nooksill_platform::update::apply_and_restart(&staged)?;
+        }
     }
     outcome
 }
@@ -285,6 +292,8 @@ struct App {
     /// `process::exit` inside `apply_update`: that skips the destructors, so
     /// the AppBar reservation and the config write are lost.
     pending_update: Option<std::path::PathBuf>,
+    /// Silent replacement: swap on exit without restarting the process.
+    pending_silent: bool,
 
     // Background threads. The UI thread only `try_recv`, it never waits.
     /// Icon loading (shell and COM, serialised).

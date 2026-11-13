@@ -27,8 +27,12 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# 打包产物（scripts/package.sh）
+# 打包产物（scripts/package.sh）与设计稿：非源码内容保存在本机私有目录
+# D:\work\MiniDock-private\，不进公开仓库。
 /dist/
+/docs/
+/_c.bmp
+*.bmp
 
 # 临时验证产物
 /scratch/

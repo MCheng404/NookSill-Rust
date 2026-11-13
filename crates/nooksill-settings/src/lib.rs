@@ -6,7 +6,10 @@ pub mod fonts;
 pub mod pages;
 pub mod text_field;
 
-pub use pages::{settings_ui, Command, ItemEdit, Outcome, Page, SettingsState, UpdateView};
+pub use pages::{
+    settings_ui, Command, ItemEdit, Modal, ModalAction, NavGroup, NavItem, Outcome, Page,
+    SettingsState, UpdateView,
+};
 
 /// Left navigation width in logical pixels, fixed regardless of label text.
 ///

@@ -97,6 +97,14 @@ Verification: cargo test -p nooksill-core layout
 | `scratch/` | 临时验证程序（含编译出来的 exe） |
 | `.workbuddy-ai/` | 协作工具的工作区数据，只对当前机器有意义 |
 | `NookSill.ini` / `icons/` | 运行期数据，便携模式下会写在这里 |
+| `docs/` | HTML 视觉雏形，属于设计稿而非源码 |
+| `dist/` / `*.bmp` | 打包产物与离屏截图，构建时重新生成 |
+| `_c.bmp` | 根目录的一次性截图 |
+
+公开仓库只保留源代码、构建/门禁脚本、CI 与必要的开源文档；设计稿、打包产物
+与截图统一保存在**本机私有目录 `D:\work\MiniDock-private\`**，不上传、不开放。
+`dist/` 仍由 `scripts/package.sh` 在本地生成，只是不再进版本库；Release 资产
+照旧由 CI 发布到公开仓库，应用内更新器才能匿名拉取。
 
 `Cargo.lock` **要提交**：这是二进制程序，不是库，依赖必须可复现。
 

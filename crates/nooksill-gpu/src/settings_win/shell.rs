@@ -45,6 +45,21 @@ pub fn shell_with_frost(
     };
     ui.painter().rect_filled(rect, CornerRadius::same(20), bg);
 
+    // A second wash over the window surface while a modal is up: the frosted
+    // desktop underneath loses one more step of contrast, so the whole
+    // settings window reads as out of focus behind the card.
+    if state.modal.is_some() {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(20),
+            if dark {
+                Color32::from_rgba_unmultiplied(14, 16, 22, 46)
+            } else {
+                Color32::from_rgba_unmultiplied(250, 251, 254, 54)
+            },
+        );
+    }
+
     let inner = rect.shrink(18.0);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
