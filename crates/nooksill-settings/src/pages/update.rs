@@ -158,6 +158,35 @@ pub(super) fn status_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     );
 }
 
+/// A verified download is a second event: offer an immediate restart, or let
+/// the exit-time swap handle it when the user just closes the window.
+pub(super) fn maybe_ready_prompt(state: &mut SettingsState, cfg: &nooksill_core::config::Config) {
+    if state.update_ready_prompted || state.modal.is_some() {
+        return;
+    }
+    if !state.update.ready || state.update.busy {
+        return;
+    }
+    // Automatic updates explicitly ignore popups.
+    if cfg.get_i32(Key::UPD_AUTO) != 0 {
+        return;
+    }
+    let mut modal = Modal::new(
+        nooksill_core::i18n::t("Update ready"),
+        nooksill_core::i18n::t("The new build has been verified. Restart now to apply it, or let it replace this build on the next launch."),
+    );
+    modal.badge = nooksill_core::i18n::t("Ready").to_owned();
+    modal.actions = vec![
+        ModalAction::primary(
+            nooksill_core::i18n::t("Restart and update"),
+            Command::ApplyUpdate,
+        ),
+        ModalAction::close(nooksill_core::i18n::t("Later")),
+    ];
+    state.modal = Some(modal);
+    state.update_ready_prompted = true;
+}
+
 /// Open the update popup once per window session, never during automatic
 /// updates and never twice for the same release.
 pub(super) fn maybe_prompt(state: &mut SettingsState, cfg: &nooksill_core::config::Config) {

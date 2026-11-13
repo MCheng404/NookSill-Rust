@@ -64,6 +64,7 @@ pub(super) fn ensure_settings<'a>(
     // Each open is a fresh chance to show a pending update; dismissing the
     // popup only suppresses it for the current window session.
     sw.state.update_prompted = false;
+    sw.state.update_ready_prompted = false;
     Ok(&mut **sw)
 }
 

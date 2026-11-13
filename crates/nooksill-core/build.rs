@@ -15,16 +15,15 @@ fn main() {
 
     // Hand the resolved value to `scripts/package.sh` instead of re-deriving it
     // in shell: the artifact name must be the version actually stamped into the
-    // binary. OUT_DIR is `target/<triple>/<profile>/build/<pkg>-<hash>/out`.
-    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
-    if let Some(dir) = out.ancestors().nth(3) {
-        let _ = std::fs::write(
-            dir.join("NOOKSILL_VERSION"),
-            format!(
-                "{}
-",
-                v.text
-            ),
-        );
-    }
+    // binary. OUT_DIR gained a directory level in rust 1.100
+    // (`build/<pkg>/<hash>/out`), so its depth cannot locate the profile dir.
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    let path = root
+        .join("target")
+        .join(target)
+        .join(profile)
+        .join("NOOKSILL_VERSION");
+    let _ = std::fs::write(path, format!("{}\n", v.text));
 }

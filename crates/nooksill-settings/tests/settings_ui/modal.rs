@@ -63,6 +63,32 @@ fn 不再提示写回配置而不是本地状态() {
 }
 
 #[test]
+fn 下载完成后弹出已就绪弹窗且可立即重启() {
+    let mut h = new_harness();
+    h.state_mut().ui.update.ready = true;
+    h.run();
+    assert!(h.state().ui.modal.is_some(), "已就绪是独立事件，应提示");
+    assert_eq!(
+        h.state().ui.modal.as_ref().map(|m| m.badge.as_str()),
+        Some("已就绪")
+    );
+    h.get_by_label("更新已就绪");
+    h.get_by_label("重启并更新").click();
+    h.run();
+    assert_eq!(h.state().commands.last(), Some(&Command::ApplyUpdate));
+    assert!(h.state().ui.modal.is_none());
+}
+
+#[test]
+fn 自动更新不弹已就绪弹窗() {
+    let mut h = new_harness();
+    h.state_mut().cfg.apply_i32(Key::UPD_AUTO, 1);
+    h.state_mut().ui.update.ready = true;
+    h.run();
+    assert!(h.state().ui.modal.is_none(), "自动更新明确忽略弹窗");
+}
+
+#[test]
 fn 更新弹窗显示版本路径与通道徽标() {
     let mut h = new_harness();
     offer(&mut h);

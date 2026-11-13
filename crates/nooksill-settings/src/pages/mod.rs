@@ -139,6 +139,8 @@ pub struct SettingsState {
     pub modal: Option<Modal>,
     /// The update popup has already been offered in this window session.
     pub update_prompted: bool,
+    /// The "ready to install" popup has already been offered this session.
+    pub update_ready_prompted: bool,
     /// Monitor names, filled by the platform layer.
     pub monitors: Vec<String>,
     /// Real autostart state read from the registry, not the config value.
@@ -221,6 +223,7 @@ impl Default for SettingsState {
             return_page: Page::General,
             modal: None,
             update_prompted: false,
+            update_ready_prompted: false,
             monitors: vec![nooksill_core::i18n::t("Primary monitor").to_owned()],
             auto_start: false,
             config_dir: String::new(),
@@ -349,6 +352,7 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
     let mut out = Outcome::default();
     normalize_nav(state);
     update::maybe_prompt(state, cfg);
+    update::maybe_ready_prompt(state, cfg);
     {
         let mut ctx = Ctx {
             cfg,

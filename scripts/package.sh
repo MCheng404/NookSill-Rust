@@ -34,6 +34,10 @@ FLAGS=()
 # shellcheck source=env.sh
 source "$ROOT/scripts/env.sh"
 
+# A restored CI cache can contain the build-script fingerprint but not the
+# side-effect file the script writes. Touching its source forces one rerun so
+# NOOKSILL_VERSION always exists before it is read below.
+touch "$ROOT/crates/nooksill-core/build.rs"
 "$ROOT/scripts/build.sh" ${FLAGS[@]+"${FLAGS[@]}"} -p nooksill-gpu --bin nooksill-dock
 
 VERSION_FILE="target/$TARGET/$MODE/NOOKSILL_VERSION"

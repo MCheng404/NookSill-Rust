@@ -1197,3 +1197,19 @@
 - `dist/` 本来就由 `scripts/package.sh` 每次重新生成，本地保留一份不影响「仓库只放源码」。
 
 **代价**：`docs/settings-prototype.html` 不再随仓库分发，新机器克隆后要拿到视觉基准需要另外复制私有目录；CHANGELOG / DECISIONS 里指向它的历史条目保留原样（历史事实不改）。
+
+---
+
+## ADR-086 · 工具链不锁版本，靠「本地与 CI 同步升级」守住 lint 一致性
+
+**决定**：
+- `rust-toolchain.toml` 继续只写 `channel = "stable"`，CI 继续用 `dtolnay/rust-toolchain@stable`，两边都不钉具体版本号。
+- 每次 Rust stable 发版后，先 `rustup update stable-x86_64-pc-windows-msvc` 把本机对齐，再跑 `./scripts/build.sh --gate`，确认 `-D warnings` 在新 lint 下仍全绿，然后才推送。
+- `BUILD.md` §8.5 固化这个顺序；`rustc --version` 与 CI 日志版本不一致是诊断漂移的第一线索。
+
+**依据**：
+- CI 的 `gate` job 与本地 `--gate` 跑同一批脚本（注释 / 规模 / 提交信息 / `fmt` / clippy / 测试），但**编译器不同时这批命令的结论不可比**。1.99.1 → 1.100 连续两次出现「本地全绿、CI 挂」：先 `needless_range_loop`（`layout/metrics.rs`），再 `needless_bool`（`bin/dock/render.rs`）。
+- 锁死版本能消除漂移，但会让 MSRV 与安全更新长期滞后，也违背本项目「跟随依赖下限、`rust-version` 随 egui 走」的既有约定；锁版本的维护成本比升级时多跑一次门禁更高。
+- 修复方式都只是把写法改成 lint 建议的惯用形式（迭代器、单个布尔表达式），没有用 `#[expect]` 压掉新 lint，代码本身也更好读。
+
+**代价**：Rust 上游发版后到人工升级之前，存在一段「本地旧、CI 新」的窗口，期间的 push 可能变红。Cargo 1.100 还会对未使用的 `[workspace.package]` 字段与 workspace 依赖报 manifest 警告——本轮顺手删掉了 `authors` / 空 `repository` / 未被继承的 `nooksill-gpu` 路径依赖。

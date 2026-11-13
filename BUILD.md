@@ -344,3 +344,20 @@ git tag v0.9.26 && git push origin v0.9.26
 ETag 落盘做条件请求，校验优先用 API 的 `assets[].digest`。所以 CI **不要**改
 `per_page` 或给 `dev` 换成每次一个新 tag —— 前者会让缓存失效，后者会刷屏且
 让测试通道找不到固定入口。Release 资产必须保持公开匿名可读，客户端不能带凭据。
+
+### 8.5 工具链跟随 stable，升级时要两边验证
+
+`rust-toolchain.toml` 只声明 `channel = "stable"`，CI 的
+`dtolnay/rust-toolchain@stable` 也跟随上游最新 stable，**两边都不锁版本号**。
+代价是 Rust 发版会带进新的 clippy lint，出现「本地 `--gate` 全绿、CI 挂」：
+1.99.1 → 1.100 时就连续命中 `needless_range_loop` 与 `needless_bool`。
+
+升级到新 stable 后按顺序做一次，别只依赖 CI 报错再回头修：
+
+```bash
+rustup update stable-x86_64-pc-windows-msvc   # 与 CI 对齐
+./scripts/build.sh --gate                      # 同版本 lint + 全量测试
+```
+
+CI 的 `gate` job 与本地 `--gate` 跑同一批脚本、同一个编译器，结论才可比。
+本机工具链落后时，`rustc --version` 与 CI 日志里的版本不一致就是第一线索。

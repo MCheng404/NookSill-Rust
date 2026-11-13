@@ -210,10 +210,16 @@ impl App {
                     view.ready = true;
                     view.busy = false;
                     self.update_staged = Some(path.clone());
-                    if auto {
-                        // No quit message: the swap runs after the destructors.
-                        self.pending_update = Some(path);
-                        self.pending_silent = true;
+                    // Always queue the exit-time swap. Closing the window
+                    // without pressing "restart and update" must still install
+                    // the verified file; apply_update() overrides this with a
+                    // restart when the user asks for one.
+                    self.pending_update = Some(path);
+                    self.pending_silent = true;
+                    if !auto {
+                        if let Some(sw) = self.settings_slot.as_mut() {
+                            sw.state.update_ready_prompted = false;
+                        }
                     }
                     finished = true;
                 }

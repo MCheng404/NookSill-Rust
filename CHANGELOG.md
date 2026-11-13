@@ -63,12 +63,25 @@
 | 预览图标 | 7 个色块上叠加白色几何字形（圆点 / 方框 / 三横线 / 点阵） | 纯色块读起来像色卡，不像 Dock 图标 |
 | 回归 | 限流退避读写、弹窗徽标与版本路径、点弹窗内部不误关各 1 项 | 三处都容易在后续改动里悄悄退化 |
 
+### 工具链对齐与已就绪弹窗（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 本地工具链 | `rustup update stable-x86_64-pc-windows-msvc` → rustc **1.100.0**，与 CI 的 `@stable` 一致 | 之前本地 1.99.1 检不出 1.100 的新 lint，只能靠反复 push 试错。升级后本地 `--gate` 与 CI 跑同一套 lint |
+| 第二个新 lint | `bin/dock/render.rs::step_smoke` 的 `if … { return false } true` 改成单个布尔表达式 | 1.100 的 `needless_bool`；CI run `43393115228` 与本地 1.100 报的是同一行 |
+| manifest 清理 | 删掉 `[workspace.package] authors` / `repository`（空串占位）与 `workspace.dependencies.nooksill-gpu` | Cargo 1.100 报 3 条「未使用」警告；核对过无 crate 继承、build.rs 的 `CompanyName` 是硬编码 |
+| staged 包不丢 | `UpdateMsg::Staged` 现在**无论手动还是自动**都排队退出时替换；`apply_update()` 才把它改成「重启」 | 原来手动下载后若用户直接关窗口（不点「重启并更新」），已校验的 exe 会一直躺在磁盘上不安装 |
+| 已就绪弹窗 | 复用通用 `Modal` 弹出「更新已就绪」，可立即重启或「稍后」；自动更新仍完全不弹 | 手动下载缺少完成反馈；「稍后」现在有明确语义（下次启动替换） |
+| `NOOKSILL_VERSION` 路径 | `core/build.rs` 不再用 `OUT_DIR.ancestors().nth(3)` 推断 profile 目录，改由 `TARGET` / `PROFILE` 显式拼出 `target/<triple>/<profile>/NOOKSILL_VERSION`；`package.sh` 打包前 `touch` 一次 `build.rs` | rust 1.100 把 `OUT_DIR` 从 `build/<pkg>-<hash>/out` 改成 `build/<pkg>/<hash>/out`，多出一层，文件被写到 `debug/build/` 而不是 `debug/`，CI run `43394378754` 的 gate 过了但 debug 打包失败。CI 缓存恢复会带 build-script fingerprint 却不带它写出的副作用文件，所以还要强制重跑一次 |
+| 回归 | 新增 2 项：已就绪弹窗的动作发出 `ApplyUpdate`、自动更新不弹 | 守住弹窗优先级与退出替换的联动 |
+
 ### 验证（2026-11-13）
 
 - `./scripts/build.sh --gate`：注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试。
-- 最终 `./scripts/build.sh --gate`：**606 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 82 / `settings` 6+40+2 / 其它 7）。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**608 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 82 / `settings` 8+42+2 / 其它 7）。
+- CI：run `43375784275`（`needless_range_loop`）、`43393115228`（`needless_bool`）依次失败；`43394378754` 的 gate **success**，但 debug 打包因 1.100 `OUT_DIR` 层级变化失败——两处都已修，本地 `package.sh` 的 debug 与 release 两条路径均通过，待新 run 复验。
 - `nooksill-platform` 更新模块 17 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、SemVer 预发布、静默替换脚本、篡改拒绝）。
-- `nooksill-settings` kittest 40 项布局与交互契约，含二级导航的过滤/返回/点击优先级与 9 项更新弹窗断言（默认弹出、稍后关闭、动作只发命令、自动更新与关提示时不弹、不再提示写回配置、通用弹窗复用、重开窗口重置机会、点内部不误关、版本路径与通道徽标）；`preview` 另有 2 项几何不变量单测。
+- `nooksill-settings` kittest 42 项布局与交互契约，含二级导航的过滤/返回/点击优先级与 11 项更新弹窗断言（默认弹出、稍后关闭、动作只发命令、自动更新与关提示时不弹、不再提示写回配置、通用弹窗复用、重开窗口重置机会、点内部不误关、版本路径与通道徽标、已就绪弹窗、自动更新不弹已就绪）；`preview` 另有 2 项几何不变量单测。
 - 真实网络：`update_check -- beta` 两次调用，第一次返回限流并写下退避，第二次直接短路返回「本次未发起请求」。
 - 离屏截图验收 9 张（含徽标与图标字形的打磨后对照），走真实 `FrameRenderer` + `settings_win::shell`。
 - `cargo clean` 后冷启动重建（清掉 14.5 GiB / 26471 个产物），门禁仍全绿；`scripts/package.sh` 重新产出 `NookSill-2.0.0-103-1532511-win64-debug.exe` + 校验和。
