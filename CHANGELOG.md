@@ -75,18 +75,26 @@
 | `NOOKSILL_VERSION` 路径 | `core/build.rs` 不再用 `OUT_DIR.ancestors().nth(3)` 推断 profile 目录，改由 `TARGET` / `PROFILE` 显式拼出 `target/<triple>/<profile>/NOOKSILL_VERSION`；`package.sh` 打包前 `touch` 一次 `build.rs` | rust 1.100 把 `OUT_DIR` 从 `build/<pkg>-<hash>/out` 改成 `build/<pkg>/<hash>/out`，多出一层，文件被写到 `debug/build/` 而不是 `debug/`，CI run `43394378754` 的 gate 过了但 debug 打包失败。CI 缓存恢复会带 build-script fingerprint 却不带它写出的副作用文件，所以还要强制重跑一次 |
 | 回归 | 新增 2 项：已就绪弹窗的动作发出 `ApplyUpdate`、自动更新不弹 | 守住弹窗优先级与退出替换的联动 |
 
+### 更新链路健壮性与已就绪弹窗验收（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| `416` 无响应体 | `download::fetch` 的 `Ok(res) if status == 416` 分支也删 `.part` | 原来只有 sink 收到 416 才删；服务端返回不带 body 的 416 时，下一轮仍拿同一个陈旧 Range 重试，3 次后必然失败 |
+| 缓存原子写 | `cache::write_release` 改为同卷 `.tmp` + `rename`，新增 `clear_release()` | 进程写到一半被杀会留下半截 JSON，`304` 复用时无法解析 |
+| `304` 自愈 | 复用缓存前先验一次 JSON；损坏则清缓存并返回明确提示，下次检查自动拿完整 `200` | 不静默吞错误，也不拿脏数据当最新结果 |
+| 运行期文件忽略 | `.gitignore` 补更新器的 5 个缓存/暂存文件与 `NookSill-*.part` | 便携模式下这些文件会落在 exe 旁，不该被误提交 |
+| 已就绪弹窗验收 | `settings_shot` 增 `ready` 开关；离屏截图确认标题、「已就绪」徽标、两行正文、「重启并更新 / 稍后」按钮在无 detail 行的 184 高度下完整无截断 | 上一轮只有 kittest 逻辑覆盖，视觉没验过；项目约定不靠人肉截图 |
+| 回归 | `release_cache_is_written_atomically_and_can_be_cleared`（写回读、tmp 已 rename、清除有效） | 守住房原子写这条不变量 |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`：注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试。
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**608 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 82 / `settings` 8+42+2 / 其它 7）。
-- CI：run `43375784275`（`needless_range_loop`）、`43393115228`（`needless_bool`）依次失败；`43394378754` 的 gate **success**，但 debug 打包因 1.100 `OUT_DIR` 层级变化失败——两处都已修，本地 `package.sh` 的 debug 与 release 两条路径均通过，待新 run 复验。
-- `nooksill-platform` 更新模块 17 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、SemVer 预发布、静默替换脚本、篡改拒绝）。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**609 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 83 / `settings` 8+42+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
 - `nooksill-settings` kittest 42 项布局与交互契约，含二级导航的过滤/返回/点击优先级与 11 项更新弹窗断言（默认弹出、稍后关闭、动作只发命令、自动更新与关提示时不弹、不再提示写回配置、通用弹窗复用、重开窗口重置机会、点内部不误关、版本路径与通道徽标、已就绪弹窗、自动更新不弹已就绪）；`preview` 另有 2 项几何不变量单测。
-- 真实网络：`update_check -- beta` 两次调用，第一次返回限流并写下退避，第二次直接短路返回「本次未发起请求」。
-- 离屏截图验收 9 张（含徽标与图标字形的打磨后对照），走真实 `FrameRenderer` + `settings_win::shell`。
-- `cargo clean` 后冷启动重建（清掉 14.5 GiB / 26471 个产物），门禁仍全绿；`scripts/package.sh` 重新产出 `NookSill-2.0.0-103-1532511-win64-debug.exe` + 校验和。
-- 离屏截图验收 7 张（深/浅色外观、弹窗、更新策略、渐变+倒影打磨前后），走真实 `FrameRenderer` + `settings_win::shell`。
-- `i18n` 8 项门禁：键有序无重复、调用点全登记、译文占位符与覆盖率。
+- CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。
+- 本地 `package.sh` 的 debug 与 release 两条路径均通过；`cargo clean` 后冷启动重建（清掉 14.5 GiB / 26471 个产物）门禁仍全绿。
+- 真实网络：`update_check -- beta` 第一次返回限流并写下退避，第二次短路返回「本次未发起请求」；后续复验仍为出口 IP 限流，属环境事实而非代码缺陷。
+- 离屏截图验收 10 张（深/浅色外观、弹窗、更新策略、渐变+倒影、徽标与图标字形、已就绪弹窗），走真实 `FrameRenderer` + `settings_win::shell`。
 
 ### Dock 交互
 

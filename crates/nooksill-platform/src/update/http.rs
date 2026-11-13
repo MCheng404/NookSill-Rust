@@ -67,7 +67,19 @@ pub fn latest(channel: Channel) -> Result<Release, UpdateError> {
             cache::clear_retry();
             text
         }
-        304 => cached.ok_or(UpdateError::Json).map(|(_, text)| text)?,
+        304 => {
+            let Some((_, text)) = cached else {
+                return Err(UpdateError::Json);
+            };
+            if json::parse(&text).is_err() {
+                // Drop the ETag and body so the next check gets a full 200.
+                cache::clear_release();
+                return Err(UpdateError::Http(
+                    "本地更新缓存损坏，已清除，请重新检查".to_owned(),
+                ));
+            }
+            text
+        }
         403 | 429 => {
             let (err, wait) = rate_limited(&res, now);
             cache::remember_retry(now + wait.min(MAX_BACKOFF_SECS));

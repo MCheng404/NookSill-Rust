@@ -77,6 +77,12 @@ fn fetch(base: &str, asset: &Asset, part: &Path, expected_size: u64) -> Result<(
 
         match result {
             Ok(res) if res.status == 200 || res.status == 206 => return Ok(()),
+            Ok(res) if res.status == 416 => {
+                // A bodiless 416 never reaches the sink, so this path must
+                // also drop the stale partial before the next attempt.
+                let _ = std::fs::remove_file(part);
+                last = "HTTP 416".to_owned();
+            }
             Ok(res) => last = format!("HTTP {}", res.status),
             Err(net::NetError::Sink) if seen_status == 416 => {
                 // Stale partial range: drop it and start a fresh request.

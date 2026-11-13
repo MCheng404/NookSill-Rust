@@ -14,8 +14,9 @@
 //! arguments are order-free flags: `dark`, `tip`, `focus`, `q=<text>`,
 //! `accent=RRGGBB`, `feather=<px>`, `nodiscs`, `noroundrect`, `modal` (an
 //! available update, so the popup is shown), `beta` (select the beta channel),
-//! `gradient` (gradient bar material), `mirror` (icon reflection), and a bare
-//! number to scale the UI.
+//! `gradient` (gradient bar material), `mirror` (icon reflection), `ready`
+//! (a verified download, so the install popup is shown), and a bare number to
+//! scale the UI.
 //!
 //! Needs no window and no monitor, only a working DX12 adapter.
 
@@ -47,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let beta = rest.iter().any(|a| a == "beta");
     let gradient = rest.iter().any(|a| a == "gradient");
     let mirror = rest.iter().any(|a| a == "mirror");
+    let ready = rest.iter().any(|a| a == "ready");
     // Focus is normally granted by a click, so request it from memory instead.
     let focus = rest.iter().any(|a| a == "focus");
     // A bare number is a percentage (150 -> 1.5). Fonts and every element scale
@@ -106,6 +108,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.update.available = true;
         state.update.version = "2.1.0".to_owned();
         state.update.notes = "Bug fixes and a faster update check.".to_owned();
+    }
+    if ready {
+        state.update.ready = true;
     }
     // `accent=RRGGBB`; -1 in the config means follow the system colour.
     if let Some(hex) = rest.iter().find_map(|a| a.strip_prefix("accent=")) {

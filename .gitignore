@@ -12,6 +12,15 @@
 /icons/
 /run/
 
+# 更新器的缓存、暂存与断点续传文件（便携模式下会落在 exe 旁）
+/NookSill.releases.cache
+/NookSill.releases.cache.tmp
+/NookSill.retry.cache
+/NookSill.mirror.cache
+/NookSill.update.exe
+/NookSill.update.marker
+NookSill-*.part
+
 # 原始 C 项目与参考资料**不**纳入版本库：
 #   上游源码版权归原作者 Wangcy，许可证未授予再分发权（见 README）。
 #   本地对照时请自行把 nooksill.c 放到 reference/ 下，该目录被忽略。

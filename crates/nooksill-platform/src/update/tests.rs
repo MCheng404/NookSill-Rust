@@ -297,3 +297,26 @@ fn rate_limit_backoff_is_persisted_and_cleared() {
     assert!(cache::retry_until().is_none());
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn release_cache_is_written_atomically_and_can_be_cleared() {
+    let path = cache::sibling("NookSill.releases.cache");
+    let tmp = cache::sibling("NookSill.releases.cache.tmp");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&tmp);
+
+    cache::write_release(Some("W/\"abc\""), "[{\"tag_name\":\"v1.0.0\"}]");
+    assert_eq!(
+        cache::read_release(),
+        Some((
+            "W/\"abc\"".to_owned(),
+            "[{\"tag_name\":\"v1.0.0\"}]".to_owned()
+        ))
+    );
+    assert!(!tmp.exists(), "临时文件应已被 rename 掉");
+
+    cache::clear_release();
+    assert!(cache::read_release().is_none());
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(tmp);
+}

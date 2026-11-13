@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 const RELEASE_CACHE: &str = "NookSill.releases.cache";
+const RELEASE_TMP: &str = "NookSill.releases.cache.tmp";
 const MIRROR_CACHE: &str = "NookSill.mirror.cache";
 const RETRY_CACHE: &str = "NookSill.retry.cache";
 
@@ -28,9 +29,18 @@ pub(crate) fn read_release() -> Option<(String, String)> {
     Some((tag.trim().to_owned(), body.to_owned()))
 }
 
+/// Write through a temporary file on the same volume: a process killed midway
+/// must not leave half a JSON body for the next `304` to parse.
 pub(crate) fn write_release(etag: Option<&str>, body: &str) {
     let tag = etag.unwrap_or("-");
-    let _ = std::fs::write(sibling(RELEASE_CACHE), format!("{tag}\n{body}"));
+    let tmp = sibling(RELEASE_TMP);
+    if std::fs::write(&tmp, format!("{tag}\n{body}")).is_ok() {
+        let _ = std::fs::rename(&tmp, sibling(RELEASE_CACHE));
+    }
+}
+
+pub(crate) fn clear_release() {
+    let _ = std::fs::remove_file(sibling(RELEASE_CACHE));
 }
 
 /// Empty string is GitHub direct, a non-empty value is a mirror prefix.
