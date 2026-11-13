@@ -13,14 +13,11 @@ edition = "2021"
 # egui 0.37 / egui-wgpu 0.37 require 1.95.
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
-authors = ["NookSill Rust port contributors"]
-repository = ""
 
 [workspace.dependencies]
 nooksill-core = { path = "crates/nooksill-core" }
 nooksill-platform = { path = "crates/nooksill-platform" }
 nooksill-settings = { path = "crates/nooksill-settings" }
-nooksill-gpu = { path = "crates/nooksill-gpu" }
 
 # eframe owns the message loop. This app needs Win32 trampolines, hotkeys,
 # AppBar and per-pixel hit testing, so only egui + egui-wgpu are used.

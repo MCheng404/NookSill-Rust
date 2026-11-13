@@ -151,10 +151,7 @@ impl App {
     /// frame cap / VSync setting, not a per-effect timer.
     pub(super) fn step_smoke(&mut self) -> bool {
         let tune = Tuning::from_config(&self.dock.cfg, self.accent);
-        if !tune.enabled || self.fs_hidden || self.dock.fully_hidden() {
-            return false;
-        }
-        true
+        tune.enabled && !self.fs_hidden && !self.dock.fully_hidden()
     }
 
     /// Where the current edge, reservation and size put the window.
