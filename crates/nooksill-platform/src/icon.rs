@@ -266,6 +266,36 @@ fn from_color_bitmap(hbm_color: HBITMAP, hbm_mask: HBITMAP) -> Option<IconBitmap
     })
 }
 
+/// Downscale so the long side is at most `max_side`; never upscales.
+///
+/// Nearest neighbour on purpose: the icon-library preview draws at 36 px, and
+/// bilinear would blend the zeroed RGB of transparent pixels into dark fringes.
+#[must_use]
+pub fn scale_to(bitmap: IconBitmap, max_side: u32) -> IconBitmap {
+    let long = bitmap.width.max(bitmap.height);
+    if max_side == 0 || long <= max_side || bitmap.width == 0 || bitmap.height == 0 {
+        return bitmap;
+    }
+    let ratio = max_side as f32 / long as f32;
+    let w = ((bitmap.width as f32 * ratio).round() as u32).max(1);
+    let h = ((bitmap.height as f32 * ratio).round() as u32).max(1);
+    let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
+    for y in 0..h {
+        let sy = (((y as f32 + 0.5) / ratio) as u32).min(bitmap.height - 1);
+        for x in 0..w {
+            let sx = (((x as f32 + 0.5) / ratio) as u32).min(bitmap.width - 1);
+            let src = ((sy * bitmap.width + sx) * 4) as usize;
+            let dst = ((y * w + x) * 4) as usize;
+            out[dst..dst + 4].copy_from_slice(&bitmap.rgba[src..src + 4]);
+        }
+    }
+    IconBitmap {
+        width: w,
+        height: h,
+        rgba: out,
+    }
+}
+
 /// BGRA to RGBA; fully transparent pixels are zeroed.
 pub(crate) fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
     let mut rgba = vec![0u8; bgra.len()];
@@ -430,6 +460,40 @@ mod tests {
             bgra_to_rgba(&bgra),
             vec![30, 20, 10, 255, 0, 0, 0, 0, 3, 2, 1, 128]
         );
+    }
+
+    #[test]
+    fn scale_to_shrinks_without_changing_the_aspect() {
+        let mut rgba = Vec::new();
+        for y in 0..4u8 {
+            for x in 0..4u8 {
+                rgba.extend_from_slice(&[y * 4 + x, 0, 0, 255]);
+            }
+        }
+        let src = IconBitmap {
+            width: 4,
+            height: 4,
+            rgba,
+        };
+        let small = scale_to(src.clone(), 2);
+        assert_eq!((small.width, small.height), (2, 2));
+        // The top-left sample lands on source (1, 1).
+        assert_eq!(&small.rgba[0..4], &[5, 0, 0, 255]);
+        // A limit at or above the source size is a no-op, and so is zero.
+        assert_eq!(scale_to(src.clone(), 8).width, 4);
+        assert_eq!(scale_to(src, 0).width, 4);
+    }
+
+    #[test]
+    fn scale_to_keeps_the_aspect_of_a_tall_image() {
+        let src = IconBitmap {
+            width: 10,
+            height: 100,
+            rgba: vec![7u8; 10 * 100 * 4],
+        };
+        let small = scale_to(src, 50);
+        assert_eq!((small.width, small.height), (5, 50));
+        assert_eq!(small.rgba.len(), 5 * 50 * 4);
     }
 
     #[test]

@@ -19,8 +19,11 @@ impl App {
         let ctx = sw.ctx().clone();
         let names: Vec<String> = self.raw.iter().map(|i| i.name.to_string()).collect();
         const EXTS: &[&str] = &["ico", "png", "jpg", "jpeg", "bmp", "gif", "webp"];
-        let mut rows = Vec::with_capacity(names.len());
-        for name in names {
+        // Decoding is synchronous on the UI thread; cap the batch so a huge
+        // bar cannot freeze Settings for seconds.
+        const MAX_PREVIEW: usize = 80;
+        let mut rows = Vec::with_capacity(names.len().min(MAX_PREVIEW));
+        for name in names.into_iter().take(MAX_PREVIEW) {
             let found = EXTS.iter().find_map(|ext| {
                 let candidate = std::path::Path::new(&dir).join(format!("{name}.{ext}"));
                 candidate.is_file().then_some(candidate)
@@ -44,6 +47,9 @@ impl App {
                 nooksill_platform::image_icon::decode_image_icon(&shown)
             };
             let tex = bitmap.map(|b| {
+                // 64 px covers the 36 px tile; a 256 px .ico frame or a large
+                // JPEG would otherwise cost a full texture each.
+                let b = nooksill_platform::icon::scale_to(b, 64);
                 ctx.load_texture(
                     format!("library:{shown}"),
                     egui::ColorImage::from_rgba_unmultiplied(
