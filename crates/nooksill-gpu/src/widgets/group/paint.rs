@@ -15,7 +15,17 @@ pub fn paint_preview(
     hover: Option<usize>,
 ) {
     let empty: HashMap<usize, egui::TextureHandle> = HashMap::new();
-    let _ = paint(ui, dark, frosted, title, kids, &empty, hover, None);
+    let _ = paint(
+        ui,
+        dark,
+        frosted,
+        title,
+        kids,
+        &empty,
+        hover,
+        None,
+        &FanSpec::default(),
+    );
 }
 
 #[expect(
@@ -31,6 +41,7 @@ pub(super) fn paint(
     icons: &HashMap<usize, egui::TextureHandle>,
     hover: Option<usize>,
     released: Option<usize>,
+    fan: &FanSpec,
 ) -> (Vec<GroupAction>, bool) {
     let rect = ui.max_rect();
     // Shared panel style: base fill, overlay, hairline, three text tiers.
@@ -85,7 +96,7 @@ pub(super) fn paint(
     // Child grid.
     let mut actions = Vec::new();
     for (k, kid) in kids.iter().enumerate() {
-        let Some((cx, cy, cw, ch)) = cell_rect(k, kids.len()) else {
+        let Some((cx, cy, cw, ch)) = cell_rect(k, kids.len(), fan) else {
             continue;
         };
         let cell = EguiRect::from_min_size(egui::pos2(cx, cy), egui::vec2(cw, ch));
@@ -125,15 +136,23 @@ pub(super) fn paint(
                 dark,
             );
         }
-        // Name.
+        // Name. The `Fan{Bg,Fg}` colours and `FanCut` shape only apply when a
+        // plate colour is configured; `-1` keeps the bare text of the grid.
+        let name_centre = egui::pos2(cell.center().x, cell.bottom() + 16.0);
+        let name_w = cw - 8.0;
+        let name_ink = fan.ink(dark, faint);
+        if let Some(bg) = fan.plate(dark) {
+            let plate = EguiRect::from_center_size(name_centre, egui::vec2(name_w, 18.0));
+            painter.rect_filled(plate, CornerRadius::same(5), bg);
+        }
         crate::text::draw_truncated(
             painter,
-            egui::pos2(cell.center().x, cell.bottom() + 16.0),
+            name_centre,
             Align2::CENTER_CENTER,
             &kid.name,
-            cw - 8.0,
+            name_w - 4.0,
             11.5,
-            faint,
+            name_ink,
         );
         // Running indicator dot.
         if kid.running {

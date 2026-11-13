@@ -29,7 +29,7 @@ use nooksill_gpu::edit_win::{EditField, EditRequest, EditSlot};
 use nooksill_gpu::frame::FrameRenderer;
 use nooksill_gpu::frost::Spec as FrostSpec;
 use nooksill_gpu::gpu::Gpu;
-use nooksill_gpu::group_win::{GroupAction, GroupKid, GroupWindow};
+use nooksill_gpu::group_win::{FanSpec, GroupAction, GroupKid, GroupWindow};
 use nooksill_gpu::launchpad_win::LaunchpadWindow;
 use nooksill_gpu::menu::{Menu, MenuCmd};
 use nooksill_gpu::note_win::{NoteAction, NoteWindow};

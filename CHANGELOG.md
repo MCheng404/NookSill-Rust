@@ -108,9 +108,20 @@
 | 文案 | 「图标与可执行文件」→「图片、图标与可执行文件」；「没有找到同名 .ico」→「没有找到匹配的图标」；图标库说明同步 | 行为变了，文案不能继续写只认 `.ico` |
 | 回归 | 3 项：扩展名过滤与大小写、真实 1×1 PNG 经 WIC 解码（像素级 RGBA 断言）、缺失文件与垃圾字节返回 `None` | WIC 是系统组件，CI 的 `windows-latest` 也能跑，不需要桌面会话 |
 
+### 分组面板扇形排布（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 几何 | 新增 `core::layout::fan`：`panel(count, arc, gap, box)` 一次产出面板尺寸与槽位；半径用**弦长**反解（`r = pitch / (2·sin(step/2))`） | 先按弧长算半径，2 个子项时中心距 58.9 px < 图标 60 px，会重叠一个像素；单测 `stacking_never_overlaps_neighbours` 直接抓到了 |
+| 语义纠正 | `FanArc=0` 按 `CONFIG.md` 的「垂直展开」实现为单列；`FanGap` 是沿弧的**像素**间距；**`FanCut` / `FanDrag` 是拖拽语义（复制/剪切、拖出），本轮不读** | 最初把 `FanCut` 当「标签切角」用，读配置文档后纠正——`CONFIG.md` 是对外契约，视觉理解不能凌驾它 |
+| 排布 | `group` 的 `logical_size` / `cell_rect` 按 `FolderFan` 分派：开 = 弧，关 = 原网格；绘制与命中仍共用同一函数 | 两种模式各留回归测试，`FolderFan=0` 可随时回退 |
+| 配色 | `FanBgL/D`、`FanFgL/D` 生效：`-1` 保持裸文字，否则画圆角名签并用 `FanFg` 上色 | 四个配色键终于有消费者 |
+| 尺寸 | 5 子项面板 810 → 638 → **454 px** 宽（1366 屏占 33%），高 250 | 半径按整格宽算太松，按「图标 + 间距」的弦长算才贴合内容 |
+| 验收 | `panels_shot` 深/浅两版离屏截图：弧形轻微、间距均匀、名称不重叠；`layout::fan` 6 项 + `group` 7 项单测 | 项目约定不靠人肉截图 |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**614 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**622 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
 - `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
 - `nooksill-settings` kittest 44 项布局与交互契约，含二级导航的过滤/返回/点击优先级、11 项更新弹窗断言、2 项下载进度断言；`preview` 另有 2 项几何不变量单测。
 - CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。

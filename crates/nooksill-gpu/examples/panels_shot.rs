@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             running: i == 1,
         })
         .collect();
-    let (gw, gh) = group_win::logical_size(kids.len());
+    let (gw, gh) = group_win::logical_size(kids.len(), &group_win::FanSpec::default());
     shot(
         &gpu,
         &format!("{dir}/panel_group.bmp"),

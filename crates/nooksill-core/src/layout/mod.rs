@@ -6,11 +6,13 @@
 use crate::config::{Config, Edge, Key};
 use crate::units;
 
+mod fan;
 mod hit;
 mod metrics;
 mod slots;
 mod window;
 
+pub use fan::{panel as fan_panel, FanBox, FanPanel};
 pub use hit::{hit_index, hit_test, magnify_weight, map_actual_to_base, near_dock};
 pub use metrics::{calc_metrics, clampf, clock_width, Metrics, WidgetKind, WidgetStrip};
 pub use slots::{

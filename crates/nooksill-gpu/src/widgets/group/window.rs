@@ -53,6 +53,7 @@ impl GroupWindow {
             visible: false,
             title: String::new(),
             kids: Vec::new(),
+            fan: FanSpec::default(),
             icons: HashMap::new(),
             asked: HashSet::new(),
             loader: None,
@@ -96,9 +97,11 @@ impl GroupWindow {
         title: &str,
         kids: Vec<GroupKid>,
         anchor: (i32, i32, i32, i32),
+        fan: FanSpec,
     ) -> Result<(), GpuError> {
         self.title = title.to_owned();
         self.kids = kids;
+        self.fan = fan;
         // A different group invalidates the icon cache: the indices no
         // longer point at the same things.
         self.icons.clear();
@@ -108,7 +111,7 @@ impl GroupWindow {
         self.released = None;
         self.action = GroupAction::None;
 
-        let (lw, lh) = logical_size(self.kids.len());
+        let (lw, lh) = logical_size(self.kids.len(), &self.fan);
         let pw = (lw * self.ppp).round() as i32;
         let ph = (lh * self.ppp).round() as i32;
         self.renderer.resize(gpu, pw as u32, ph as u32)?;

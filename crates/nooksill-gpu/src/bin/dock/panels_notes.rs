@@ -187,7 +187,8 @@ impl App {
             }
         }
         if let Some(w) = self.group_slot.as_mut() {
-            if let Err(e) = w.open(&self.gpu, &name, kids, anchor) {
+            let fan = FanSpec::from_config(&self.dock.cfg);
+            if let Err(e) = w.open(&self.gpu, &name, kids, anchor, fan) {
                 eprintln!("分组面板打开失败：{e}");
                 return;
             }

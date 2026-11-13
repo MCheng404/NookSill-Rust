@@ -42,8 +42,10 @@ impl GroupWindow {
                 );
                 icons.insert(r.index, tex);
             }
-            let (kid_actions, dis) =
-                paint(ui, dark, frosted, &title, &kids, &icons, hover, released);
+            let fan = self.fan;
+            let (kid_actions, dis) = paint(
+                ui, dark, frosted, &title, &kids, &icons, hover, released, &fan,
+            );
             actions = kid_actions;
             dissolve = dis;
         })?;
@@ -91,7 +93,7 @@ impl GroupWindow {
 
     /// Hit test: which child is under the cursor.
     pub(super) fn hit_at(&self, x: f32, y: f32) -> Option<usize> {
-        (0..self.kids.len()).find(|&k| match cell_rect(k, self.kids.len()) {
+        (0..self.kids.len()).find(|&k| match cell_rect(k, self.kids.len(), &self.fan) {
             Some((cx, cy, cw, ch)) => x >= cx && x <= cx + cw && y >= cy && y <= cy + ch,
             None => false,
         })

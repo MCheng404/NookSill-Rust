@@ -708,7 +708,7 @@ SbPopFrost SbAutoOpaque TaskPeek FrostHold AnimSpeed FanReverse LogCollect
 | # | 项 | 规模 | 现状 / 入口 | 判断 |
 |---|---|---|---|---|
 | 1 | **顶部状态栏** | 大 | `Sb*` 13 个键已建模但全空转；要独立窗口 + 第二个 AppBar + 弹出层 + 九个子开关 | 唯一还没做的"大组件"。做之前先定：它是独立进程内窗口还是复用 Dock 窗口？ |
-| 2 | **扇形展开** | 中 | `Fan*` 8 个键（弧角/间距/切角/四套配色/拖拽）已建模未读；`folder_fan` 开关也在 | 文件夹/组悬停时的弧形弹出。几何是纯数学，可以先写 `layout::fan_slots` 配单测，再接绘制 |
+| 2 | 扇形展开（排布） | 小 | ✅ 已完成：`layout::fan` 纯几何 + `group` 的弧形模式，`FolderFan` / `FanArc` / `FanGap` / `FanBg*` / `FanFg*` 全部生效，`FanArc=0` 为垂直单列 | 剩**拖拽**部分：`FanCut`（0 复制 / 1 剪切）与 `FanDrag`（拖出到桌面）未接，入口在 `group/input.rs`，需要注册 OLE 拖源 |
 | 3 | **多窗口列表** | 中 | 现在只有分组预览；上游是"同应用多窗口时悬停列窗口标题" | 数据层要 `EnumWindows` 按 PID 分组（`running_apps` 现在只留第一个窗口）；UI 是新的弹层 |
 | 4 | ~~速记面板~~ | — | ✅ 已做（`core::note` + `gpu::note_win` + `gpu::edit_win` 多行；`Notes` / `MnNotes` 两个空壳一起接通） | — |
 | 5 | ~~托盘图标~~ | — | ✅ 已做（`platform::tray`，左键显隐 / 右键菜单 / RAII 注销） | — |
