@@ -7,7 +7,7 @@ pub mod pages;
 pub mod text_field;
 
 pub use pages::{
-    settings_ui, Command, ItemEdit, Modal, ModalAction, NavGroup, NavItem, Outcome, Page,
+    settings_ui, Command, ItemEdit, LibIcon, Modal, ModalAction, NavGroup, NavItem, Outcome, Page,
     SettingsState, UpdateView,
 };
 

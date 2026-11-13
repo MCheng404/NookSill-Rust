@@ -130,9 +130,18 @@
 
 **回滚记录**：同时尝试给更新弹窗加「查看完整说明」可展开区（`Modal.notes` + `expanded` + `ScrollArea`），在 kittest 下触发 egui 字体缺字形 panic，且无法从业务代码解释——实际绘制的文本已过滤成纯 ASCII，panic 仍报缺 emoji 字形，位置在 `ScrollArea` 内部。该特性已整体回滚，弹窗继续显示 90 字符摘要。附带查明：`MissingGlyphPolicy` 默认是 `Tofu`（生产环境不会崩），`Panic` 是 kittest 为捕捉缺字故意设的。
 
+### 图标库预览网格（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 状态 | `SettingsState.icon_library: Vec<LibIcon>`（名称 / 路径 / 纹理），新增 `Command::LoadIconLibrary` | 原来只有一行「同名匹配」说明，用户无法确认到底匹配到了什么 |
+| 扫描 | `App::load_icon_library` 按 `ico → png → jpg → jpeg → bmp → gif → webp` 找同名文件；`.ico` 走 shell 图像列表、其余走 WIC；纹理经设置窗口的 egui Context 加载 | 复用前两轮的解码能力；只读，不写 items，所以可以反复刷新 |
+| UI | 「图标预览」卡片：每项一格（36 px 图标 + 名称），未匹配画空心圆，底部汇总「N 个条目没有匹配的图标文件」；未加载时显示「加载预览」，已选文件夹时多一个「刷新预览」 | 匹配结果与缺口一眼可见 |
+| 验收 | kittest 2 项（空态、未匹配汇总）+ 离屏截图 | 项目约定不靠人肉截图 |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**624 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**626 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
 - `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
 - `nooksill-settings` kittest 44 项布局与交互契约，含二级导航的过滤/返回/点击优先级、11 项更新弹窗断言、2 项下载进度断言；`preview` 另有 2 项几何不变量单测。
 - CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。

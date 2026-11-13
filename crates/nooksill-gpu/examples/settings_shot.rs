@@ -14,7 +14,8 @@
 //! arguments are order-free flags: `dark`, `tip`, `focus`, `q=<text>`,
 //! `accent=RRGGBB`, `feather=<px>`, `nodiscs`, `noroundrect`, `modal` (an
 //! available update, so the popup is shown), `beta` (select the beta channel),
-//! `gradient` (gradient bar material), `mirror` (icon reflection), `ready`
+//! `gradient` (gradient bar material), `mirror` (icon reflection), `lib` (icon
+//! library preview with sample tiles), `ready`
 //! (a verified download, so the install popup is shown), `progress` (a
 //! download in flight), and a bare number to scale the UI.
 //!
@@ -50,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mirror = rest.iter().any(|a| a == "mirror");
     let ready = rest.iter().any(|a| a == "ready");
     let progress = rest.iter().any(|a| a == "progress");
+    let lib = rest.iter().any(|a| a == "lib");
     // Focus is normally granted by a click, so request it from memory instead.
     let focus = rest.iter().any(|a| a == "focus");
     // A bare number is a percentage (150 -> 1.5). Fonts and every element scale
@@ -112,6 +114,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if ready {
         state.update.ready = true;
+    }
+    if lib {
+        state.icon_dir = r"C:\icons".to_owned();
+        let colours: [[u8; 3]; 4] = [
+            [72, 133, 232],
+            [232, 118, 92],
+            [104, 186, 140],
+            [230, 182, 84],
+        ];
+        let mut rows = Vec::new();
+        for (i, rgb) in colours.iter().enumerate() {
+            let tex = frame.ctx().load_texture(
+                format!("lib-sample-{i}"),
+                egui::ColorImage::from_rgba_unmultiplied([1, 1], &[rgb[0], rgb[1], rgb[2], 255]),
+                egui::TextureOptions::LINEAR,
+            );
+            rows.push(nooksill_settings::LibIcon {
+                name: format!("App {i}"),
+                path: format!(r"C:\icons\App {i}.png"),
+                tex: Some(tex),
+            });
+        }
+        rows.push(nooksill_settings::LibIcon {
+            name: "Missing".to_owned(),
+            path: String::new(),
+            tex: None,
+        });
+        state.icon_library = rows;
     }
     if progress {
         state.update.busy = true;

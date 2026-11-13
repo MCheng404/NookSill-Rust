@@ -171,6 +171,8 @@ pub struct SettingsState {
     pub hotkey_error: bool,
     /// Icon folder selected on the library page (empty = none).
     pub icon_dir: String,
+    /// Preview rows: one per item, filled by the host after a scan.
+    pub icon_library: Vec<LibIcon>,
     /// Top bar search text; when non-empty only matching nav labels are shown.
     pub nav_filter: String,
     /// Currently expanded help bubble, pinned by click or opened by 3 s hover.
@@ -245,6 +247,7 @@ impl Default for SettingsState {
             hotkey_input: String::new(),
             hotkey_error: false,
             icon_dir: String::new(),
+            icon_library: Vec::new(),
             row_bands: Vec::new(),
             items: Vec::new(),
             editing: None,
@@ -266,6 +269,27 @@ pub struct ItemEdit {
     pub group: Option<usize>,
 }
 
+/// One row of the icon-library preview.
+#[derive(Clone)]
+pub struct LibIcon {
+    /// Item name the row belongs to.
+    pub name: String,
+    /// File that would be used; empty when nothing matched.
+    pub path: String,
+    /// Decoded icon for the preview; `None` when nothing matched.
+    pub tex: Option<egui::TextureHandle>,
+}
+
+impl std::fmt::Debug for LibIcon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LibIcon")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("has_icon", &self.tex.is_some())
+            .finish()
+    }
+}
+
 /// Actions the host program must perform (dialogs, registry, item edits).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -277,6 +301,8 @@ pub enum Command {
     ToggleAutostart(bool),
     PickIconDir,
     AutoMatch,
+    /// Scan the icon folder and fill `SettingsState::icon_library`.
+    LoadIconLibrary,
     AddUrl,
     AddFile,
     AddFolder,

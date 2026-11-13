@@ -58,3 +58,26 @@ fn 只有速度没有剩余时间时省略后半段() {
     h.run();
     h.get_by_label("1.0 / 4.0 MB · 1.0 MB/s");
 }
+
+#[test]
+fn 图标库空态提示加载预览() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Library;
+    h.state_mut().ui.icon_dir = r"C:\icons".to_owned();
+    h.run();
+    h.get_by_label("加载预览");
+}
+
+#[test]
+fn 图标库预览标出未匹配条目() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Library;
+    h.state_mut().ui.icon_dir = r"C:\icons".to_owned();
+    h.state_mut().ui.icon_library = vec![nooksill_settings::LibIcon {
+        name: "VS Code".to_owned(),
+        path: String::new(),
+        tex: None,
+    }];
+    h.run();
+    h.get_by_label("1 个条目没有匹配的图标文件");
+}

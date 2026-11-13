@@ -217,6 +217,12 @@ impl SettingsWindow {
 
     /// Wakes the window to draw one frame after an external thread changed
     /// `state`.
+    /// The egui context, so the host can load textures for the icon preview.
+    #[must_use]
+    pub fn ctx(&self) -> &egui::Context {
+        self.renderer.ctx()
+    }
+
     pub fn wake(&mut self) {
         if self.visible {
             self.next_repaint = Some(Instant::now());

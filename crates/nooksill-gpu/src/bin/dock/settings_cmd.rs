@@ -4,6 +4,67 @@ use super::misc::{apply_low_power, apply_recommended, url_host};
 use super::*;
 
 impl App {
+    /// Scan the icon folder for every item and build the preview rows.
+    ///
+    /// Read-only: nothing is written to the items, so the preview can be
+    /// refreshed as often as the user likes.
+    fn load_icon_library(&mut self) {
+        let Some(sw) = self.settings_slot.as_ref() else {
+            return;
+        };
+        let dir = sw.state.icon_dir.clone();
+        if dir.is_empty() {
+            return;
+        }
+        let ctx = sw.ctx().clone();
+        let names: Vec<String> = self.raw.iter().map(|i| i.name.to_string()).collect();
+        const EXTS: &[&str] = &["ico", "png", "jpg", "jpeg", "bmp", "gif", "webp"];
+        let mut rows = Vec::with_capacity(names.len());
+        for name in names {
+            let found = EXTS.iter().find_map(|ext| {
+                let candidate = std::path::Path::new(&dir).join(format!("{name}.{ext}"));
+                candidate.is_file().then_some(candidate)
+            });
+            let Some(path) = found else {
+                rows.push(nooksill_settings::LibIcon {
+                    name,
+                    path: String::new(),
+                    tex: None,
+                });
+                continue;
+            };
+            let shown = path.display().to_string();
+            let is_ico = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("ico"));
+            let bitmap = if is_ico {
+                nooksill_platform::icon::resource_icon(&shown, 0)
+            } else {
+                nooksill_platform::image_icon::decode_image_icon(&shown)
+            };
+            let tex = bitmap.map(|b| {
+                ctx.load_texture(
+                    format!("library:{shown}"),
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [b.width as usize, b.height as usize],
+                        &b.rgba,
+                    ),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            rows.push(nooksill_settings::LibIcon {
+                name,
+                path: shown,
+                tex,
+            });
+        }
+        if let Some(sw) = self.settings_slot.as_mut() {
+            sw.state.icon_library = rows;
+            sw.wake();
+        }
+    }
+
     pub(super) fn run_settings_cmd(&mut self, cmd: Command) -> bool {
         match cmd {
             // Closing is handled in `tick_settings`; the window must be hidden.
@@ -259,6 +320,10 @@ impl App {
                         &[text.to_string().as_str()],
                     ));
                 }
+                false
+            }
+            Command::LoadIconLibrary => {
+                self.load_icon_library();
                 false
             }
             Command::AutoMatch => {
