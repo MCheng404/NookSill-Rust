@@ -97,9 +97,20 @@
 | 验收 | `settings_shot` 增 `progress` 开关；离屏截图确认 56%、18.0 / 32.0 MB、按钮禁用；2 项新测试 | 项目约定不靠人肉截图 |
 | 台账 | PORTING Backlog #8 划掉 | 台账按代码实际存在与否标，不按计划标 |
 
+### 自定义图标支持 PNG / JPEG（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| WIC 解码 | 新增 `platform::image_icon`：`CoCreateInstance(CLSID_WICImagingFactory)` → 解码首帧 → `IWICFormatConverter` 转 `32bppBGRA` → 复用 `icon::bgra_to_rgba`。支持 png / jpg / jpeg / bmp / gif / tif / tiff / webp；`.ico` 仍走 shell 图像列表 | 原来 `icon_src` 只经 shell 图像列表，选 PNG 得到的是「文件类型图标」而不是图片本身。WIC 是系统组件，不必引入 `image` crate |
+| COM 公寓 | `image_icon::Com` 做 RAII：只在本次 `CoInitializeEx` 返回 `S_OK` 时 `CoUninitialize`，`S_FALSE` 不复位 | 图标工作线程一次处理一批图，重复初始化返回 `S_FALSE`，多复位会打破其它组件的公寓计数 |
+| 边界 | 拒绝 0 尺寸与超过 16 M 像素（64 MB BGRA）的图；全透明图回退 shell 图标 | 防异常大图撑爆内存；避免「图标凭空消失」的困惑 |
+| 入口 | 「更换图标…」过滤器加图片格式；图标库批量匹配按 `ico → png → jpg → jpeg → bmp → gif → webp` 找同名文件 | 只认 `.ico` 时，用户选了 PNG 也看不到效果 |
+| 文案 | 「图标与可执行文件」→「图片、图标与可执行文件」；「没有找到同名 .ico」→「没有找到匹配的图标」；图标库说明同步 | 行为变了，文案不能继续写只认 `.ico` |
+| 回归 | 3 项：扩展名过滤与大小写、真实 1×1 PNG 经 WIC 解码（像素级 RGBA 断言）、缺失文件与垃圾字节返回 `None` | WIC 是系统组件，CI 的 `windows-latest` 也能跑，不需要桌面会话 |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**611 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 83 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**614 passed、22 ignored**（`core` 289 / `gpu` 178 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
 - `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
 - `nooksill-settings` kittest 44 项布局与交互契约，含二级导航的过滤/返回/点击优先级、11 项更新弹窗断言、2 项下载进度断言；`preview` 另有 2 项几何不变量单测。
 - CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。

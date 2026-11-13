@@ -271,19 +271,26 @@ impl App {
                     self.status(nooksill_core::i18n::t("Choose an icon folder first"));
                     return false;
                 }
+                // `.ico` first for backwards compatibility, then the still
+                // image formats WIC decodes.
+                const ICON_EXTS: &[&str] = &["ico", "png", "jpg", "jpeg", "bmp", "gif", "webp"];
                 let mut matched = 0usize;
                 for item in &mut self.raw {
                     if !item.icon_src.is_empty() || item.kind == ItemKind::Separator {
                         continue;
                     }
-                    let candidate = std::path::Path::new(&dir).join(format!("{}.ico", item.name));
-                    if candidate.is_file() {
-                        item.icon_src = candidate.display().to_string();
+                    let found = ICON_EXTS.iter().find_map(|ext| {
+                        let candidate =
+                            std::path::Path::new(&dir).join(format!("{}.{ext}", item.name));
+                        candidate.is_file().then_some(candidate)
+                    });
+                    if let Some(path) = found {
+                        item.icon_src = path.display().to_string();
                         matched += 1;
                     }
                 }
                 if matched == 0 {
-                    self.status(nooksill_core::i18n::t("No matching .ico found"));
+                    self.status(nooksill_core::i18n::t("No matching icon found"));
                     return false;
                 }
                 // The icon source changed; without clearing the cache

@@ -14,6 +14,7 @@ pub mod filedialog;
 pub mod gpu;
 pub mod hotkey;
 pub mod icon;
+pub mod image_icon;
 pub mod json;
 pub mod launch;
 pub mod launchpad;

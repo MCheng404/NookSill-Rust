@@ -19,6 +19,7 @@ use nooksill_core::running;
 use nooksill_core::store;
 use nooksill_platform::app_window;
 use nooksill_platform::icon::{self, IconBitmap};
+use nooksill_platform::image_icon;
 use nooksill_platform::launch;
 use nooksill_platform::occlusion;
 use nooksill_platform::win::ensure_com;

@@ -359,7 +359,7 @@ G1_1=2|1|GitHub|https://github.com||0|
 | `appmode` | — | 0 默认浏览器 / 1 `--app` |
 | `name` | 127 | 显示名 |
 | `path` | 1023 | 目标路径 / URL / `shell:` 协议 |
-| `icon_src` | 511 | 自定义图标路径（空 = 自动） |
+| `icon_src` | 511 | 自定义图标路径（空 = 自动）。`.ico` / `.exe` / `.dll` 走 shell 图像列表；`png` / `jpg` / `jpeg` / `bmp` / `gif` / `tif` / `tiff` / `webp` 走系统 WIC 解码，不引第三方图像 crate |
 | `fit` | — | 图标填充模式（0 等比留白） |
 | `args` | 259 | 启动参数 |
 

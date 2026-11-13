@@ -47,7 +47,7 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             }
             ui.label(
             RichText::new(
-                nooksill_core::i18n::t("Files are matched by name against app names; only .ico is read, the native Windows icon format."),
+                nooksill_core::i18n::t("Files are matched by name against app names; .ico and common image formats are read."),
             )
             .small()
             .weak(),

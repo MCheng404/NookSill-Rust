@@ -267,7 +267,7 @@ fn from_color_bitmap(hbm_color: HBITMAP, hbm_mask: HBITMAP) -> Option<IconBitmap
 }
 
 /// BGRA to RGBA; fully transparent pixels are zeroed.
-fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
+pub(crate) fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
     let mut rgba = vec![0u8; bgra.len()];
     // Ignore the trailing remainder (callers always pass a multiple of 4).
     for (src, dst) in bgra

@@ -196,8 +196,8 @@ C 版退出时会把配置以 UTF-16 全量回写，所以每轮对拍都要用�
 >     `note_slot` 没进 `panels()`，面板开着时自动隐藏会把栏体收走、
 >     把面板单独悬在半空。两条都是 Bash 脚本静默漏写导致的，
 >     已用逐条 grep 复核。
-> - **仍未做**：网址拖入（OLE `IDropTarget`）、PNG/JPEG 图标解码（WIC）、
->   图标库浏览器、扇形展开、DWM 窗口预览。
+> - **仍未做**：图标库浏览器、扇形展开、DWM 窗口预览。
+>   （网址拖入已由 OLE `IDropTarget` 落地；PNG/JPEG 图标解码见 §十 #7。）
 
 ### M3 · 弹窗与磨砂
 
@@ -713,7 +713,7 @@ SbPopFrost SbAutoOpaque TaskPeek FrostHold AnimSpeed FanReverse LogCollect
 | 4 | ~~速记面板~~ | — | ✅ 已做（`core::note` + `gpu::note_win` + `gpu::edit_win` 多行；`Notes` / `MnNotes` 两个空壳一起接通） | — |
 | 5 | ~~托盘图标~~ | — | ✅ 已做（`platform::tray`，左键显隐 / 右键菜单 / RAII 注销） | — |
 | 6 | ~~磨砂玻璃背景~~ | — | ✅ 已做（`frost::Live` 抓屏线程 + `chrome::rounded_frost` 按件取样，由 `App::step_frost` 用「抓到一帧」驱动；不动时零帧，窗口排除出捕获见 ADR-080） | — |
-| 7 | 图标解码（PNG/JPEG） | 小 | `icon_src` 目前只认 `.ico`（shell 图像列表） | 加 WIC 解码即可；注意别为此引入 `image` crate |
+| 7 | ~~图标解码（PNG/JPEG）~~ | — | ✅ 已做（`platform::image_icon` 用 WIC 解码 png/jpg/jpeg/bmp/gif/tif/tiff/webp，`.ico` 仍走 shell 图像列表；未引入 `image` crate） | — |
 | 8 | ~~更新进度条~~ | — | ✅ 已做（`net::get_stream` 逐块 sink → `UpdateMsg::Progress` → `UpdateView::progress()` → 状态卡片进度条 + 字节数；256 KiB 节流，未知大小时不显示） | — |
 | — | 窗口动画 | — | 逐帧改别人 HWND，§9.4 已论证 | **不做** |
 | — | `Guardian` 守护进程 | — | 要第二个常驻进程 | **不做** |

@@ -79,8 +79,8 @@ impl App {
 
     /// Pick a custom icon for an item.
     ///
-    /// `icon_src` goes through the shell image list, so only `.ico` / `.exe` /
-    /// `.dll` are offered; there is no PNG/JPEG decoder.
+    /// Still images decode through WIC; `.ico` / `.exe` / `.dll` go through the
+    /// shell image list. The filter lists both groups.
     pub(super) fn change_icon(&mut self, index: usize) {
         if index >= self.raw.len() {
             return;
@@ -88,8 +88,8 @@ impl App {
         let owner = self.settings_hwnd();
         let filters = [
             (
-                nooksill_core::i18n::t("Icons and executables"),
-                "*.ico;*.exe;*.dll",
+                nooksill_core::i18n::t("Images, icons and executables"),
+                "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.ico;*.exe;*.dll",
             ),
             (nooksill_core::i18n::t("All files"), "*.*"),
         ];

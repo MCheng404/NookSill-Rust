@@ -57,10 +57,13 @@ pub(super) const BATCH: usize = 8;
 
 /// Fetches an icon through the shell.
 pub(super) fn fetch_icon(req: &IconRequest) -> Option<IconBitmap> {
-    // A custom icon wins: `.ico` goes through the shell image list. Falling
-    // back to the item's own icon beats showing nothing on a bad path.
+    // A custom icon wins: still images decode through WIC, `.ico` / `.exe` /
+    // `.dll` through the shell image list. Falling back to the item's own icon
+    // beats showing nothing on a bad path.
     let custom = (!req.icon_src.is_empty())
-        .then(|| icon::shell_icon(&req.icon_src))
+        .then(|| {
+            image_icon::decode_image_icon(&req.icon_src).or_else(|| icon::shell_icon(&req.icon_src))
+        })
         .flatten();
     if custom.is_some() {
         return custom;
@@ -146,7 +149,9 @@ pub(super) fn group_icon(kids: &[IconKid]) -> Option<IconBitmap> {
 /// Fetches one child's icon, preferring its custom icon.
 pub(super) fn fetch_kid(kid: &IconKid) -> Option<IconBitmap> {
     let custom = (!kid.icon_src.is_empty())
-        .then(|| icon::shell_icon(&kid.icon_src))
+        .then(|| {
+            image_icon::decode_image_icon(&kid.icon_src).or_else(|| icon::shell_icon(&kid.icon_src))
+        })
         .flatten();
     if custom.is_some() {
         return custom;
