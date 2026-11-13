@@ -92,6 +92,7 @@ pub const TEXT: &[&str] = &[
     "Peak",
     "Performance",
     "Pick an .ico / .exe / .dll as the icon",
+    "Pick an item on the Items page, then click an icon here.",
     "Pin to Dock",
     "Pink",
     "Pinned to Dock",

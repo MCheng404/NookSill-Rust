@@ -1,7 +1,7 @@
 //! Download progress: pure state helpers and the card that renders them.
 
 use egui_kittest::kittest::Queryable;
-use nooksill_settings::{Page, UpdateView};
+use nooksill_settings::{Command, LibIcon, Page, UpdateView};
 
 use super::common::new_harness;
 
@@ -80,4 +80,41 @@ fn 图标库预览标出未匹配条目() {
     }];
     h.run();
     h.get_by_label("1 个条目没有匹配的图标文件");
+}
+
+#[test]
+fn 图标库未选中条目时提示先选() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Library;
+    h.state_mut().ui.icon_dir = r"C:\icons".to_owned();
+    h.state_mut().ui.icon_library = vec![LibIcon {
+        name: "VS Code".to_owned(),
+        path: r"C:\icons\VS Code.png".to_owned(),
+        tex: None,
+    }];
+    h.run();
+    h.get_by_label("先在「条目」页选中一个条目，再点这里的图标。");
+}
+
+#[test]
+fn 点击图标格发出应用命令() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Library;
+    h.state_mut().ui.icon_dir = r"C:\icons".to_owned();
+    h.state_mut().ui.editing = Some(2);
+    h.state_mut().ui.icon_library = vec![LibIcon {
+        name: "VS Code".to_owned(),
+        path: r"C:\icons\VS Code.png".to_owned(),
+        tex: None,
+    }];
+    h.run();
+    h.get_by_label("VS Code").click();
+    h.run();
+    assert_eq!(
+        h.state().commands.last(),
+        Some(&Command::UseIcon {
+            index: 2,
+            path: r"C:\icons\VS Code.png".to_owned()
+        })
+    );
 }

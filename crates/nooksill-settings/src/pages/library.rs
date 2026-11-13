@@ -99,9 +99,23 @@ fn preview_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             // only read; a texture handle is an id plus an Arc.
             let rows = ctx.state.icon_library.clone();
             let missing = rows.iter().filter(|r| r.tex.is_none()).count();
+            // Tiles apply to the item being edited on the Items page; without
+            // one there is nothing to apply to, so say so instead of silently
+            // ignoring the click.
+            let target = ctx.state.editing;
+            if target.is_none() {
+                ui.label(
+                    RichText::new(nooksill_core::i18n::t(
+                        "Pick an item on the Items page, then click an icon here.",
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+            let mut picked: Option<usize> = None;
             ui.horizontal_wrapped(|ui| {
-                for row in &rows {
-                    ui.allocate_ui(TILE, |ui| {
+                for (i, row) in rows.iter().enumerate() {
+                    let tile = ui.allocate_ui(TILE, |ui| {
                         let (rect, _) = ui.allocate_exact_size(Vec2::splat(ICON), Sense::hover());
                         match &row.tex {
                             Some(tex) => {
@@ -122,8 +136,24 @@ fn preview_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                         }
                         ui.label(RichText::new(&row.name).size(10.0).weak());
                     });
+                    let sense = if target.is_some() && !row.path.is_empty() {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    };
+                    if tile.response.interact(sense).clicked() {
+                        picked = Some(i);
+                    }
                 }
             });
+            if let (Some(index), Some(i)) = (target, picked) {
+                if let Some(row) = rows.get(i) {
+                    ctx.out.command = Some(Command::UseIcon {
+                        index,
+                        path: row.path.clone(),
+                    });
+                }
+            }
             if missing > 0 {
                 ui.label(
                     RichText::new(nooksill_core::i18n::fmt(

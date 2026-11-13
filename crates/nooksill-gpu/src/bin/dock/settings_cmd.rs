@@ -326,6 +326,22 @@ impl App {
                 self.load_icon_library();
                 false
             }
+            Command::UseIcon { index, path } => {
+                if index < self.raw.len() {
+                    self.raw[index].icon_src = path;
+                    // Same invalidation as the picker: the texture cache is
+                    // keyed by path, so the old icon would stick otherwise.
+                    self.dock.clear_icon(index);
+                    self.icons.forget(index, &self.raw[index].path);
+                    self.apply_item_change();
+                    let name = self.raw[index].name.to_string();
+                    self.status(nooksill_core::i18n::fmt(
+                        "Icon changed for {0}",
+                        &[name.as_str()],
+                    ));
+                }
+                false
+            }
             Command::AutoMatch => {
                 let dir = self
                     .settings_slot

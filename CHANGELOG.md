@@ -139,9 +139,18 @@
 | UI | 「图标预览」卡片：每项一格（36 px 图标 + 名称），未匹配画空心圆，底部汇总「N 个条目没有匹配的图标文件」；未加载时显示「加载预览」，已选文件夹时多一个「刷新预览」 | 匹配结果与缺口一眼可见 |
 | 验收 | kittest 2 项（空态、未匹配汇总）+ 离屏截图 | 项目约定不靠人肉截图 |
 
+### 图标库格子直接应用（2026-11-13）
+
+| 项 | 改了什么 | 依据 |
+|---|---|---|
+| 命令 | 新增 `Command::UseIcon { index, path }`；预览格子在存在编辑目标时可点击 | 预览只能看不能点，要换图标还得回条目页走文件对话框 |
+| 目标 | 应用到 `SettingsState::editing` 指向的条目；没有编辑目标时显示「先在「条目」页选中一个条目，再点这里的图标」 | 设置层不持有 items 数据，只能以「正在编辑的条目」为锚点；静默忽略点击更糟 |
+| 失效 | 与文件对话框同一条路径：`clear_icon` + `icons.forget` + `apply_item_change` + 状态提示 | 纹理按 path 缓存，不清会让旧图标继续显示 |
+| 验收 | kittest 2 项（未选中提示、点击发出命令） | |
+
 ### 验证（2026-11-13）
 
-- `./scripts/build.sh --gate`（rustc **1.100.0**）：**626 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
+- `./scripts/build.sh --gate`（rustc **1.100.0**）：**628 passed、22 ignored**（`core` 295 / `gpu` 180 / `platform` 86 / `settings` 8+44+2 / 其它 7）。六步为注释 / 规模 / 提交信息 / `fmt` / `clippy -D warnings` / 全量测试；`i18n` 另有 8 项门禁。
 - `nooksill-platform` 更新模块 18 项离线测试（通道筛选、摘要、ETag 头、限流文案与退避缓存、缓存原子写、SemVer 预发布、静默替换脚本、篡改拒绝）。
 - `nooksill-settings` kittest 44 项布局与交互契约，含二级导航的过滤/返回/点击优先级、11 项更新弹窗断言、2 项下载进度断言；`preview` 另有 2 项几何不变量单测。
 - CI：三次失败（`needless_range_loop` / `needless_bool` / 1.100 `OUT_DIR` 层级）依次修复，最终 run `43396980467` 的 gate 与 debug（含 publish pre-release）**全绿**，release 按非 tag 推送跳过。

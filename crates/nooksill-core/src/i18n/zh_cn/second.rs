@@ -92,6 +92,7 @@ pub const TEXT: &[(&str, &str)] = &[
     ("Peak", "峰值"),
     ("Performance", "性能"),
     ("Pick an .ico / .exe / .dll as the icon", "选一个 .ico / .exe / .dll 作为图标"),
+    ("Pick an item on the Items page, then click an icon here.", "先在「条目」页选中一个条目，再点这里的图标。"),
     ("Pin to Dock", "固定到 Dock"),
     ("Pink", "粉"),
     ("Pinned to Dock", "已固定到 Dock"),

@@ -303,6 +303,11 @@ pub enum Command {
     AutoMatch,
     /// Scan the icon folder and fill `SettingsState::icon_library`.
     LoadIconLibrary,
+    /// Use `path` as the icon of item `index` (clicked a preview tile).
+    UseIcon {
+        index: usize,
+        path: String,
+    },
     AddUrl,
     AddFile,
     AddFolder,
