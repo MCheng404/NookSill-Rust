@@ -173,6 +173,26 @@ impl App {
                     view.busy = true;
                 }
                 UpdateMsg::Progress { done, total } => {
+                    let now = Instant::now();
+                    match self.update_rate {
+                        Some((at, bytes)) => {
+                            let dt = now.duration_since(at).as_secs_f32();
+                            // 250 ms keeps the number readable instead of
+                            // jittering on every 256 KiB chunk.
+                            if dt >= 0.25 {
+                                let delta = done.saturating_sub(bytes);
+                                let rate = (delta as f32 / dt) as u64;
+                                view.bytes_per_sec = rate;
+                                view.eta_secs = if rate > 0 && total > done {
+                                    ((total - done) / rate).min(u64::from(u32::MAX)) as u32
+                                } else {
+                                    0
+                                };
+                                self.update_rate = Some((now, done));
+                            }
+                        }
+                        None => self.update_rate = Some((now, done)),
+                    }
                     view.bytes_done = done;
                     view.bytes_total = total;
                     view.busy = true;
@@ -180,6 +200,9 @@ impl App {
                 UpdateMsg::Available(release) => {
                     view.bytes_done = 0;
                     view.bytes_total = 0;
+                    view.bytes_per_sec = 0;
+                    view.eta_secs = 0;
+                    self.update_rate = None;
                     let kind = if release.prerelease {
                         nooksill_core::i18n::t("New pre-release")
                     } else {
@@ -227,6 +250,7 @@ impl App {
                     // restart when the user asks for one.
                     self.pending_update = Some(path);
                     self.pending_silent = true;
+                    self.update_rate = None;
                     if !auto {
                         if let Some(sw) = self.settings_slot.as_mut() {
                             sw.state.update_ready_prompted = false;
@@ -235,6 +259,7 @@ impl App {
                     finished = true;
                 }
                 UpdateMsg::Failed(why) => {
+                    self.update_rate = None;
                     view.status = nooksill_core::i18n::fmt("Failed: {0}", &[why.as_str()]);
                     view.busy = false;
                     finished = true;

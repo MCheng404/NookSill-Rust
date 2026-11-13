@@ -136,14 +136,34 @@ pub(super) fn status_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 let total = view.bytes_total as f64 / (1024.0 * 1024.0);
                 let done_text = format!("{done:.1}");
                 let total_text = format!("{total:.1}");
-                ui.label(
-                    RichText::new(nooksill_core::i18n::fmt(
+                // The rate line only appears once two samples are in; before
+                // that the plain byte counter is the honest thing to show.
+                let line = if view.bytes_per_sec == 0 {
+                    nooksill_core::i18n::fmt(
                         "{0} / {1} MB",
                         &[done_text.as_str(), total_text.as_str()],
-                    ))
-                    .small()
-                    .weak(),
-                );
+                    )
+                } else {
+                    let rate = format!("{:.1}", view.bytes_per_sec as f64 / (1024.0 * 1024.0));
+                    if view.eta_secs == 0 {
+                        nooksill_core::i18n::fmt(
+                            "{0} / {1} MB · {2} MB/s",
+                            &[done_text.as_str(), total_text.as_str(), rate.as_str()],
+                        )
+                    } else {
+                        let eta = view.eta_secs.to_string();
+                        nooksill_core::i18n::fmt(
+                            "{0} / {1} MB · {2} MB/s · {3} s left",
+                            &[
+                                done_text.as_str(),
+                                total_text.as_str(),
+                                rate.as_str(),
+                                eta.as_str(),
+                            ],
+                        )
+                    }
+                };
+                ui.label(RichText::new(line).small().weak());
                 ui.add_space(6.0);
             }
 
@@ -226,11 +246,6 @@ pub(super) fn maybe_prompt(state: &mut SettingsState, cfg: &nooksill_core::confi
     } else {
         nooksill_core::i18n::t("Stable")
     };
-    let version = if view.version.is_empty() {
-        nooksill_core::i18n::t("a newer version").to_owned()
-    } else {
-        view.version.clone()
-    };
     // One or two lines at most: a long release body would push the buttons
     // out of the fixed-height card.
     let detail: String = view
@@ -239,6 +254,13 @@ pub(super) fn maybe_prompt(state: &mut SettingsState, cfg: &nooksill_core::confi
         .map(|c| if c.is_control() { ' ' } else { c })
         .take(90)
         .collect();
+    let version = if view.version.is_empty() {
+        nooksill_core::i18n::t("a newer version").to_owned()
+    } else {
+        view.version.clone()
+    };
+    // One or two lines at most: a long release body would push the buttons
+    // out of the fixed-height card.
     // Show the upgrade path explicitly: a beta build can carry a lower-looking
     // version triple than the stable install it was cut from.
     let mut modal = Modal::new(

@@ -117,6 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.update.busy = true;
         state.update.bytes_done = 18 * 1024 * 1024;
         state.update.bytes_total = 32 * 1024 * 1024;
+        state.update.bytes_per_sec = 2_400_000;
+        state.update.eta_secs = 6;
         state.update.status = nooksill_core::i18n::fmt(
             "Downloading from {0}…",
             &[nooksill_core::i18n::t("GitHub direct")],

@@ -264,6 +264,7 @@ impl App {
             update_staged: None,
             pending_update: None,
             pending_silent: false,
+            update_rate: None,
             debug_opened,
             watcher: nooksill_gpu::popup::Watcher::default(),
             panel_was_open: false,

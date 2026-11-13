@@ -288,6 +288,8 @@ pub const TEXT: &[&str] = &[
     "{0} (current)",
     "{0} / {1} GB free",
     "{0} / {1} MB",
+    "{0} / {1} MB · {2} MB/s",
+    "{0} / {1} MB · {2} MB/s · {3} s left",
     "{0} is available on the {1} channel.",
     "{0} items",
     "{0} items already on the Dock",

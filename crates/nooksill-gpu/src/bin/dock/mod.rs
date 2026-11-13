@@ -294,6 +294,8 @@ struct App {
     pending_update: Option<std::path::PathBuf>,
     /// Silent replacement: swap on exit without restarting the process.
     pending_silent: bool,
+    /// Last `(instant, bytes)` sample, for the download rate.
+    update_rate: Option<(Instant, u64)>,
 
     // Background threads. The UI thread only `try_recv`, it never waits.
     /// Icon loading (shell and COM, serialised).

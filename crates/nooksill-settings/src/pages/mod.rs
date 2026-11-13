@@ -340,6 +340,10 @@ pub struct UpdateView {
     pub bytes_done: u64,
     /// Asset size from release metadata; 0 means unknown.
     pub bytes_total: u64,
+    /// Smoothed download rate in bytes per second; 0 means unknown yet.
+    pub bytes_per_sec: u64,
+    /// Seconds left at that rate; 0 means unknown.
+    pub eta_secs: u32,
 }
 
 impl UpdateView {

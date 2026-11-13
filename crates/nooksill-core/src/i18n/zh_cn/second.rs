@@ -288,6 +288,8 @@ pub const TEXT: &[(&str, &str)] = &[
     ("{0} (current)", "{0}（当前）"),
     ("{0} / {1} GB free", "可用 {0} / {1} GB"),
     ("{0} / {1} MB", "{0} / {1} MB"),
+    ("{0} / {1} MB · {2} MB/s", "{0} / {1} MB · {2} MB/s"),
+    ("{0} / {1} MB · {2} MB/s · {3} s left", "{0} / {1} MB · {2} MB/s · 剩余 {3} 秒"),
     ("{0} is available on the {1} channel.", "{0} 已在 {1} 通道发布。"),
     ("{0} items", "﻿{0} 个子项"),
     ("{0} items already on the Dock", "{0} 个条目已在 Dock 中"),

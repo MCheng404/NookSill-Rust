@@ -32,3 +32,29 @@ fn 更新策略页在下载中渲染进度与字节数() {
     assert_eq!(h.state().ui.update.progress(), Some(0.5625));
     h.get_by_label("18.0 / 32.0 MB");
 }
+
+#[test]
+fn 下载中显示速度与剩余时间() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::UpdatePolicy;
+    h.state_mut().ui.update.busy = true;
+    h.state_mut().ui.update.status = "正在下载…".to_owned();
+    h.state_mut().ui.update.bytes_done = 18 * 1024 * 1024;
+    h.state_mut().ui.update.bytes_total = 32 * 1024 * 1024;
+    h.state_mut().ui.update.bytes_per_sec = 2_400_000;
+    h.state_mut().ui.update.eta_secs = 6;
+    h.run();
+    h.get_by_label("18.0 / 32.0 MB · 2.3 MB/s · 剩余 6 秒");
+}
+
+#[test]
+fn 只有速度没有剩余时间时省略后半段() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::UpdatePolicy;
+    h.state_mut().ui.update.busy = true;
+    h.state_mut().ui.update.bytes_done = 1024 * 1024;
+    h.state_mut().ui.update.bytes_total = 4 * 1024 * 1024;
+    h.state_mut().ui.update.bytes_per_sec = 1024 * 1024;
+    h.run();
+    h.get_by_label("1.0 / 4.0 MB · 1.0 MB/s");
+}
