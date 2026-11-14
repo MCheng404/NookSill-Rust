@@ -167,6 +167,16 @@ impl Ini {
 
     fn set_in_section(&mut self, idx: usize, key: &str, value: String) {
         let sec = &mut self.sections[idx];
+        // An ini value lives on one line. A newline from an IME commit, a
+        // multiline title or a hand-edited field would otherwise inject a
+        // second key (or a whole section) when the file is written back.
+        let value: String = value
+            .chars()
+            .map(|c| match c {
+                '\r' | '\n' | '\0' => ' ',
+                other => other,
+            })
+            .collect();
         if let Some(pos) = sec
             .entries
             .iter()
@@ -364,6 +374,25 @@ mod tests {
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir(&dir);
+    }
+
+    /// A newline in a value must not be able to inject another key when the
+    /// file is written and read back.
+    #[test]
+    fn values_cannot_inject_ini_lines() {
+        let mut ini = Ini::new();
+        ini.set(
+            "Notes",
+            "T0",
+            "first
+[Items]
+I0=1|0|x|x.exe||0|",
+        );
+        let text = ini.to_text();
+        let back = Ini::parse(&text);
+        assert_eq!(back.get("Notes", "T0").unwrap().matches("first").count(), 1);
+        assert!(back.get("Items", "I0").is_none(), "注入的键不该出现");
+        assert_eq!(back.len_of("Notes"), 1);
     }
 
     #[test]

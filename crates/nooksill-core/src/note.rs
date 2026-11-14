@@ -36,25 +36,30 @@ impl Note {
     /// List preview: first non-empty body line, or a placeholder.
     #[must_use]
     pub fn preview(&self) -> String {
-        self.body
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .map_or_else(|| "（空）".to_owned(), |l| truncate_chars(l, 48))
+        self.first_line()
+            .unwrap_or_else(|| crate::i18n::t("(Empty)").to_owned())
     }
 
     /// Display name: falls back to the first body line when the title is empty.
     #[must_use]
     pub fn display_title(&self) -> String {
         if self.title.trim().is_empty() {
-            let first = self.preview();
-            if first == "（空）" {
-                "未命名速记".to_owned()
-            } else {
-                first
-            }
+            // Ask for the line, not for `preview()`: comparing against the
+            // translated placeholder would misread a note whose own text
+            // happens to equal it.
+            self.first_line()
+                .unwrap_or_else(|| crate::i18n::t("Untitled note").to_owned())
         } else {
             self.title.clone()
         }
+    }
+
+    #[must_use]
+    fn first_line(&self) -> Option<String> {
+        self.body
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .map(|l| truncate_chars(l, 48))
     }
 }
 
@@ -267,12 +272,25 @@ mod tests {
         assert_eq!(Note::new(&long, "").title.chars().count(), MAX_TITLE);
     }
 
+    /// The placeholder is not a sentinel: a note whose body literally says
+    /// "(empty)" must show that text instead of being renamed.
+    #[test]
+    fn display_title_does_not_compare_against_the_placeholder() {
+        let placeholder = crate::i18n::t("(Empty)");
+        let n = Note::new("", placeholder);
+        assert_eq!(n.preview(), placeholder);
+        assert_eq!(n.display_title(), placeholder);
+    }
+
     #[test]
     fn display_title_falls_back_to_the_first_body_line() {
         let n = Note::new("", "第一行\n第二行");
         assert_eq!(n.display_title(), "第一行");
         assert_eq!(n.preview(), "第一行");
-        assert_eq!(Note::new("", "").display_title(), "未命名速记");
+        assert_eq!(
+            Note::new("", "").display_title(),
+            crate::i18n::t("Untitled note")
+        );
     }
 
     #[test]

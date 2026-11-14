@@ -250,15 +250,15 @@ impl App {
                     &self.gpu,
                     &mut self.settings_slot,
                     &self.paths,
-                    settings_win::effective_ppp(&self.dock.cfg),
+                    settings_win::effective_ppp(&self.dock.cfg, self.dpi),
                 )?;
                 sw.state.auto_start = theme::get_autostart();
                 sw.show(frost_spec(&self.dock.cfg, Key::UI_FROST, 20.0));
             }
             Some(MenuCmd::Launchpad) => self.open_launchpad()?,
             Some(MenuCmd::ExitDock) => {
-                // Normal exit path: `Drop` removes the tray icon and AppBar and
-                // flushes config.
+                // Normal exit path: the caller flushes pending writes, and the
+                // field destructors remove the tray icon and the AppBar.
                 unsafe { PostQuitMessage(0) };
             }
             _ => {}

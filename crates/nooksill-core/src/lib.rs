@@ -34,6 +34,11 @@ pub const APP_NAME: &str = "NookSill";
 pub const VERSION: &str = env!("NOOKSILL_VERSION");
 /// Single-instance mutex name.
 pub const SINGLETON_MUTEX: &str = "Local\\NookSill_Singleton";
+/// Dock window class name.
+///
+/// A second launch looks the window up by this name to ask the running
+/// instance to surface (ADR-015), so it is a cross-process contract.
+pub const WINDOW_CLASS: &str = "NookSillWindow";
 
 /// Item limits. Must match ini parsing, the UI loop and drag indices; defined
 /// here once. Mirrors the `MAXI` / `MAXK` macros.

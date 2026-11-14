@@ -293,6 +293,7 @@ async 运行时带来的调度开销与栈占用都不划算。
 6. **自定义 `WM_APP` 消息号必须全局查重**。它们都发到 Dock 的同一个
    hwnd，`pump()` 又按 `WM_APP_WAKE` 区分"要不要出帧"：
    `WM_APP+1 = worker::WM_APP_WAKE`、`WM_APP+2 = tray::WM_APP_TRAY`、
+   `WM_APP+3 = single_instance::WM_APP_SHOW`、
    `0x8000+0x4142 = appbar::WM_APP_AB`。撞号会让托盘点击被静默吞掉，
    而且不会有任何编译错误。加新消息前先 `grep -rn WM_APP crates/`。
 7. **窗口过程只碰 `Dock`**。`GWLP_USERDATA` 挂的是 `Box<Dock>` 的地址，

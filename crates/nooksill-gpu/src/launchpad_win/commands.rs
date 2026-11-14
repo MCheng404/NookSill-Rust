@@ -16,7 +16,7 @@ impl LaunchpadWindow {
                     // and never merges into a folder: two adjacent results
                     // need not be adjacent in the full list, so the folder
                     // would be impossible to find again.
-                    let (si, ti) = (self.page * self.per() + src, self.page * self.per() + k);
+                    let (si, ti) = (self.top_index(src), self.top_index(k));
                     let shown = self.shown();
                     if let (Some(&sa), Some(&ta)) = (shown.get(si), shown.get(ti)) {
                         if self.lp.move_app_before(sa, ta) {
@@ -24,11 +24,17 @@ impl LaunchpadWindow {
                         }
                     }
                 } else {
+                    // `Hit::Cell` is page-local and `drop_at` indexes the whole
+                    // grid: without the offset a drop on page 2 reorders the
+                    // first page instead.
                     let on_icon = self
                         .icon_rects
                         .iter()
                         .any(|(h, r)| *h == Hit::Cell(k) && r.contains(Pos2::new(x, y)));
-                    if self.lp.drop_at(src, k, on_icon) {
+                    if self
+                        .lp
+                        .drop_at(self.top_index(src), self.top_index(k), on_icon)
+                    {
                         self.dirty_save = true;
                     }
                 }

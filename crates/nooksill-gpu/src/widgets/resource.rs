@@ -99,7 +99,7 @@ impl ResMonWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（资源监视器）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (resource monitor)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {
@@ -343,6 +343,7 @@ impl Drop for ResMonWindow {
     fn drop(&mut self) {
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
         }
     }
 }

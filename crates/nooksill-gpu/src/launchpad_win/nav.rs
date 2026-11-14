@@ -9,6 +9,14 @@ impl LaunchpadWindow {
         cols * rows
     }
 
+    /// Top-level index of a grid cell.
+    ///
+    /// `Hit::Cell` counts inside the current page, while `Launchpad` addresses
+    /// the whole grid; every conversion goes through here.
+    pub(super) fn top_index(&self, cell: usize) -> usize {
+        top_index(self.page, self.per(), cell)
+    }
+
     pub(super) fn grid_dims(&self) -> (usize, usize) {
         // The column and row counts come from the config (`LpCols` / `LpRows`)
         // and are pushed in by the caller through `set_grid`; the default is
@@ -138,5 +146,23 @@ impl LaunchpadWindow {
             .iter()
             .find(|(_, r)| r.contains(p))
             .map(|(h, _)| *h)
+    }
+}
+
+/// Page-local cell index to an index in the whole grid.
+#[must_use]
+pub(super) fn top_index(page: usize, per: usize, cell: usize) -> usize {
+    page * per + cell
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_index;
+
+    #[test]
+    fn cell_index_is_offset_by_the_page() {
+        assert_eq!(top_index(0, 28, 3), 3);
+        assert_eq!(top_index(1, 28, 0), 28);
+        assert_eq!(top_index(2, 28, 27), 83);
     }
 }

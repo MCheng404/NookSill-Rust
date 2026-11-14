@@ -84,19 +84,26 @@ pub fn write_marker(digest: &str, size: u64) -> Result<(), UpdateError> {
 
 /// Recheck the staged bytes against the marker before any swap script runs.
 pub fn verify_staged(staged: &Path) -> Result<(), UpdateError> {
-    let raw = std::fs::read_to_string(marker_path())
-        .map_err(|_| UpdateError::Http("更新标记缺失，拒绝安装".to_owned()))?;
-    let (expected, size) = raw
-        .split_once('\n')
-        .ok_or_else(|| UpdateError::Http("更新标记损坏，拒绝安装".to_owned()))?;
-    let size: u64 = size
-        .trim()
-        .parse()
-        .map_err(|_| UpdateError::Http("更新标记损坏，拒绝安装".to_owned()))?;
+    fn missing() -> UpdateError {
+        UpdateError::Http(
+            nooksill_core::i18n::t("The update marker is missing; refusing to install").to_owned(),
+        )
+    }
+    fn corrupt() -> UpdateError {
+        UpdateError::Http(
+            nooksill_core::i18n::t("The update marker is corrupt; refusing to install").to_owned(),
+        )
+    }
+    let raw = std::fs::read_to_string(marker_path()).map_err(|_| missing())?;
+    let (expected, size) = raw.split_once('\n').ok_or_else(corrupt)?;
+    let size: u64 = size.trim().parse().map_err(|_| corrupt())?;
     let len = std::fs::metadata(staged)?.len();
     if len != size {
         let _ = std::fs::remove_file(staged);
-        return Err(UpdateError::Http("更新包大小不符，拒绝安装".to_owned()));
+        return Err(UpdateError::Http(
+            nooksill_core::i18n::t("The update package has the wrong size; refusing to install")
+                .to_owned(),
+        ));
     }
     let actual = sha256_file(staged)?;
     if actual != expected.trim() {

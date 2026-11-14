@@ -25,6 +25,7 @@ impl Drop for CcWindow {
     fn drop(&mut self) {
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
         }
     }
 }

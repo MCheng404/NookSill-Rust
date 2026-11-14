@@ -313,6 +313,9 @@ pub struct Dock {
     pub hide_target: bool,
     /// Hidden by the user hotkey. Outranks auto-hide and ignores the cursor.
     pub force_hide: bool,
+    /// A second launch asked this instance to surface; consumed by the next
+    /// auto-hide tick, which counts the summon as the cursor arriving.
+    summon: bool,
     /// Last time the cursor was near (monotonic ms).
     last_near_ms: u64,
     /// Delay before hiding after the cursor leaves, ms.

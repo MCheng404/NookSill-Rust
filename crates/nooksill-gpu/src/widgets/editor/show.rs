@@ -31,6 +31,9 @@ pub fn show_edit(
         register_class()?;
         let hinst = unsafe { GetModuleHandleW(None)? };
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("NookSill Edit"));
+        // Renderer first: building it can fail, and doing it after the window
+        // would leak one hidden HWND per retry.
+        let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         unsafe {
             let hwnd = CreateWindowExW(
                 // No WS_EX_NOACTIVATE: the input fields need keyboard focus.
@@ -50,7 +53,6 @@ pub fn show_edit(
                 Some(HINSTANCE(hinst.0)),
                 None,
             )?;
-            let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
             *slot = Some((hwnd, renderer));
         }
     }
@@ -59,6 +61,10 @@ pub fn show_edit(
         return Err(nooksill_core::i18n::t("Edit window not initialised").into());
     };
     renderer.resize(gpu, pw as u32, ph as u32)?;
+    // Same slot across opens: keep the scale in step with the monitor.
+    if (renderer.pixels_per_point() - ppp).abs() > f32::EPSILON {
+        renderer.set_pixels_per_point(ppp);
+    }
 
     unsafe {
         let _ = SetWindowPos(*hwnd, Some(HWND_TOPMOST), px, py, pw, ph, SWP_NOZORDER);
@@ -97,44 +103,50 @@ pub fn show_edit(
 
     let mut msg = MSG::default();
     let mut painted = false;
-    loop {
-        // Only messages for this window: the Dock's input is suppressed
-        // during the modal loop.
-        let mut got = false;
-        while unsafe { PeekMessageW(&raw mut msg, Some(*hwnd), 0, 0, PM_REMOVE) }.as_bool() {
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+    // A render error must still reach the cleanup below: `GWLP_USERDATA`
+    // points at `state`, so returning early would leave a visible window with
+    // a dangling pointer and the next message would touch freed memory.
+    let rendered = (|| -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            // Only messages for this window: the Dock's input is suppressed
+            // during the modal loop.
+            let mut got = false;
+            while unsafe { PeekMessageW(&raw mut msg, Some(*hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                got = true;
             }
-            got = true;
-        }
-        if state.done {
-            break;
-        }
-        // Submit a frame only on input or on the first frame. The modal loop
-        // wakes every 60 ms; submitting unconditionally would keep a
-        // constant ~16 fps GPU cost while the dialog sits idle.
-        if got || !painted {
-            painted = true;
-            let raw = state.input.take(renderer.size(), ppp);
-            let st = &mut *state;
-            renderer.render(gpu, raw, *hwnd, (px, py), |ui| {
-                paint(ui, st);
-            })?;
-            // Move the system candidate window to the text start of the
-            // focused field. `paint` just wrote that position into `caret`;
-            // without this the candidate window sits in the top-left corner
-            // and the user cannot see where they are typing.
-            state
-                .ime
-                .set_caret(*hwnd, state.caret.0, state.caret.1, ppp);
-        }
-        if !got {
-            unsafe {
-                MsgWaitForMultipleObjectsEx(None, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if state.done {
+                break;
+            }
+            // Submit a frame only on input or on the first frame. The modal loop
+            // wakes every 60 ms; submitting unconditionally would keep a
+            // constant ~16 fps GPU cost while the dialog sits idle.
+            if got || !painted {
+                painted = true;
+                let raw = state.input.take(renderer.size(), ppp);
+                let st = &mut *state;
+                renderer.render(gpu, raw, *hwnd, (px, py), |ui| {
+                    paint(ui, st);
+                })?;
+                // Move the system candidate window to the text start of the
+                // focused field. `paint` just wrote that position into `caret`;
+                // without this the candidate window sits in the top-left corner
+                // and the user cannot see where they are typing.
+                state
+                    .ime
+                    .set_caret(*hwnd, state.caret.0, state.caret.1, ppp);
+            }
+            if !got {
+                unsafe {
+                    MsgWaitForMultipleObjectsEx(None, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                }
             }
         }
-    }
+        Ok(())
+    })();
 
     let values = std::mem::take(&mut state.values);
     let accepted = state.accepted;
@@ -145,5 +157,6 @@ pub fn show_edit(
         SetWindowLongPtrW(*hwnd, GWLP_USERDATA, 0);
         let _ = ShowWindow(*hwnd, SW_HIDE);
     }
+    rendered?;
     Ok(EditOutcome { accepted, values })
 }

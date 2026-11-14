@@ -53,7 +53,7 @@ impl CcWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（控制中心）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (control center)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let audio = Audio::new();

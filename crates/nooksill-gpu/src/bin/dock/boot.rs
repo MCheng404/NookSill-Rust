@@ -16,13 +16,29 @@ impl App {
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
+        // Seed the language from the OS before anything can fail. Path, ini
+        // and mutex errors reach the fatal dialog before `Config` is read, so
+        // without this they would always fall back to English. The explicit
+        // `[general] Language` is applied once the config is loaded below.
+        nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
 
         // Single instance: two docks mean two layered windows and `FindWindow`
         // finds only one of them. A failing mutex never blocks startup.
         let guard = match SingleInstance::acquire() {
             Ok(Some(guard)) => Some(guard),
             Ok(None) => {
-                eprintln!("NookSill 已在运行，本次启动退出。");
+                // Another instance owns the mutex: ask it to surface (ADR-015)
+                // and leave instead of drawing a second bar.
+                let surfaced =
+                    nooksill_platform::single_instance::summon(nooksill_core::WINDOW_CLASS);
+                eprintln!(
+                    "NookSill 已在运行，{}。",
+                    if surfaced {
+                        "已请求唤起"
+                    } else {
+                        "未找到窗口，本次启动退出"
+                    }
+                );
                 return Ok(None);
             }
             Err(e) => {
@@ -102,10 +118,13 @@ impl App {
         let ppp = dpi as f32 / 96.0;
 
         let hinstance = unsafe { GetModuleHandleW(None) }?;
+        // The class name is a cross-process contract: a second launch finds
+        // this window by it, so it comes from `core` instead of a literal.
+        let class = nooksill_platform::win::to_wide(nooksill_core::WINDOW_CLASS);
         let wc = WNDCLASSW {
             hInstance: HINSTANCE(hinstance.0),
             lpfnWndProc: Some(wndproc),
-            lpszClassName: w!("NookSillWindow"),
+            lpszClassName: windows::core::PCWSTR(class.as_ptr()),
             // Must not be null: with a null class cursor and no `WM_SETCURSOR`
             // reply Windows falls back to the busy cursor.
             hCursor: nooksill_gpu::cursor::class_cursor(),
@@ -123,7 +142,7 @@ impl App {
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-                w!("NookSillWindow"),
+                windows::core::PCWSTR(class.as_ptr()),
                 w!("NookSill"),
                 WS_POPUP,
                 x,
@@ -260,6 +279,7 @@ impl App {
             last_layout: Instant::now(),
             timer_raised: false,
             update_rx: None,
+            update_started: None,
             update_release: None,
             update_staged: None,
             pending_update: None,

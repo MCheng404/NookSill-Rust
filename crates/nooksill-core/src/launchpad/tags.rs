@@ -25,7 +25,10 @@ impl Launchpad {
         }
         let name = name.trim();
         let name = if name.is_empty() {
-            format!("标签{}", self.tags.len() + 1)
+            crate::i18n::fmt(
+                "Tag group {0}",
+                &[(self.tags.len() + 1).to_string().as_str()],
+            )
         } else {
             name.chars().take(TAG_NAME_CAP).collect()
         };

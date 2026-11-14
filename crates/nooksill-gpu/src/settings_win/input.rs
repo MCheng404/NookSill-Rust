@@ -107,6 +107,15 @@ impl SettingsWindow {
             | WM_IME_STARTCOMPOSITION
             | WM_IME_ENDCOMPOSITION
             | WM_IME_SETCONTEXT => {
+                // Anchor the candidate list at the focused field as the
+                // composition starts; the value is published while painting.
+                if msg == windows::Win32::UI::WindowsAndMessaging::WM_IME_STARTCOMPOSITION {
+                    if let Some(caret) =
+                        nooksill_settings::text_field::ime_caret(self.renderer.ctx())
+                    {
+                        self.ime.set_caret(self.hwnd, caret.x, caret.y, self.ppp);
+                    }
+                }
                 let mut committed = String::new();
                 let before = self.ime.composing().to_owned();
                 let handled = self

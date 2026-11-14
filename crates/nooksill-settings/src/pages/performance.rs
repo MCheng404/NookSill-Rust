@@ -108,13 +108,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             toggle(
                 ctx,
                 ui,
-                Key::Preview,
-                nooksill_core::i18n::t("Window preview on hover"),
-                nooksill_core::i18n::t("Low: system thumbnails only while hovering"),
-            );
-            toggle(
-                ctx,
-                ui,
                 Key::Clock,
                 nooksill_core::i18n::t("Time & date"),
                 nooksill_core::i18n::t("Low: refreshes every 30 s"),
@@ -154,13 +147,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 nooksill_core::i18n::t("Icon reflection"),
                 nooksill_core::i18n::t("Low: one extra translucent layer"),
             );
-            toggle(
-                ctx,
-                ui,
-                Key::MinAnim,
-                nooksill_core::i18n::t("Minimise animation"),
-                nooksill_core::i18n::t("Low: runs only when a window is minimised"),
-            );
         },
     );
 
@@ -170,13 +156,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         nooksill_core::i18n::t("System & compatibility"),
         "",
         |ctx, ui| {
-            toggle(
-                ctx,
-                ui,
-                Key::GUARDIAN,
-                nooksill_core::i18n::t("Keep running after cleanup tools"),
-                nooksill_core::i18n::t("Start a tiny guardian process that restarts the Dock"),
-            );
             toggle(
                 ctx,
                 ui,

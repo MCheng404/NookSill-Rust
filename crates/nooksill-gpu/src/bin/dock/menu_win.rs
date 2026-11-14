@@ -196,6 +196,9 @@ pub(super) fn show_menu(
     if slot.is_none() {
         register_menu_class()?;
         let hinst = unsafe { GetModuleHandleW(None)? };
+        // Renderer first: it is the step that can fail, and building it after
+        // the window would leak one hidden HWND per retry.
+        let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         unsafe {
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -211,7 +214,6 @@ pub(super) fn show_menu(
                 Some(HINSTANCE(hinst.0)),
                 None,
             )?;
-            let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
             *slot = Some((hwnd, renderer));
         }
     }
@@ -222,6 +224,11 @@ pub(super) fn show_menu(
         return Err(nooksill_core::i18n::t("Menu window not initialised").into());
     };
     renderer.resize(gpu, pw as u32, ph as u32)?;
+    // The slot is reused across opens; follow a DPI change so the frost
+    // backdrop's UV scale matches the new monitor.
+    if (renderer.pixels_per_point() - ppp).abs() > f32::EPSILON {
+        renderer.set_pixels_per_point(ppp);
+    }
 
     // Move and resize together: the height differs on every open.
     unsafe {
@@ -270,36 +277,42 @@ pub(super) fn show_menu(
     // previous content is stale.
     let mut painted: Option<Option<usize>> = None;
     let mut msg = MSG::default();
-    loop {
-        // Only this window's messages; dock input stays blocked while modal.
-        while unsafe { PeekMessageW(&raw mut msg, Some(*hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+    // A render error must still reach the cleanup below: `GWLP_USERDATA`
+    // points at `state`, and leaving the window visible with a dangling
+    // pointer turns the next mouse message into a use-after-free.
+    let rendered = (|| -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            // Only this window's messages; dock input stays blocked while modal.
+            while unsafe { PeekMessageW(&raw mut msg, Some(*hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            if state.done {
+                break;
+            }
+            // Repaint only when the highlight changes; a live frost frame also
+            // triggers one (`wake` is set by the window proc).
+            if painted != Some(state.menu.hover) || state.wake {
+                painted = Some(state.menu.hover);
+                state.wake = false;
+                let menu = &state.menu;
+                let dark = state.dark;
+                renderer.render(
+                    gpu,
+                    raw_input(renderer.size(), ppp, start),
+                    *hwnd,
+                    (px, py),
+                    |ui| menu.paint(ui, dark, frost_on),
+                )?;
+            }
             unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+                MsgWaitForMultipleObjectsEx(None, 200, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             }
         }
-        if state.done {
-            break;
-        }
-        // Repaint only when the highlight changes; a live frost frame also
-        // triggers one (`wake` is set by the window proc).
-        if painted != Some(state.menu.hover) || state.wake {
-            painted = Some(state.menu.hover);
-            state.wake = false;
-            let menu = &state.menu;
-            let dark = state.dark;
-            renderer.render(
-                gpu,
-                raw_input(renderer.size(), ppp, start),
-                *hwnd,
-                (px, py),
-                |ui| menu.paint(ui, dark, frost_on),
-            )?;
-        }
-        unsafe {
-            MsgWaitForMultipleObjectsEx(None, 200, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-        }
-    }
+        Ok(())
+    })();
 
     if trace::geom() {
         eprintln!("[menu] 关闭 cmd={:?}", state.cmd);
@@ -313,5 +326,6 @@ pub(super) fn show_menu(
         SetWindowLongPtrW(*hwnd, GWLP_USERDATA, 0);
         let _ = ShowWindow(*hwnd, SW_HIDE);
     }
+    rendered?;
     Ok(state.cmd)
 }

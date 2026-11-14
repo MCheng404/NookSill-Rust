@@ -214,6 +214,25 @@ pub fn cell_rect(k: usize, count: usize, fan: &FanSpec) -> Option<(f32, f32, f32
         .or_else(|| grid_rect(k, count))
 }
 
+/// Pick a layout that fits `avail` (logical points).
+///
+/// A vertical fan column (`FanArc = 0`) grows linearly with the child count:
+/// 16 entries at the default pitch are over 1100 points tall and run off a
+/// 1080p screen with no way to reach the bottom. The grid wraps at four per
+/// row and always fits, so it takes over when the fan does not.
+#[must_use]
+pub fn fitting_spec(count: usize, fan: FanSpec, avail: (f32, f32)) -> FanSpec {
+    if !fan.fan {
+        return fan;
+    }
+    let (w, h) = logical_size(count, &fan);
+    if w <= avail.0 && h <= avail.1 {
+        fan
+    } else {
+        FanSpec { fan: false, ..fan }
+    }
+}
+
 /// Group panel.
 pub struct GroupWindow {
     hwnd: HWND,
@@ -338,5 +357,32 @@ mod tests {
             assert_eq!(counted(&fan), n);
             assert_eq!(counted(&g), n);
         }
+    }
+
+    /// A vertical column of 16 children is taller than a laptop screen; the
+    /// grid must take over so every child stays reachable.
+    #[test]
+    fn a_column_that_does_not_fit_falls_back_to_the_grid() {
+        let column = FanSpec {
+            fan: true,
+            arc_deg: 0.0,
+            gap_px: 20.0,
+            ..FanSpec::default()
+        };
+        let avail = (900.0, 700.0);
+        let (_, tall) = logical_size(16, &column);
+        assert!(tall > avail.1, "用例前提：竖排确实放不下（{tall}）");
+
+        let fitted = fitting_spec(16, column, avail);
+        assert!(!fitted.fan, "放不下时应退回网格");
+        let (w, h) = logical_size(16, &fitted);
+        assert!(w <= avail.0 && h <= avail.1, "网格也要在可用范围内");
+
+        // A short arc fits and keeps the fan.
+        let arc = FanSpec {
+            arc_deg: 40.0,
+            ..column
+        };
+        assert!(fitting_spec(4, arc, avail).fan, "浅弧不该被误判为放不下");
     }
 }

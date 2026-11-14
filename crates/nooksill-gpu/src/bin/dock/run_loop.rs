@@ -57,6 +57,9 @@ impl App {
             self.dpi = dpi;
             self.ppp = dpi as f32 / 96.0;
             self.frame.set_pixels_per_point(self.ppp);
+            // The small panels bake the scale in at creation; recreate them so
+            // the next open matches the new monitor.
+            self.reset_panels_for_scale();
         }
         self.reserved = reserve_space(
             &mut self.appbar,
@@ -155,6 +158,8 @@ impl App {
 
             // 1. Drain the queue; one frame per message would jitter.
             match pump(&mut msg, self.hwnd) {
+                // The caller flushes pending writes after this returns, so an
+                // error exit saves too.
                 Pumped::Quit => return Ok(()),
                 Pumped::Frames => need_frame = true,
                 // A worker wake only breaks the wait; the dirty flags below
@@ -227,6 +232,18 @@ impl App {
             //      per captured frame. A still desktop sends none, so this does
             //      not break the "zero frames while idle" promise.
             need_frame |= self.step_frost();
+            // 13.6 Catch-up layout. Steps 6-12 (menu, settings, drops) can
+            //      change the item list after this round's layout pass at 2,
+            //      leaving `geom` one frame behind the items; painting and hit
+            //      tests must not disagree. Running it here also gets the new
+            //      window size in place before the frame is drawn.
+            if self.dock.is_dirty() {
+                self.dock.take_dirty();
+                let dt = self.frame_dt_ms();
+                self.dock.relayout_keep_anim(self.dpi, dt);
+                need_frame = true;
+                need_frame |= self.step_relayout()?;
+            }
             // egui's own repaint deadline (hover, illusion, animations).
             need_frame |= !self.dock.fully_hidden() && !self.fs_hidden && self.frame.repaint_due();
 

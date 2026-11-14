@@ -29,6 +29,7 @@ impl Dock {
             mode: DockMode::Always,
             hide_target: false,
             force_hide: false,
+            summon: false,
             last_near_ms: 0,
             hide_delay_ms: Self::HIDE_GRACE_MS,
             show_delay_ms: 0,

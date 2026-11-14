@@ -241,7 +241,7 @@ impl App {
                     return false;
                 }
                 if !url.starts_with("http://") && !url.starts_with("https://") {
-                    self.status("网址要以 http:// 或 https:// 开头");
+                    self.status(nooksill_core::i18n::t("URL must start with http:"));
                     return false;
                 }
                 let name = url_host(&url);
@@ -283,8 +283,10 @@ impl App {
             }
             Command::AddFolder => {
                 let owner = self.settings_hwnd();
-                if let Some(path) = nooksill_platform::filedialog::open_folder("添加文件夹", owner)
-                {
+                if let Some(path) = nooksill_platform::filedialog::open_folder(
+                    nooksill_core::i18n::t("Add folder…"),
+                    owner,
+                ) {
                     let name = path
                         .file_name()
                         .map(|s| s.to_string_lossy().into_owned())

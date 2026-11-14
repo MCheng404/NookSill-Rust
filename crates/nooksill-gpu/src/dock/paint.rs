@@ -68,6 +68,16 @@ impl Dock {
     /// `covered` only applies to `SmartHide`. Showing needs continuous hover,
     /// hiding needs continuous absence; defaults 450/0 keep the old timing.
     pub fn tick_auto_hide(&mut self, near: bool, busy: bool, covered: bool, now_ms: u64) -> bool {
+        // A second launch summons the bar: clear both hidden states and start
+        // the hide delay from now, otherwise an auto-hidden dock would slide
+        // straight back in.
+        if std::mem::take(&mut self.summon) {
+            self.force_hide = false;
+            self.hide_target = false;
+            self.show_pending_ms = None;
+            self.last_near_ms = now_ms;
+            self.mark_dirty();
+        }
         // Forced hide wins over mode, cursor and coverage.
         if self.force_hide {
             self.show_pending_ms = None;

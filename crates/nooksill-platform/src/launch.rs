@@ -24,14 +24,22 @@ pub enum LaunchError {
 impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unsupported(what) => write!(f, "{what} 尚未实现"),
-            Self::EmptyTarget => write!(f, "路径为空"),
-            Self::NotFound(p) => write!(f, "路径不存在：{p}"),
-            Self::Shell(0) => write!(f, "系统内存不足"),
-            Self::Shell(2) => write!(f, "找不到文件"),
-            Self::Shell(3) => write!(f, "找不到路径"),
-            Self::Shell(5) => write!(f, "访问被拒绝"),
-            Self::Shell(c) => write!(f, "Shell 错误码 {c}"),
+            Self::Unsupported(what) => {
+                f.write_str(&nooksill_core::i18n::fmt("Not implemented: {0}", &[what]))
+            }
+            Self::EmptyTarget => f.write_str(nooksill_core::i18n::t("The target path is empty")),
+            Self::NotFound(p) => f.write_str(&nooksill_core::i18n::fmt(
+                "The path does not exist: {0}",
+                &[p.as_str()],
+            )),
+            Self::Shell(0) => f.write_str(nooksill_core::i18n::t("Out of memory")),
+            Self::Shell(2) => f.write_str(nooksill_core::i18n::t("File not found")),
+            Self::Shell(3) => f.write_str(nooksill_core::i18n::t("Path not found")),
+            Self::Shell(5) => f.write_str(nooksill_core::i18n::t("Access denied")),
+            Self::Shell(c) => f.write_str(&nooksill_core::i18n::fmt(
+                "Shell error code {0}",
+                &[c.to_string().as_str()],
+            )),
         }
     }
 }
@@ -134,8 +142,12 @@ pub fn launch(item: &Item, browser: i32) -> Result<(), LaunchError> {
         // Groups and notes are opened as panels in `bin/dock.rs::step_click`
         // before reaching here; kept so a dispatch change errors loudly instead
         // of silently succeeding.
-        nooksill_core::item::ItemKind::Group => Err(LaunchError::Unsupported("应用组")),
-        nooksill_core::item::ItemKind::Note => Err(LaunchError::Unsupported("速记")),
+        nooksill_core::item::ItemKind::Group => {
+            Err(LaunchError::Unsupported(nooksill_core::i18n::t("Groups")))
+        }
+        nooksill_core::item::ItemKind::Note => {
+            Err(LaunchError::Unsupported(nooksill_core::i18n::t("Notes")))
+        }
     }
 }
 
@@ -176,11 +188,11 @@ mod tests {
     fn group_and_note_report_unsupported() {
         assert_eq!(
             launch(&item(ItemKind::Group), 0),
-            Err(LaunchError::Unsupported("应用组"))
+            Err(LaunchError::Unsupported(nooksill_core::i18n::t("Groups")))
         );
         assert_eq!(
             launch(&item(ItemKind::Note), 0),
-            Err(LaunchError::Unsupported("速记"))
+            Err(LaunchError::Unsupported(nooksill_core::i18n::t("Notes")))
         );
     }
 
@@ -218,8 +230,14 @@ mod tests {
     /// Error codes must translate to readable text, at least the common ones.
     #[test]
     fn error_codes_have_messages() {
-        assert_eq!(LaunchError::Shell(2).to_string(), "找不到文件");
-        assert_eq!(LaunchError::Shell(5).to_string(), "访问被拒绝");
+        assert_eq!(
+            LaunchError::Shell(2).to_string(),
+            nooksill_core::i18n::t("File not found")
+        );
+        assert_eq!(
+            LaunchError::Shell(5).to_string(),
+            nooksill_core::i18n::t("Access denied")
+        );
         assert!(LaunchError::Shell(1234).to_string().contains("1234"));
     }
 }

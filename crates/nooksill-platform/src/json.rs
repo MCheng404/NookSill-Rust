@@ -63,7 +63,7 @@ pub struct ParseError;
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("JSON 解析失败")
+        f.write_str(nooksill_core::i18n::t("JSON parsing failed"))
     }
 }
 

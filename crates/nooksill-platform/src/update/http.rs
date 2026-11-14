@@ -49,9 +49,9 @@ pub fn latest(channel: Channel) -> Result<Release, UpdateError> {
     let now = now_secs();
     if let Some(until) = cache::retry_until() {
         if until > now {
-            return Err(UpdateError::Http(format!(
-                "GitHub 接口限流；约 {} 秒后可重试（本次未发起请求）",
-                until - now
+            return Err(UpdateError::Http(nooksill_core::i18n::fmt(
+                "GitHub API rate limit; retry in about {0} seconds (no request was made)",
+                &[(until - now).to_string().as_str()],
             )));
         }
         cache::clear_retry();
@@ -75,7 +75,10 @@ pub fn latest(channel: Channel) -> Result<Release, UpdateError> {
                 // Drop the ETag and body so the next check gets a full 200.
                 cache::clear_release();
                 return Err(UpdateError::Http(
-                    "本地更新缓存损坏，已清除，请重新检查".to_owned(),
+                    nooksill_core::i18n::t(
+                        "The local update cache was corrupt and has been cleared; check again",
+                    )
+                    .to_owned(),
                 ));
             }
             text
@@ -86,7 +89,12 @@ pub fn latest(channel: Channel) -> Result<Release, UpdateError> {
             return Err(err);
         }
         404 => return Err(UpdateError::NoRelease),
-        other => return Err(UpdateError::Http(format!("GitHub 返回 HTTP {other}"))),
+        other => {
+            return Err(UpdateError::Http(nooksill_core::i18n::fmt(
+                "GitHub returned HTTP {0}",
+                &[other.to_string().as_str()],
+            )))
+        }
     };
     let doc = json::parse(&body).map_err(|_| UpdateError::Json)?;
     let list = doc.as_arr().ok_or(UpdateError::Json)?;
@@ -108,8 +116,9 @@ pub(crate) fn rate_limited(res: &net::Response, now: u64) -> (UpdateError, u64) 
         .or(retry)
         .unwrap_or(60);
     (
-        UpdateError::Http(format!(
-            "GitHub 接口限流（匿名每小时 60 次）；约 {wait} 秒后可重试"
+        UpdateError::Http(nooksill_core::i18n::fmt(
+            "GitHub API rate limit (60/hour for anonymous requests); retry in about {0} seconds",
+            &[wait.to_string().as_str()],
         )),
         wait,
     )

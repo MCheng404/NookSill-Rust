@@ -37,18 +37,20 @@ pub enum Tile {
 
 impl Tile {
     /// Text shown on the tile.
+    ///
+    /// Translated like any other UI text; the English string is the key.
     #[must_use]
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Wifi => "无线网络",
-            Self::Bluetooth => "蓝牙",
-            Self::DarkMode => "深色模式",
-            Self::Location => "定位",
-            Self::Mute => "静音",
-            Self::Settings => "设置",
-            Self::Energy => "节能模式",
-            Self::Hotspot => "移动热点",
-            Self::Ethernet => "有线网络",
+            Self::Wifi => crate::i18n::t("Wi-Fi"),
+            Self::Bluetooth => crate::i18n::t("Bluetooth"),
+            Self::DarkMode => crate::i18n::t("Dark mode"),
+            Self::Location => crate::i18n::t("Location"),
+            Self::Mute => crate::i18n::t("Mute"),
+            Self::Settings => crate::i18n::t("Settings"),
+            Self::Energy => crate::i18n::t("Energy saver"),
+            Self::Hotspot => crate::i18n::t("Hotspot"),
+            Self::Ethernet => crate::i18n::t("Wired network"),
         }
     }
 
@@ -257,7 +259,9 @@ mod tests {
     /// Only three tiles have on/off semantics.
     #[test]
     fn only_three_tiles_are_switches() {
-        let switches: Vec<&str> = [
+        // Compare the kinds, not the labels: labels are translated and the
+        // process-wide language is not test-local.
+        let switches: Vec<Tile> = [
             Tile::Wifi,
             Tile::Bluetooth,
             Tile::DarkMode,
@@ -270,9 +274,8 @@ mod tests {
         ]
         .into_iter()
         .filter(|t| t.is_switch())
-        .map(Tile::label)
         .collect();
-        assert_eq!(switches, ["深色模式", "静音", "节能模式"]);
+        assert_eq!(switches, [Tile::DarkMode, Tile::Mute, Tile::Energy]);
     }
 
     /// Every tile has a label.

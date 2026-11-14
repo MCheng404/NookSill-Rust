@@ -101,7 +101,10 @@ fn main() {
     std::panic::set_hook(Box::new(move |info| {
         eprintln!("{info}");
         if std::thread::current().id() == main_thread {
-            fatal(&format!("程序异常：{info}"));
+            fatal(&nooksill_core::i18n::fmt(
+                "Unexpected error: {0}",
+                &[info.to_string().as_str()],
+            ));
         }
     }));
     if let Err(e) = run() {
@@ -149,6 +152,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("OLE 拖放注册失败，回退到 WM_DROPFILES（无动态让位）");
         }
         let r = app.run();
+        // Save whatever the debounce window still holds, on the normal and the
+        // error exit path alike; this also joins the writer thread.
+        app.flush_pending_writes();
         if registered {
             // Revoke while the window is still alive, so no COM callback
             // reaches a destroyed window.
@@ -159,9 +165,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // `target` is dropped at the end of the block, after RevokeDragDrop.
         r
     };
-    // Drop `App` first (its destructor unregisters the AppBar, writes the
-    // config and releases the single-instance lock), then hand over the
-    // replacement script: it waits for this process to exit.
+    // Drop `App` first (it unregisters the AppBar and releases the
+    // single-instance lock), then hand over the replacement script: it waits
+    // for this process to exit.
     let pending = app.pending_update.take();
     let silent = app.pending_silent;
     drop(app);
@@ -284,6 +290,9 @@ struct App {
     /// Channel of the background update check and download thread. The UI
     /// thread only `try_recv`.
     update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// When the update worker last said anything; a watchdog drops the channel
+    /// after `UPDATE_STALL` of silence (panicked thread, wedged transfer).
+    update_started: Option<Instant>,
     /// The release info received last, needed for the download.
     update_release: Option<nooksill_platform::update::Release>,
     /// The downloaded file that passed verification.

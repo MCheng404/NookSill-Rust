@@ -45,7 +45,7 @@ impl CalendarWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（日历）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (calendar)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {

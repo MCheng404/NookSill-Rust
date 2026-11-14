@@ -33,8 +33,10 @@ pub enum TrayError {
 impl std::fmt::Display for TrayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Add => write!(f, "系统托盘不可用"),
-            Self::NoIcon => write!(f, "取不到应用图标"),
+            Self::Add => f.write_str(nooksill_core::i18n::t("The system tray is unavailable")),
+            Self::NoIcon => f.write_str(nooksill_core::i18n::t(
+                "The application icon could not be loaded",
+            )),
         }
     }
 }

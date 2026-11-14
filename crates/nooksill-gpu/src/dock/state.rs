@@ -3,6 +3,12 @@
 use super::*;
 
 impl Dock {
+    /// DPI of the monitor the dock currently draws on.
+    #[must_use]
+    pub const fn dpi(&self) -> i32 {
+        self.dpi
+    }
+
     /// Config length (96 DPI logical px) to physical pixels.
     ///
     /// Same conversion as `calc_metrics`; everything after that is physical.
@@ -132,6 +138,19 @@ impl Dock {
         self.anim = anim;
     }
 
+    /// Re-run the layout after another step changed the item list, keeping an
+    /// animation flag set since the previous `update`.
+    ///
+    /// `update` recomputes `anim` from the icon animation alone. The hide tick
+    /// runs *after* the frame's layout pass and sets `anim` for the slide, so
+    /// a catch-up layout that drops that bit skips one frame of the collapse
+    /// exactly when a menu or a drop also changed the bar.
+    pub fn relayout_keep_anim(&mut self, dpi: i32, dt_ms: f32) {
+        let was_anim = self.anim;
+        self.update(dpi, dt_ms);
+        self.anim |= was_anim;
+    }
+
     /// Grace period after the cursor leaves before hiding, ms.
     ///
     /// Prevents the dock popping out when crossing the screen edge.
@@ -143,7 +162,18 @@ impl Dock {
     /// hidden after a forced hide is released.
     #[must_use]
     pub fn needs_hide_tick(&self) -> bool {
-        self.auto_hide() || self.force_hide || self.hide_cur > 0.0
+        self.auto_hide() || self.force_hide || self.hide_cur > 0.0 || self.summon
+    }
+
+    /// Surface the bar; called when a second launch finds this instance.
+    ///
+    /// Clearing the flags here only arms the request: the hide animation and
+    /// the grace period need the loop's millisecond clock, so the next
+    /// `tick_auto_hide` consumes it.
+    pub fn request_show(&mut self) {
+        self.summon = true;
+        self.mark_dirty();
+        self.anim = true;
     }
 
     /// Fully hidden once the animation finished; nothing remains on screen.

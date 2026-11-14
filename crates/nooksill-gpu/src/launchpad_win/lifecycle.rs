@@ -45,7 +45,7 @@ impl LaunchpadWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（起动台）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (launchpad)"))?;
 
         // Hide it right away: `WS_VISIBLE` is only there so the window
         // procedure receives messages; `open` shows it again.
@@ -122,6 +122,46 @@ impl LaunchpadWindow {
     #[must_use]
     pub const fn visible(&self) -> bool {
         self.visible
+    }
+
+    /// Re-target the overlay to the dock's current monitor and scale.
+    ///
+    /// The window is created once and reused, so moving the dock to another
+    /// monitor or changing the DPI would otherwise leave the launchpad on the
+    /// old screen, sized for the old scale.
+    pub fn place_on_target(&mut self, gpu: &Gpu, ppp: f32) -> Result<(), GpuError> {
+        let mon = nooksill_platform::display::target_monitor_rect();
+        let (pw, ph) = ((mon.right - mon.left).max(1), (mon.bottom - mon.top).max(1));
+        let size = (pw as f32 / ppp, ph as f32 / ppp);
+        let same_scale = (self.ppp - ppp).abs() <= f32::EPSILON;
+        let same_pixels = self.renderer.size() == (pw as u32, ph as u32);
+        let same_place = self.pos == (mon.left, mon.top) && self.size == size;
+        if same_scale && same_pixels && same_place {
+            return Ok(());
+        }
+        if !same_scale {
+            // A new scale needs a new egui context and pipeline; `resize`
+            // keeps both and would keep the old `pixels_per_point`.
+            self.renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+            self.ppp = ppp;
+        } else if !same_pixels {
+            self.renderer.resize(gpu, pw as u32, ph as u32)?;
+        }
+        self.size = size;
+        self.pos = (mon.left, mon.top);
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                mon.left,
+                mon.top,
+                pw,
+                ph,
+                windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
+                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+            );
+        }
+        Ok(())
     }
 
     /// Opens the launchpad, takes the focus and the keyboard.

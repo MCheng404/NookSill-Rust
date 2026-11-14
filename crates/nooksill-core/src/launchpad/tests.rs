@@ -392,3 +392,18 @@ fn remove_tag_shifts_and_clears_overrides() {
     assert_eq!(lp.category_of(0), 3, "被删那组的指定退回自动（A 归工具）");
     assert_eq!(lp.category_of(1), 2, "原第 3 组前移成第 2 组");
 }
+
+/// A name containing the format's delimiters must not create extra entries.
+///
+/// The UI filters control characters at the input edge, but the write side is
+/// the last line of defence: an IME commit or a scanned name can bypass it.
+#[test]
+fn serialize_cleans_delimiters() {
+    let mut lp = with(&["A"]);
+    assert!(lp.rename(0, "坏\t名字\n第二行"));
+    let dat = lp.serialize();
+    let back = Launchpad::parse(&dat);
+    assert_eq!(back.len(), 1, "一行不能被拆成两条记录");
+    assert_eq!(back.name_of(back.top()[0]), "坏 名字 第二行");
+    assert_eq!(back.serialize(), dat, "清洗后仍可无损往返");
+}

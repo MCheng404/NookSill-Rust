@@ -4,6 +4,7 @@
 //! never called here, so every timing path is unit-testable with fixed numbers.
 
 use crate::ini::Ini;
+use crate::item::truncate_units;
 
 /// Name of the `[Tool]` section.
 pub const SECTION: &str = "Tool";
@@ -47,10 +48,10 @@ impl ToolMode {
 
     /// Label of the panel toggle button.
     #[must_use]
-    pub const fn title(self) -> &'static str {
+    pub fn title(self) -> &'static str {
         match self {
-            Self::Countdown => "计时",
-            Self::Stopwatch => "秒表",
+            Self::Countdown => crate::i18n::t("Timer"),
+            Self::Stopwatch => crate::i18n::t("Stopwatch"),
         }
     }
 }
@@ -65,8 +66,9 @@ pub struct Todo {
 impl Todo {
     #[must_use]
     pub fn new(text: impl Into<String>) -> Self {
-        let mut text = text.into();
-        text.truncate(MAX_TODO_LEN);
+        // `WCHAR[96]` counts UTF-16 units; a byte index would panic on a
+        // multi-byte character at the boundary.
+        let text = truncate_units(&text.into(), MAX_TODO_LEN);
         Self {
             text: text.trim().to_owned(),
             done: false,
@@ -95,8 +97,7 @@ impl Todo {
             },
             None => (false, rest),
         };
-        let mut text = text.to_owned();
-        text.truncate(MAX_TODO_LEN);
+        let text = truncate_units(text, MAX_TODO_LEN);
         Self {
             text: text.trim().to_owned(),
             done,
@@ -296,7 +297,13 @@ impl ToolState {
     /// Surplus `T{i}` keys are removed, otherwise the file keeps entries the
     /// `N` count no longer covers.
     pub fn save(&self, ini: &mut Ini, now_ms: i64) {
-        let old_n = ini.get_i32(SECTION, "N").unwrap_or(0).max(0);
+        // `N` comes from the file, so clamp it like `load` does: an unclamped
+        // value (a hand-edited or corrupt ini) would turn the cleanup loop
+        // below into billions of `remove_key` calls and freeze the writer.
+        let old_n = ini
+            .get_i32(SECTION, "N")
+            .unwrap_or(0)
+            .clamp(0, MAX_TODOS as i32);
         ini.set_i32(SECTION, "N", self.todos.len() as i32);
         for (i, todo) in self.todos.iter().enumerate() {
             ini.set(SECTION, &format!("T{i}"), todo.to_line());
@@ -379,6 +386,35 @@ mod tests {
     fn todo_parse_keeps_pipes_in_text() {
         assert_eq!(Todo::parse_line("a|b").text, "a|b");
         assert_eq!(Todo::parse_line("2|x").text, "2|x");
+    }
+
+    #[test]
+    fn todo_text_truncation_never_splits_a_character() {
+        // 95 ASCII bytes plus one 3-byte character: a byte-index truncate
+        // panics here, and this string is reachable by typing.
+        let mixed = "x".repeat(MAX_TODO_LEN - 1) + "中";
+        let t = Todo::new(&mixed);
+        assert!(
+            t.text.ends_with('中'),
+            "截断不能切开多字节字符: {:?}",
+            t.text
+        );
+        assert_eq!(t.text.chars().count(), MAX_TODO_LEN);
+
+        // A pure CJK string longer than the cap is cut by units, not bytes.
+        let long = "中".repeat(MAX_TODO_LEN + 20);
+        let t = Todo::new(&long);
+        assert_eq!(t.text.chars().count(), MAX_TODO_LEN);
+    }
+
+    #[test]
+    fn parsing_a_long_multibyte_todo_line_does_not_panic() {
+        // A hand-edited ini can hold this; loading must not abort startup.
+        let line = format!("0|{}", "x".repeat(MAX_TODO_LEN - 1) + "中");
+        let t = Todo::parse_line(&line);
+        assert!(!t.done);
+        assert!(t.text.ends_with('中'));
+        assert_eq!(t.text.chars().count(), MAX_TODO_LEN);
     }
 
     #[test]
@@ -534,6 +570,22 @@ mod tests {
         assert_eq!(ini.get(SECTION, "T0"), Some("0|a"));
         assert!(ini.get(SECTION, "T1").is_none(), "旧键要删掉");
         assert!(ini.get(SECTION, "T2").is_none(), "旧键要删掉");
+    }
+
+    /// `N` is read from the file; the cleanup loop must not trust it.
+    #[test]
+    fn save_clamps_the_stale_key_count() {
+        let mut ini = Ini::new();
+        ini.set_i32(SECTION, "N", MAX_TODOS as i32 + 3);
+        let sentinel = format!("T{}", MAX_TODOS + 2);
+        ini.set(SECTION, &sentinel, "keep me");
+
+        ToolState::new().save(&mut ini, 0);
+
+        // Only indices below the cap are reclaimed, so a hostile count cannot
+        // turn this into billions of `remove_key` calls.
+        assert_eq!(ini.get(SECTION, &sentinel), Some("keep me"));
+        assert_eq!(ini.get_i32(SECTION, "N"), Some(0));
     }
 
     #[test]

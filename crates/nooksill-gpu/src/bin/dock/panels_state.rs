@@ -36,6 +36,7 @@ impl App {
                     self.ppp,
                     dark,
                 )?;
+                lw.place_on_target(&self.gpu, self.ppp)?;
                 lw.set_grid(
                     self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
                     self.dock.cfg.get_i32(Key::LP_ROWS).max(2) as usize,
@@ -48,7 +49,7 @@ impl App {
                     &self.gpu,
                     &mut self.settings_slot,
                     &self.paths,
-                    settings_win::effective_ppp(&self.dock.cfg),
+                    settings_win::effective_ppp(&self.dock.cfg, self.dpi),
                 )?;
                 sw.state.auto_start = nooksill_platform::theme::get_autostart();
                 sw.show(frost_spec(&self.dock.cfg, Key::UI_FROST, 20.0));
@@ -83,6 +84,41 @@ impl App {
     /// Whether any panel is open.
     pub(super) fn panel_open(&self) -> bool {
         self.panels().iter().flatten().any(|(visible, _)| *visible)
+    }
+
+    /// Drop the scale-baked panels after a DPI change.
+    ///
+    /// Each of these fixes its physical size and `pixels_per_point` in `new`,
+    /// so it cannot follow the dock to another monitor in place. Persistent
+    /// state is handed over first: a pending tile order goes into the config
+    /// and the timer snapshot into the disk queue; everything else is rebuilt
+    /// from `App` / `raw` when the panel opens again.
+    pub(super) fn reset_panels_for_scale(&mut self) {
+        if let Some(win) = self.cc_slot.as_mut() {
+            if let Some(order) = win.take_order() {
+                self.dock.cfg.cc_order = nooksill_core::control::order_text(&order);
+                self.touch_cfg();
+            }
+        }
+        if let Some(win) = self.tool_slot.as_ref() {
+            let now = nooksill_gpu::tool_win::now_ms();
+            self.disk.submit(WriteJob {
+                items: None,
+                config: None,
+                tool: Some((Box::new(win.state.clone()), now)),
+                notes: None,
+            });
+        }
+        self.tool_save_at = None;
+        // The dropped windows destroy themselves; hiding first keeps a panel
+        // from flashing at the old scale for one frame.
+        self.hide_panels();
+        self.calendar_slot = None;
+        self.cc_slot = None;
+        self.resmon_slot = None;
+        self.tool_slot = None;
+        self.group_slot = None;
+        self.note_slot = None;
     }
 
     /// Whether the user is busy with the dock; auto-hide stays expanded then.

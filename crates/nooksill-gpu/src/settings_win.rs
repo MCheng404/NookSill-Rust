@@ -58,19 +58,26 @@ pub const LOGICAL_SIZE: (f32, f32) = (893.0, 720.0);
 /// Effective scale of the settings window in pixels per point.
 ///
 /// `UiScale` acts as a custom DPI: 0 (and any stray value below 80) follows the
-/// system DPI, while 80..=300 applies directly as a percentage. It replaces
-/// the system scale instead of composing with it: 125% on a 150% system gives
-/// 1.25, not 1.875.
+/// **dock monitor's** DPI, while 80..=300 applies directly as a percentage. It
+/// replaces the system scale instead of composing with it: 125% on a 150%
+/// system gives 1.25, not 1.875. `monitor_dpi` comes from the dock because the
+/// system DPI only describes the primary screen; the settings window opens on
+/// whichever monitor the dock sits on.
 ///
 /// egui measures everything in points, so this single key scales fonts,
 /// buttons, row heights and card spacing together.
 #[must_use]
-pub fn effective_ppp(cfg: &Config) -> f32 {
+pub fn effective_ppp(cfg: &Config, monitor_dpi: i32) -> f32 {
     let pct = cfg.get_i32(Key::UI_SCALE);
     if (80..=300).contains(&pct) {
         pct as f32 / 100.0
     } else {
-        nooksill_platform::display::system_dpi() as f32 / 96.0
+        let dpi = if monitor_dpi > 0 {
+            monitor_dpi
+        } else {
+            nooksill_platform::display::system_dpi()
+        };
+        dpi as f32 / 96.0
     }
 }
 
@@ -144,25 +151,28 @@ pub use self::shell::{shell, shell_with_frost};
 mod tests {
     use super::*;
 
-    /// `UiScale` rules: 0 follows the system, 80..=300 applies, anything below
-    /// 80 follows the system (clamping guards the ini, the rule guards the
-    /// clamp).
+    /// `UiScale` rules: 0 follows the dock monitor, 80..=300 applies, anything
+    /// below 80 follows the monitor (clamping guards the ini, the rule guards
+    /// the clamp).
     #[test]
     fn 自定义缩放的取值规则() {
         let mut cfg = Config::defaults();
-        let sys = nooksill_platform::display::system_dpi() as f32 / 96.0;
+        // A non-primary monitor must win over the system (primary) DPI.
+        let sys = nooksill_platform::display::system_dpi();
 
-        // Default 0: follow the system.
-        assert!((effective_ppp(&cfg) - sys).abs() < 1e-6);
+        // Default 0: follow the dock monitor, not the primary.
+        assert!((effective_ppp(&cfg, 144) - 1.5).abs() < 1e-6);
+        // A missing DPI (0) still falls back to the system value.
+        assert!((effective_ppp(&cfg, 0) - sys as f32 / 96.0).abs() < 1e-6);
 
         // Active range: replaces, does not compose - 125% is 1.25.
         cfg.apply_i32(Key::UI_SCALE, 125);
-        assert!((effective_ppp(&cfg) - 1.25).abs() < 1e-6);
+        assert!((effective_ppp(&cfg, 144) - 1.25).abs() < 1e-6);
         cfg.apply_i32(Key::UI_SCALE, 300);
-        assert!((effective_ppp(&cfg) - 3.0).abs() < 1e-6);
+        assert!((effective_ppp(&cfg, 144) - 3.0).abs() < 1e-6);
 
-        // Below 80: treated as follow-the-system.
+        // Below 80: treated as follow-the-monitor.
         cfg.apply_i32(Key::UI_SCALE, 50);
-        assert!((effective_ppp(&cfg) - sys).abs() < 1e-6);
+        assert!((effective_ppp(&cfg, 192) - 2.0).abs() < 1e-6);
     }
 }

@@ -139,8 +139,11 @@ fn expected_digest(base: &str, release: &Release) -> Result<String, UpdateError>
         net::SMALL_BODY,
     )?;
     let text = String::from_utf8_lossy(&res.body);
-    staging::parse_sha256_file(&text)
-        .ok_or_else(|| UpdateError::Http("校验文件格式不对".to_owned()))
+    staging::parse_sha256_file(&text).ok_or_else(|| {
+        UpdateError::Http(
+            nooksill_core::i18n::t("The checksum file has an unexpected format").to_owned(),
+        )
+    })
 }
 
 fn ordered_bases(preferred: &str) -> Vec<String> {

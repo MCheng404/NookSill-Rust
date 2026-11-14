@@ -121,7 +121,7 @@ pub(super) fn tick_settings(
 
         // Custom scale: rebuild the window at the new DPI in place. Runs after
         // render, so a dropdown change applies on the next frame.
-        let want = settings_win::effective_ppp(&dock.cfg);
+        let want = settings_win::effective_ppp(&dock.cfg, dock.dpi());
         if (sw.ppp() - want).abs() > f32::EPSILON {
             sw.rescale(gpu, want)?;
         }

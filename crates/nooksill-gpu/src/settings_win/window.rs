@@ -50,7 +50,7 @@ impl SettingsWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（设置窗口）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (settings)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {
@@ -142,7 +142,7 @@ impl SettingsWindow {
         let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         self.pos = (x, y);
         unsafe { SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER) }
-            .map_err(|_| GpuError::Win32("SetWindowPos（设置窗口缩放）"))?;
+            .map_err(|_| GpuError::Win32("SetWindowPos (settings rescale)"))?;
         // Capture after the move, so the backdrop is the area behind the new
         // rect. The window is already excluded from capture (see `show`), so
         // this cannot pick up itself.
@@ -171,6 +171,17 @@ impl SettingsWindow {
     /// `SetForegroundWindow` calls are allowed within one process, so there is
     /// no foreground lock problem.
     pub fn show(&mut self, frost: Option<crate::frost::Spec>) {
+        // Re-center on the dock's monitor: the window is created once and the
+        // dock may have moved to another screen since the last open. Moving
+        // first also means the frost capture below samples the right area.
+        let (pw, ph) = physical_size(self.ppp);
+        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
+        if (x, y) != self.pos {
+            self.pos = (x, y);
+            unsafe {
+                let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER);
+            }
+        }
         match frost {
             Some(spec) => {
                 // Capture the backdrop before `ShowWindow`: the window is not

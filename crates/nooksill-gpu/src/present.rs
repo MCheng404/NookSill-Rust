@@ -98,7 +98,7 @@ impl std::fmt::Debug for LayeredPresenter {
 impl LayeredPresenter {
     pub fn new(width: i32, height: i32) -> Result<Self, GpuError> {
         if width <= 0 || height <= 0 {
-            return Err(GpuError::Win32("非法 DIB 尺寸"));
+            return Err(GpuError::Win32("Invalid DIB size"));
         }
         let screen = unsafe { GetDC(None) };
         if screen.0.is_null() {

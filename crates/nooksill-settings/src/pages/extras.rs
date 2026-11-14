@@ -63,13 +63,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             toggle(
                 ctx,
                 ui,
-                Key::NOTIFY_W,
-                nooksill_core::i18n::t("Notifications"),
-                "",
-            );
-            toggle(
-                ctx,
-                ui,
                 Key::CTRL_CENTER,
                 nooksill_core::i18n::t("Control Center"),
                 "",

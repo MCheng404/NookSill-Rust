@@ -68,7 +68,7 @@ impl Launchpad {
             if let (Top::App(ai), Top::App(ti)) = (self.top[src], self.top[target]) {
                 if self.folders.len() < MAX_FOLDERS {
                     self.folders.push(Folder {
-                        name: "文件夹".to_owned(),
+                        name: crate::i18n::t("Folder").to_owned(),
                         apps: vec![ti, ai],
                     });
                     let fi = self.folders.len() - 1;

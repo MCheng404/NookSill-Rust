@@ -7,6 +7,14 @@
 use super::*;
 use nooksill_platform::update::{self, Channel};
 
+/// A background update that sends nothing for this long is abandoned.
+///
+/// Messages only arrive at start, on progress and at the end, so a panicked
+/// worker or a wedged transfer would leave `update_rx` set forever and block
+/// every later check. The stamp is refreshed by each message, so a slow but
+/// working download is never cut off.
+const UPDATE_STALL: Duration = Duration::from_secs(15 * 60);
+
 /// Messages the updater thread sends back to the main thread.
 ///
 /// Every variant carries plain data, the worker knows nothing about the UI
@@ -63,6 +71,7 @@ impl App {
         let channel = self.update_channel();
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
+        self.update_started = Some(Instant::now());
         std::thread::spawn(move || {
             let _ = tx.send(UpdateMsg::Status(
                 nooksill_core::i18n::t("Checking…").to_owned(),
@@ -103,6 +112,7 @@ impl App {
         let test_all = self.dock.cfg.get_i32(Key::NET_MIRROR_ALL) != 0;
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
+        self.update_started = Some(Instant::now());
         std::thread::spawn(move || {
             let allow_direct = !(secure_dns && update::dns_looks_poisoned("github.com"));
             let _ = tx.send(UpdateMsg::Status(if allow_direct {
@@ -143,6 +153,27 @@ impl App {
 
     /// Moves the background thread messages into the settings window state.
     pub(super) fn pump_update(&mut self) {
+        // A thread that panicked or a transfer that wedged sends nothing; the
+        // channel alone would then stay set for the rest of the session and
+        // every later check or download would return early.
+        if self.update_rx.is_some()
+            && self
+                .update_started
+                .is_some_and(|at| at.elapsed() >= UPDATE_STALL)
+        {
+            self.update_rx = None;
+            self.update_started = None;
+            let text = nooksill_core::i18n::fmt(
+                "Failed: {0}",
+                &[nooksill_core::i18n::t("The update timed out")],
+            );
+            if let Some(sw) = self.settings_slot.as_mut() {
+                sw.state.update.status = text;
+                sw.state.update.busy = false;
+                sw.wake();
+            }
+            return;
+        }
         let Some(rx) = self.update_rx.as_ref() else {
             return;
         };
@@ -153,6 +184,8 @@ impl App {
         if messages.is_empty() {
             return;
         }
+        // Any message means the worker is alive and making progress.
+        self.update_started = Some(Instant::now());
 
         let auto = self.dock.cfg.get_i32(Key::UPD_AUTO) != 0;
         let mut finished = false;
@@ -272,6 +305,7 @@ impl App {
         }
         if finished {
             self.update_rx = None;
+            self.update_started = None;
         }
         if auto_download {
             self.start_update_download();

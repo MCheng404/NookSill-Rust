@@ -21,7 +21,8 @@ pub struct WriteJob {
 pub struct DiskWriter {
     tx: Option<Sender<WriteJob>>,
     rx: Receiver<Result<(), String>>,
-    _thread: JoinHandle<()>,
+    /// `None` once [`Self::shutdown`] joined it.
+    _thread: Option<JoinHandle<()>>,
 }
 
 impl DiskWriter {
@@ -34,7 +35,7 @@ impl DiskWriter {
         Ok(Self {
             tx: Some(job_tx),
             rx: res_rx,
-            _thread: thread,
+            _thread: Some(thread),
         })
     }
 
@@ -47,6 +48,24 @@ impl DiskWriter {
     /// Drain finished write results without blocking.
     pub fn drain(&self) -> Vec<Result<(), String>> {
         self.rx.try_iter().collect()
+    }
+
+    /// Write `job` and wait until it is on disk. For shutdown only.
+    ///
+    /// The debounce in the main loop can still hold an edit when the user
+    /// quits; without this the last change is silently dropped. Dropping the
+    /// sender makes the thread exit once the queue is empty, so joining also
+    /// waits for jobs submitted before this call.
+    pub fn shutdown(&mut self, job: Option<WriteJob>) -> Result<(), String> {
+        if let Some(job) = job {
+            self.submit(job);
+        }
+        self.tx = None;
+        if let Some(thread) = self._thread.take() {
+            let _ = thread.join();
+        }
+        // Report the outcome of the last write, if any.
+        self.rx.try_iter().last().unwrap_or(Ok(()))
     }
 }
 
@@ -92,4 +111,42 @@ pub(super) fn write(ini: &Path, job: &WriteJob) -> Result<(), String> {
     model
         .save(ini)
         .map_err(|e| format!("写入 {} 失败：{e}", ini.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nooksill_core::config::{Config, Key};
+
+    /// Shutdown must finish the queued write before returning: a setting
+    /// changed a few milliseconds before quitting would otherwise be dropped.
+    #[test]
+    fn shutdown_writes_the_last_job_before_returning() {
+        let dir = std::env::temp_dir().join("nooksill-disk-shutdown-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let ini = dir.join("NookSill.ini");
+
+        // A null window only makes the wake-up fail; writing is unaffected.
+        let mut writer =
+            DiskWriter::spawn(ini.clone(), Waker::new(HWND::default())).expect("spawn");
+        let mut cfg = Config::defaults();
+        cfg.apply_i32(Key::Opacity, 42);
+        writer
+            .shutdown(Some(WriteJob {
+                items: None,
+                config: Some(Box::new(cfg)),
+                tool: None,
+                notes: None,
+            }))
+            .expect("shutdown must report a successful write");
+
+        let saved = Ini::load(&ini).expect("load written ini");
+        assert_eq!(
+            saved.get_i32("appearance", "opacity"),
+            Some(42),
+            "退出前的改动必须已经落盘"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

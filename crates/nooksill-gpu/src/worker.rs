@@ -174,6 +174,20 @@ impl IconLoader {
         set.remove(&(index, path.to_owned()));
     }
 
+    /// Drops suppression keys for slots the list no longer has.
+    ///
+    /// The key carries the index so two groups (both with an empty path) stay
+    /// distinct, which also means a shrinking list would keep one string per
+    /// old slot for the rest of the session. Called after every rebuild, so
+    /// the set is bounded by the current item count.
+    pub fn retain(&self, len: usize) {
+        let mut set = match self.inflight.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        set.retain(|(index, _)| *index < len);
+    }
+
     /// Takes the icons finished in this round without blocking. Successfully
     /// loaded paths leave the in-flight set.
     pub fn drain(&self) -> Vec<ReadyIcon> {
@@ -322,6 +336,11 @@ mod tests {
         assert_eq!(loader.inflight_len(), 2, "forget 要解绑");
         loader.submit(req(0, r"C:\a.exe"));
         assert_eq!(loader.inflight_len(), 3, "解绑后能再排一次");
+
+        // Slots past the new length can never be hit again; keeping them
+        // would grow the set on every shrink.
+        loader.retain(2);
+        assert_eq!(loader.inflight_len(), 2, "超出列表长度的键要清掉");
     }
 
     /// Runs a shell icon fetch on the worker thread.

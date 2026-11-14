@@ -44,7 +44,7 @@ impl ToolWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（计时器面板）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (timer panel)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {

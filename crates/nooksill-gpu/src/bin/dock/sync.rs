@@ -62,6 +62,8 @@ impl App {
         // Swaps are only allowed within one segment, so `Dock` needs the boundary.
         self.dock.set_pinned(self.raw.len());
         self.items_stale = false;
+        // Keys of slots that no longer exist can never match again.
+        self.icons.retain(self.raw.len() + self.temps.len());
         self.request_temp_icons();
     }
 
@@ -215,6 +217,39 @@ impl App {
         });
     }
 
+    /// Write everything still held by the debounce window and wait for the
+    /// disk. Called once on the quit path.
+    ///
+    /// Without it an edit followed by an immediate quit is lost: the debounce
+    /// only submits after 400 ms, and the writer thread is never waited for.
+    pub(super) fn flush_pending_writes(&mut self) {
+        let items = self.dirty_items.take();
+        let config = self.dirty_cfg.take();
+        let notes = self.dirty_notes.take();
+        let tool = self.tool_save_at.take().and_then(|_| {
+            self.tool_slot.as_ref().map(|win| {
+                (
+                    Box::new(win.state.clone()),
+                    nooksill_gpu::tool_win::now_ms(),
+                )
+            })
+        });
+        self.dirty_at = None;
+        let pending = items.is_some() || config.is_some() || notes.is_some() || tool.is_some();
+        let job = WriteJob {
+            items,
+            config,
+            tool,
+            notes,
+        };
+        let result = self.disk.shutdown(pending.then_some(job));
+        if let Err(e) = result {
+            eprintln!("退出前保存失败：{e}");
+        } else if trace::geom() {
+            eprintln!("[disk] 退出前已写回 {}", self.paths.ini.display());
+        }
+    }
+
     /// Take finished icons from the worker and upload them as textures.
     ///
     /// Pixel work is done; only `load_texture` remains, and that needs a thread
@@ -244,6 +279,15 @@ impl App {
     /// Take scanner results: running state and occlusion.
     pub(super) fn step_scan(&mut self) -> bool {
         let mut need_frame = false;
+        // Disabling both the dots and the running icons stops the scan, so the
+        // "nothing is running" round never arrives and the last transient icons
+        // would stay on the bar for good.
+        if !self.dock.cfg.scan_enabled() && !self.temps.is_empty() {
+            self.temps.clear();
+            self.temp_keys.clear();
+            self.sync_items();
+            need_frame = true;
+        }
         for out in self.scanner.drain() {
             if let Some(running) = out.running {
                 if self.sync_temps(&running) {

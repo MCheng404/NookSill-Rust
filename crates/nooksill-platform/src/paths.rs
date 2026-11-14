@@ -15,6 +15,8 @@ use crate::win::{from_wide, to_wide};
 /// the whole CSIDL block, where every constant is a bare u32.
 const CSIDL_APPDATA: i32 = 0x001A;
 
+/// `SHGetFolderPathW` always writes a `MAX_PATH` buffer; only the exe path
+/// (which can be longer) goes through `std::env::current_exe`.
 const MAX_PATH: usize = 260;
 
 #[derive(Debug)]
@@ -27,9 +29,16 @@ pub enum PathsError {
 impl fmt::Display for PathsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ExePath => write!(f, "无法取得 exe 路径（GetModuleFileNameW 失败）"),
-            Self::AppData => write!(f, "无法取得 %APPDATA% 路径（SHGetFolderPathW 失败）"),
-            Self::Io(e) => write!(f, "文件操作失败: {e}"),
+            Self::ExePath => f.write_str(nooksill_core::i18n::t(
+                "Cannot determine the executable path",
+            )),
+            Self::AppData => f.write_str(nooksill_core::i18n::t(
+                "Cannot determine the %APPDATA% path",
+            )),
+            Self::Io(e) => f.write_str(&nooksill_core::i18n::fmt(
+                "File operation failed: {0}",
+                &[e.to_string().as_str()],
+            )),
         }
     }
 }
@@ -127,12 +136,9 @@ fn ensure_empty_ini(path: &Path) -> io::Result<()> {
 }
 
 fn exe_path() -> Result<PathBuf, PathsError> {
-    let mut buf = [0u16; MAX_PATH];
-    let len = unsafe { windows::Win32::System::LibraryLoader::GetModuleFileNameW(None, &mut buf) };
-    if len == 0 {
-        return Err(PathsError::ExePath);
-    }
-    Ok(PathBuf::from(from_wide(&buf[..len as usize])))
+    // `std` grows the buffer itself, so an install path past `MAX_PATH` still
+    // resolves; the hand-rolled 260-unit buffer used to truncate it.
+    std::env::current_exe().map_err(|_| PathsError::ExePath)
 }
 
 fn appdata_path() -> Result<PathBuf, PathsError> {

@@ -193,7 +193,13 @@ fn channel_is_explicit_not_inferred_from_the_install() {
 #[test]
 fn rate_limit_error_is_readable() {
     let e = UpdateError::Net(net::NetError::Status(403));
-    assert!(e.to_string().contains("限流"), "{e}");
+    // Compare against the translated template so the assertion holds in any
+    // language instead of hard-coding one translation's wording.
+    let expected = nooksill_core::i18n::fmt(
+        "GitHub API rate limit (60/hour, HTTP {0}); try again later",
+        &["403"],
+    );
+    assert_eq!(e.to_string(), expected, "{e}");
     let res = net::Response {
         status: 403,
         body: Vec::new(),

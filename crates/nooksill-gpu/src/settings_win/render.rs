@@ -42,6 +42,12 @@ impl SettingsWindow {
         }
         self.cursor = out.cursor;
         self.cursor_to_system(out.cursor);
+        // Follow the focused field with the IME candidate window. The field
+        // publishes its caret during painting; `WM_IME_STARTCOMPOSITION` also
+        // reads the same value, so the first composition is placed correctly.
+        if let Some(caret) = nooksill_settings::text_field::ime_caret(self.renderer.ctx()) {
+            self.ime.set_caret(self.hwnd, caret.x, caret.y, self.ppp);
+        }
         let frame_ms = started.elapsed().as_secs_f32() * 1000.0;
         self.update_stats(frame_ms);
         if super::win::perf() && self.last_stats_push.elapsed() < Duration::from_millis(1) {

@@ -14,6 +14,25 @@ use egui::{
 pub const FIELD_H: f32 = 34.0;
 pub const FIELD_R: f32 = 12.0;
 
+/// Where the focused text field wants the IME candidate window, in window
+/// logical points.
+///
+/// The field publishes the point every frame it holds focus; the window shell
+/// reads it after painting (and on `WM_IME_STARTCOMPOSITION`) and anchors the
+/// candidate list there. `None` until a field has been focused once.
+#[must_use]
+pub fn ime_caret(ctx: &egui::Context) -> Option<egui::Pos2> {
+    ctx.data(|d| d.get_temp(ime_caret_id()))
+}
+
+/// Stable key for the published caret.
+///
+/// `Id::unique` hashes the source with fixed seeds, so every call site and
+/// frame resolves to the same id; a translated label would not.
+fn ime_caret_id() -> Id {
+    Id::unique("nooksill-settings-ime-caret")
+}
+
 /// Leading icon.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum FieldIcon {
@@ -158,6 +177,17 @@ pub fn text_field(
         egui::pos2(rect.left() + left_pad, rect.top() + 2.0),
         egui::pos2(rect.right() - right_pad, rect.bottom() - 2.0),
     );
+    if focused {
+        // Park the system candidate window at the start of the field. The
+        // window shell reads this after painting; without it the candidate
+        // list floats in the corner of a 900-point window.
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                ime_caret_id(),
+                egui::pos2(text_rect.left() + 2.0, rect.center().y),
+            )
+        });
+    }
     let mut inner = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(text_rect)

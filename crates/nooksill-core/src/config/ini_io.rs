@@ -72,10 +72,13 @@ impl Config {
         // the file, which reads as "never configured" while diagnosing.
         ini.set("Graphics", "Adapter", &self.adapter);
         ini.set("Hotkeys", "Toggle", self.hotkey_combo.display());
-        // The tile order is the opposite: it is only written once dragged.
-        // Its default is empty, and an empty line would just add noise to
-        // every user's ini.
-        if !self.cc_order.is_empty() {
+        // The tile order is only written once dragged; an empty line would
+        // just add noise to every user's ini. When the value is cleared again
+        // (Reset defaults), the old line has to be removed or the next start
+        // reads the stale order back.
+        if self.cc_order.is_empty() {
+            ini.remove_key("widgets", "Order");
+        } else {
             ini.set("widgets", "Order", &self.cc_order);
         }
         // An explicit empty line keeps "follow the system" visible in the file.

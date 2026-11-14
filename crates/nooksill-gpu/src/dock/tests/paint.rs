@@ -108,6 +108,29 @@ fn widget_font_keeps_logical_size_across_dpi() {
     assert!(time0 > 14.0, "时间字号偏小：{time0}");
 }
 
+/// Item count can change between two layouts (duplicate, remove, drop), and the
+/// next paint still runs against the previous `geom`. Painting must skip the
+/// slots that no longer exist instead of indexing past the arrays.
+#[test]
+fn painting_tolerates_a_list_change_before_relayout() {
+    let mut dock = settled_dock(3);
+    // Duplicate the first item: four entries, the last keeps its carried size.
+    let items: Vec<DockItem> = ["C:/x0.exe", "C:/x0.exe", "C:/x1.exe", "C:/x2.exe"]
+        .into_iter()
+        .map(|p| DockItem::from_item(&Item::new(ItemKind::File, p, p)))
+        .collect();
+    assert_eq!(dock.items.len(), 3);
+    dock.replace_items(items);
+    assert_eq!(dock.items.len(), 4, "列表已经变长，几何还是上一帧的");
+
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        dock.paint(ui, 1.0, true, None, None);
+    });
+    // Dropping an unapplied texture delta panics inside epaint.
+    out.textures_delta.clear();
+}
+
 /// The rounded gradient mesh keeps its outline away from the corners.
 #[test]
 fn rounded_gradient_leaves_the_corners_empty() {

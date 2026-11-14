@@ -34,6 +34,17 @@ pub(super) unsafe extern "system" fn wndproc(
             }
             LRESULT(0)
         }
+        // A second launch asks this instance to surface; the request is a flag
+        // so the main loop can clear the hidden state with its own clock.
+        nooksill_platform::single_instance::WM_APP_SHOW => {
+            let ptr = dock_ptr(hwnd);
+            if !ptr.is_null() {
+                unsafe {
+                    (*ptr).request_show();
+                }
+            }
+            LRESULT(0)
+        }
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);

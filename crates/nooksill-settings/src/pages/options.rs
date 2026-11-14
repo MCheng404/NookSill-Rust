@@ -34,11 +34,6 @@ pub(crate) const DOT_OPTS: &[(i32, &str)] = &[(0, "Bar"), (1, "Dot")];
 pub(crate) const MENU_THEME_OPTS: &[(i32, &str)] =
     &[(0, "Light"), (1, "Dark"), (2, "Follow system")];
 
-pub(crate) const MIN_STYLE_OPTS: &[(i32, &str)] = &[
-    (0, "Genie (like macOS)"),
-    (1, "Spring (non-linear, phone-like)"),
-];
-
 pub(crate) const CLOCK_SHOW_OPTS: &[(i32, &str)] = &[
     (0, "Time + date (stacked)"),
     (1, "Time only"),
@@ -129,7 +124,6 @@ mod tests {
             PLATE_THEME_OPTS,
             DOT_OPTS,
             MENU_THEME_OPTS,
-            MIN_STYLE_OPTS,
             CLOCK_SHOW_OPTS,
             DATE_FMT_OPTS,
             BROWSER_OPTS,

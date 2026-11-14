@@ -256,3 +256,48 @@ fn force_hide_beats_the_cursor() {
     }
     assert!(dock.hide_cur > 0.5, "强制收起时鼠标靠近不该展开");
 }
+
+/// A second launch summons the bar: both hidden states are cleared and the
+/// hide delay restarts, so an auto-hidden dock does not slide straight back.
+#[test]
+fn summon_clears_forced_and_auto_hidden_states() {
+    let mut dock = settled_dock(1);
+    dock.mode = DockMode::AutoHide;
+    dock.force_hide = true;
+    dock.hide_target = true;
+    dock.hide_cur = 1.0;
+
+    dock.request_show();
+    assert!(dock.needs_hide_tick(), "唤起请求本身要驱动一轮 tick");
+
+    // Cursor away, nothing busy, not covered.
+    dock.tick_auto_hide(false, false, false, 10_000);
+    assert!(!dock.force_hide, "强制收起状态要清掉");
+    assert!(!dock.hide_target, "自动收起目标要清掉");
+    assert!(!dock.fully_hidden(), "下一帧要开始展开");
+
+    // The grace period starts at the summon, not at the last hover.
+    dock.tick_auto_hide(false, false, false, 10_100);
+    assert!(!dock.hide_target, "唤起后 100 ms 不该立刻又收起");
+}
+
+/// A catch-up layout must not swallow the frame requested by the hide tick:
+/// `update` recomputes `anim` from the icon animation alone.
+#[test]
+fn relayout_keep_anim_preserves_the_hide_frame() {
+    let mut dock = settled_dock(1);
+    dock.mode = DockMode::AutoHide;
+
+    // A settled bar has no icon animation, so a plain `update` clears the bit.
+    dock.update(96, 16.0);
+    assert!(!dock.anim, "静止栏体没有图标动画");
+    dock.anim = true; // step 11's hide tick
+    dock.update(96, 16.0);
+    assert!(!dock.anim, "普通 update 会清掉，所以补布局必须保留");
+
+    dock.anim = true;
+    dock.mark_dirty();
+    assert!(dock.is_dirty());
+    dock.relayout_keep_anim(96, 16.0);
+    assert!(dock.anim, "补布局后隐藏动画仍要出帧");
+}

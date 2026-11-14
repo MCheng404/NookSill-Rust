@@ -39,11 +39,17 @@ pub enum NetError {
 impl fmt::Display for NetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadUrl => write!(f, "URL 格式不正确"),
-            Self::Win32(what) => write!(f, "{what} 失败"),
+            Self::BadUrl => f.write_str(nooksill_core::i18n::t("The URL is malformed")),
+            Self::Win32(what) => {
+                f.write_str(&nooksill_core::i18n::fmt("Request failed: {0}", &[what]))
+            }
+            // Status codes are language-neutral diagnostics.
             Self::Status(code) => write!(f, "HTTP {code}"),
-            Self::TooLarge(cap) => write!(f, "响应超过 {} MB 上限", cap / (1024 * 1024)),
-            Self::Sink => write!(f, "写入下载文件失败"),
+            Self::TooLarge(cap) => f.write_str(&nooksill_core::i18n::fmt(
+                "The response exceeds the {0} MB limit",
+                &[(cap / (1024 * 1024)).to_string().as_str()],
+            )),
+            Self::Sink => f.write_str(nooksill_core::i18n::t("Writing the download failed")),
         }
     }
 }

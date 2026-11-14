@@ -7,6 +7,78 @@
 
 ## 未发布 — 2.0.0 之后（2026-11-08）
 
+### 移除死开关与错误文案本地化（2026-11-14）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 设置界面移除 5 个死开关 | 删 `Guardian`、`MinAnim`、`MinStyle`、`Preview`、`NotifyW` 的控件（共 6 处：`Preview` / `MinAnim` 各在两页重复出现），连带删 `MIN_STYLE_OPTS` 及其登记测试项 | 这些键在 Rust 版没有任何消费者：`PORTING.md` 记为「不做 / 未实现」，界面却给出可点的开关和「启动守护进程」之类的承诺。**ini 键保留并继续读写**（旧配置迁移不丢值），`CONFIG.md` 开头补「兼容键」说明。删 UI 后把 `控件右边缘对齐` 测试的取样开关从「通知」换成「控制中心」 |
+| 错误文案走 i18n | `NetError`、`UpdateError`、`LaunchError`、`TrayError`、`PathsError`、`MutexError`、`ParseError` 的 `Display`，以及 `update/{http,download,stage}` 内联的 `Http(String)` 文案、`filedialog` 目录名校验、panic 弹窗，全部改走 `t` / `fmt` | 更新卡片与 fatal 弹窗原来在英文界面下混中文；`Display` 是最后一个绕过 i18n 的用户文案出口。实际新增 **44 条**键（原估 20 条偏少），en + zh_cn 按字节序插入分段表，`i18n::tests` 的排序 / 唯一性 / 占位符 / 调用点登记 8 项全过 |
+| 系统生成的占位文本 | 新建标签组的 `标签N`、拖合并生成的默认文件夹名、速记的 `（空）` / `未命名速记` 改走 i18n；`Note::display_title` 不再用「预览文本 == 占位符」判断空笔记 | 后者会把正文恰好等于占位符的速记误判为未命名。抽出 `first_line()` 直接返回 `Option`，新增 `display_title_does_not_compare_against_the_placeholder`。起动台的默认标签组名 / 分类关键词是预置**内容数据**，不是 UI 标签，保持不变 |
+| 早期语言初始化 | `boot()` 在读 `Config` 之前先按系统语言 `i18n::configure("")`，配置加载后再按 `[general] Language` 覆盖 | 路径、ini、互斥体错误走 `fatal` 弹窗时配置还没读，语言仍是默认英文；不先播种，新加的错误文案在中文系统上永远显示英文 |
+| Win32 诊断标签 | `GpuError::Win32` 的 10 个中文括注改成 ASCII 技术名（如 `CreateWindowExW (launchpad)`） | 这些是 API 诊断名而非 UI 句子，不适合做翻译键；保持与「代码注释纯 ASCII」一致 |
+| 测试语言解耦 | `launch::error_codes_have_messages`、`update::rate_limit_error_is_readable`、`note::display_title_falls_back_to_the_first_body_line` 改用 `i18n::t` / `fmt` 构造期望，不再硬编码某一语言的译文 | 避免测试随语言设置漂移 |
+
+验证：`./scripts/build.sh --gate`（同上，643 项测试；i18n 表 8 项校验、settings_ui 50 项含调整后的对齐断言）。
+
+### 代码审查修复（2026-11-13）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 绘制越界 | `paint_icons` / `paint_separators` 按 `geom` 实际长度取槽位，列表在下一帧布局前变化时跳过缺失项 | 复制 / 删除 / 拖入会让 `items` 与上一帧 `geom` 长度不同；复现为「复制首项后下一帧绘制」下标越界。新增回归 `painting_tolerates_a_list_change_before_relayout` |
+| 待办截断崩溃 | `Todo::new` / `Todo::parse_line` 改按 UTF-16 单元截断（`truncate_units`） | `String::truncate(96)` 落在多字节字符中间会 panic（release 为 abort）；超长中文待办可从输入框或 `[Tool]` 行触发，后者会让启动直接崩溃。新增 2 项测试 |
+| 起动台拖动错位 | 页内下标转全表下标统一走 `top_index(page, per, cell)` | `Hit::Cell` 是页内下标，`Launchpad::drop_at` 收全表下标；第 2 页起拖动会重排第一页的条目。新增 `top_index` 单测 |
+| 运行条目残留 | 同时关闭 `Dots` 与 `ShowRunning` 时清空临时条目并重建栏体 | 扫描线程按 `want_running` 停摆后不再回传「没有运行应用」，最后一轮临时图标会永久留在栏上 |
+| 退出丢改动 | 退出路径调用 `flush_pending_writes`：提交未到期的脏数据并 `join` 写盘线程（`DiskWriter::shutdown`） | 400 ms 防抖窗口内退出会丢设置 / 条目 / 速记；写盘线程也从不等待，已提交任务同样可能被进程退出截断 |
+| 弹窗悬空指针 | 菜单与编辑弹窗的模态循环改为闭包收集渲染错误，清理 `GWLP_USERDATA` / 捕获 / 可见性之后再返回 | 渲染失败时 `?` 提前返回，窗口仍可见且 `GWLP_USERDATA` 指向已 drop 的 `Box`，下一条鼠标消息即 use-after-free |
+| 面板跟随显示器 | 设置窗口每次 `show` 重新居中；起动台 `place_on_target` 在开窗前重算显示器与 DPI（必要时重建渲染目标） | ADR-079：面板几何按当前显示器现算。窗口只创建一次，改 `Monitor` 后原来会留在旧屏、旧缩放 |
+| 快捷方式扩展名 | 起动台扫描按固定 4 字节去掉 `.lnk` | 两次 `trim_end_matches` 只覆盖全小写 / 全大写，`Foo.Lnk` 会带着扩展名显示 |
+| 倒计时归零 | 计时器到点停止时标记 dirty，`[Tool] Remain` 写回 0 | 原来到点只改内存，重启后恢复成未走完的剩余时间 |
+| 菜单本地化 | 右键 / 托盘菜单改走 `i18n`：全部复用已登记但从未使用的键（`Show / minimise`、`Launch at sign-in`、`Add separator to the right` 等），英文界面不再整片中文；控制中心磁贴与计时器标题补 11 条新键并同步简中 | 英文界面原来整片显示中文；`i18n::tests` 守住键登记与简中覆盖 |
+| 网址提示 | 设置页的前缀校验与「添加文件夹」对话框标题改走 i18n | 中文提示写死在代码里，英文界面会混入中文；`URL must start with http:` 的中文补成完整句子 |
+
+验证：`./scripts/build.sh --gate`（注释 / 规模 / 提交信息 / fmt / clippy `-D warnings` / 636 项测试）。
+
+### 结构修复（2026-11-13）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 布局与条目同帧 | `run()` 在绘制前补一次 catch-up layout：`Dock::is_dirty()` 为真时重跑 `step_layout` + `step_relayout` | 步骤 6–12（菜单 / 设置 / 拖入）会在本轮布局之后改条目列表，`geom` 落后一帧；上一批的 `.get()` 只是防崩，根因是「画之前没有重新布局」，现在槽位、命中与窗口尺寸同帧一致 |
+| 错误文案出口 | `GroupError` 的 `Display` 改走 `i18n`（新增 3 条键），不再硬编码中文 | 状态栏用 `Display` 拼提示，英文界面原来会混入中文；`Display` 是 `core`/`platform` 里最后一个绕过 `i18n` 的用户文案出口 |
+| IME 候选窗 | 文本输入框每帧把插入点写进 egui 临时数据（`text_field::ime_caret`），设置窗口在绘制后与 `WM_IME_STARTCOMPOSITION` 时读它并 `ImmSetCompositionWindow` | 设置窗口有 4 处输入框却从不定位候选窗，拼音候选框飘在窗口角落；起动台 / 编辑弹窗 / 计时器早就有这一层 |
+| 图标请求表有界 | `IconLoader::retain(len)` 在每次重建栏体后删掉超出当前条目数的抑制键 | 去重键含下标（分组空路径必须如此），列表缩短后每少一个槽位就永久留下一个键；现在集合大小被当前条目数封顶，新增一项断言 |
+| 长路径 exe | `Paths::exe_path` 改用 `std::env::current_exe()` | 手写 260 宽缓冲会截断超长安装路径；`std` 自己扩容。`SHGetFolderPathW` 仍受 `MAX_PATH` 限制，单独注明 |
+| 更新线程看门狗 | `App.update_started` 记录后台线程最后一次发言，`pump_update` 静默 15 分钟后丢弃通道并给出「更新超时」 | 线程 panic 或传输卡死时 `update_rx` 会永久为 `Some`，之后每次检查 / 下载都被自己挡住；时间戳按消息刷新，慢速但正常的下载不会被误杀 |
+| 退出保存覆盖错误路径 | flush 从 `Pumped::Quit` 移到 `run()` 外层，`app.run()` 返回后无条件执行 | 原来只在正常退出时 flush，`?` 提前返回（渲染 / 窗口错误）仍会丢 400 ms 内的改动 |
+| 设置窗口缩放跟随目标屏 | `effective_ppp(cfg, monitor_dpi)` 用 dock 所在显示器的 DPI，而不是主屏的 `system_dpi()` | 混合 DPI 下把 dock 放到 150% 副屏，设置窗口仍按 100% 渲染。新增 `Dock::dpi()`；单测覆盖「副屏 DPI 优先」与「DPI 为 0 回退系统」 |
+| 弹窗创建顺序 | 菜单 / 编辑弹窗先建 `FrameRenderer` 再 `CreateWindowExW` | 渲染器创建会失败，失败后窗口已存在但没有 slot 持有它，每次重试泄漏一个隐藏 HWND |
+
+验证：`./scripts/build.sh --gate`（同上，636 项测试）。
+
+### 单实例唤起与面板缩放（2026-11-13）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 单实例唤起 | 第二次启动 `PostMessageW(WM_APP_SHOW)` 给已有窗口，`Dock::request_show` 置 `summon` 标志，`tick_auto_hide` 消费时清 `force_hide` / `hide_target` 并把 grace 计时重置为当前帧 | ADR-015 写了「第二次启动唤起窗口」，代码只 `eprintln` 后退出；`find_window` 存在但无人调用。窗口类名提取为 `core::WINDOW_CLASS` 常量（跨进程契约）。新增 `summon_clears_forced_and_auto_hidden_states` 测试 |
+| 面板 DPI 跟随 | `sync_monitor` 检测到 DPI 变化时调 `reset_panels_for_scale`：先回写 CC 磁贴顺序与计时器快照，然后丢弃六个小面板的 `Pin<Box>`；六个面板的 `Drop` 新增 `DestroyWindow`（先清 USERDATA 再销毁） | 面板在 `new` 里把 `ppp` 烤进窗口尺寸和渲染器；dock 换到不同 DPI 的显示器后，面板仍按旧比例渲染。`DestroyWindow` 使丢弃干净，不留幽灵窗口 |
+| 菜单/编辑弹窗 ppp 跟随 | `show_menu` / `show_edit` 在 `resize` 后调 `set_pixels_per_point(ppp)` | 复用的渲染器内部 ppp 不更新会导致磨砂 UV 比例错；egui 布局从 `RawInput` 读 ppp 不受影响，但 frost backdrop 的 `win` 尺寸用的是 `self.pixels_per_point` |
+| 分组竖排溢出 | `GroupWindow::open` 在确定尺寸前调 `fitting_spec(count, fan, avail)`：竖排扇形放不下工作区时退回 4 列网格 | `FanArc=0` 时 16 个子项竖排高约 1170 pt，超出 1080p 屏幕；底部图标不可达、无滚动。新增 `a_column_that_does_not_fit_falls_back_to_the_grid` 测试 |
+| `FrameRenderer::resize` 原子性 | 先建 `Offscreen` 和 `LayeredPresenter` 再赋值 | 原来先替换 offscreen 再建 presenter，`LayeredPresenter::new` 失败后 offscreen 已是新尺寸、presenter 是旧尺寸，后续 `present` 因 DIB 不匹配报错 |
+
+验证：`./scripts/build.sh --gate`（同上，638 项测试，新增唤起、分组溢出共 2 项断言）。
+
+### 索引、时序与持久化边界（2026-11-14）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 右键窗口列表 | `step_menu` 改用 `running::running_key` 取窗口列表的键 | `running_windows()` 以解析后的 exe 路径为键，原来传 `it.path`：`.lnk` 项存的是快捷方式路径、exe 在 `item.target`，导致「多窗口时逐个列出」对最常见的快捷方式项永远为空。`QuitApp` / 扫描器早已用同一个映射 |
+| 隐藏动画掉帧 | catch-up 布局改走 `Dock::relayout_keep_anim`，保留 `update` 之外的 `anim` 位 | 上轮加的 catch-up 在步骤 11 之后调 `Dock::update`，而 `update` 末尾只按图标动画重算 `anim`，把 `tick_hide` 设的隐藏动画标志清掉，收起过程少一帧。新增 `relayout_keep_anim_preserves_the_hide_frame` |
+| 恢复默认不彻底 | `Config::write_ini` 在 `cc_order` 为空时 `remove_key("widgets", "Order")` | `ResetDefaults` 把磁贴顺序清成默认空值，但原来只在非空时写该键，旧的 `Order=...` 留在 ini 里，下次启动又读回旧顺序。扩展 `cc_order_only_written_when_set` |
+| 写盘线程可被卡死 | `ToolState::save` 把文件里的 `N` 夹到 `[0, MAX_TODOS]` | 旧代码 `old_n = N.max(0)` 后 `for i in len..old_n { remove_key }`；手改或残留的 `N=2147483647` 会让写盘线程跑几十亿次。`load` 早已夹紧。新增 `save_clamps_the_stale_key_count`（哨兵键断言，不会挂测试） |
+| `launchpad.dat` 格式注入 | `Launchpad::serialize` 所有字段过 `clean_field`（`\t\r\n\0` → 空格） | tab 是自定义格式的分隔符，rename 的 WM_CHAR 路径过滤控制字符，但 IME 提交路径没有；一个 tab 就能把一条记录拆成两条。新增 `serialize_cleans_delimiters` |
+| ini 行注入 | `Ini::set_in_section` 统一清洗 value 里的 `\r\n\0` | `Note.title`、`Todo.text` 等直接 `ini.set` 的字段未经转义，换行会在 `to_text()` 里写出新键甚至新段。与 `Item::sanitize_for_ini` 的既有做法一致，写入点收口后所有调用方受益。新增 `values_cannot_inject_ini_lines` |
+
+验证：`./scripts/build.sh --gate`（同上，642 项测试，本轮新增 5 项断言）。
+
 ### 更新通道与拉取链路（2026-11-13）
 
 | 项 | 改了什么 | 依据 |

@@ -24,12 +24,17 @@ pub enum GroupError {
 }
 
 impl std::fmt::Display for GroupError {
+    /// User-facing text goes through the i18n table like every other string;
+    /// `Display` is what the status bar interpolates.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoSuchItem => write!(f, "条目不存在"),
-            Self::NotGroup => write!(f, "目标不是分组"),
-            Self::Full => write!(f, "分组已满（上限 {MAX_KIDS} 个）"),
-            Self::Nested => write!(f, "分组里不能再放分组"),
+            Self::NoSuchItem => f.write_str(crate::i18n::t("The item no longer exists")),
+            Self::NotGroup => f.write_str(crate::i18n::t("The target is not a group")),
+            Self::Full => f.write_str(&crate::i18n::fmt(
+                "The group is full (limit {0} items)",
+                &[MAX_KIDS.to_string().as_str()],
+            )),
+            Self::Nested => f.write_str(crate::i18n::t("A group cannot contain another group")),
         }
     }
 }

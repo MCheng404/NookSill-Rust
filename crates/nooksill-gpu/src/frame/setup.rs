@@ -92,14 +92,18 @@ impl FrameRenderer {
         if self.offscreen.width() == width && self.offscreen.height() == height {
             return Ok(());
         }
-        self.offscreen = Offscreen::new(
+        // Build both first: if the presenter fails, the offscreen stays
+        // unchanged too, so the renderer never ends up with mismatched halves.
+        let offscreen = Offscreen::new(
             &gpu.device,
             width,
             height,
             Gpu::COLOR_FORMAT,
             self.offscreen.samples(),
         );
-        self.presenter = LayeredPresenter::new(width as i32, height as i32)?;
+        let presenter = LayeredPresenter::new(width as i32, height as i32)?;
+        self.offscreen = offscreen;
+        self.presenter = presenter;
         Ok(())
     }
 

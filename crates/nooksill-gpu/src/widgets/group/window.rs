@@ -40,7 +40,7 @@ impl GroupWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（分组面板）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (group panel)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {
@@ -101,7 +101,16 @@ impl GroupWindow {
     ) -> Result<(), GpuError> {
         self.title = title.to_owned();
         self.kids = kids;
-        self.fan = fan;
+        // A tall column may not fit the screen; the fitting step may fall back
+        // to the grid, so the stored spec is what paint and hit tests use.
+        let (al, at, ar, _ab) = anchor;
+        let cx = (al + ar) / 2;
+        let work = nooksill_platform::display::work_area_at(cx, at);
+        let avail = (
+            work.width() as f32 / self.ppp - 16.0,
+            work.height() as f32 / self.ppp - 16.0,
+        );
+        self.fan = fitting_spec(self.kids.len(), fan, avail);
         // A different group invalidates the icon cache: the indices no
         // longer point at the same things.
         self.icons.clear();
@@ -118,10 +127,7 @@ impl GroupWindow {
 
         // Above the group, horizontally centered; moved down when it would
         // hit the top of the screen.
-        let (al, at, ar, _ab) = anchor;
-        let cx = (al + ar) / 2;
         let mut x = cx - pw / 2;
-        let work = nooksill_platform::display::work_area_at(cx, at);
         if x < work.left {
             x = work.left;
         }

@@ -130,7 +130,7 @@ impl NoteWindow {
                 None,
             )
         }
-        .map_err(|_| GpuError::Win32("CreateWindowExW（速记面板）"))?;
+        .map_err(|_| GpuError::Win32("CreateWindowExW (notes panel)"))?;
 
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         let mut win = Box::pin(Self {
@@ -360,7 +360,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 impl Drop for NoteWindow {
     fn drop(&mut self) {
         unsafe {
+            // Unlink before destroying: `DestroyWindow` sends messages that
+            // reach the procedure, which must not see a half-dropped window.
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
         }
     }
 }

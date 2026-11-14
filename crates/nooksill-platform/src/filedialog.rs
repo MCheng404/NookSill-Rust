@@ -124,7 +124,12 @@ fn show(owner: Option<isize>, title: &str, filters: &[Filter<'_>], mode: Mode) -
 pub fn create_dir(parent: &std::path::Path, name: &str) -> Result<PathBuf, String> {
     let name = check_dir_name(name)?;
     let path = parent.join(&name);
-    std::fs::create_dir(&path).map_err(|e| format!("创建目录失败：{e}"))?;
+    std::fs::create_dir(&path).map_err(|e| {
+        nooksill_core::i18n::fmt(
+            "Could not create the folder: {0}",
+            &[e.to_string().as_str()],
+        )
+    })?;
     Ok(path)
 }
 
@@ -136,10 +141,10 @@ pub fn create_dir(parent: &std::path::Path, name: &str) -> Result<PathBuf, Strin
 pub fn check_dir_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err("名字不能为空".into());
+        return Err(nooksill_core::i18n::t("The name cannot be empty").into());
     }
     if trimmed == "." || trimmed == ".." {
-        return Err("名字不能是 . 或 ..".into());
+        return Err(nooksill_core::i18n::t("The name cannot be . or ..").into());
     }
     if trimmed.chars().any(|c| {
         c == '/'
@@ -153,11 +158,11 @@ pub fn check_dir_name(name: &str) -> Result<String, String> {
             || c == '|'
             || (c as u32) < 0x20
     }) {
-        return Err("名字里有不能用的字符".into());
+        return Err(nooksill_core::i18n::t("The name contains invalid characters").into());
     }
     let cleaned = trimmed.trim_end_matches([' ', '.']).to_owned();
     if cleaned.is_empty() {
-        return Err("名字不能为空".into());
+        return Err(nooksill_core::i18n::t("The name cannot be empty").into());
     }
     Ok(cleaned)
 }

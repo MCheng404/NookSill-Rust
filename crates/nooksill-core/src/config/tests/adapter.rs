@@ -49,6 +49,17 @@ fn cc_order_only_written_when_set() {
         "5,0,1,2,3,4,6,7",
         "拖过之后要原样读回来"
     );
+
+    // Resetting to defaults must erase the saved order, not leave it behind:
+    // otherwise the next start restores the very order the user reset.
+    let c3 = Config::defaults();
+    let mut ini3 = ini2;
+    c3.write_ini(&mut ini3);
+    assert!(
+        ini3.get("widgets", "Order").is_none(),
+        "恢复默认后旧的 Order 行要删掉"
+    );
+    assert!(Config::from_ini(&ini3).cc_order.is_empty());
 }
 
 #[test]

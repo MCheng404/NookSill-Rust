@@ -3,6 +3,7 @@
 use super::paint::estimate_width;
 use super::*;
 
+use nooksill_core::i18n::t;
 use nooksill_core::item::Item;
 
 fn item(kind: ItemKind, name: &str) -> Item {
@@ -75,8 +76,8 @@ fn tray_menu_offers_toggle_settings_and_exit() {
             MenuCmd::ExitDock,
         ]
     );
-    assert_eq!(hidden.entries[0].label, "显示 Dock");
-    assert_eq!(Menu::tray(false).entries[0].label, "隐藏 Dock");
+    assert_eq!(hidden.entries[0].label, t("Show Dock"));
+    assert_eq!(Menu::tray(false).entries[0].label, t("Hide Dock"));
     assert!(!hidden.entries.iter().any(|e| e.cmd == MenuCmd::AddFile));
 }
 
@@ -115,7 +116,7 @@ fn group_menu_offers_open_rename_and_dissolve() {
 fn running_file_menu_offers_toggle_and_quit() {
     let it = item(ItemKind::File, "记事本");
     let m = Menu::build(Some(&it), true, false, MenuOpts::default()).expect("应当有菜单");
-    assert_eq!(m.entries[0].label, "显示 / 最小化");
+    assert_eq!(m.entries[0].label, t("Show / minimise"));
     assert!(m.entries.iter().any(|e| e.cmd == MenuCmd::QuitApp));
 }
 
@@ -185,9 +186,14 @@ fn blank_menu_offers_new_items_when_enabled() {
     let labels: Vec<&str> = m.entries.iter().map(|e| e.label.as_str()).collect();
     assert_eq!(
         &labels[..4],
-        &["添加文件…", "添加文件夹…", "新建文件夹…", "新建应用组…"]
+        &[
+            t("Add file…"),
+            t("Add folder…"),
+            t("New folder…"),
+            t("New group…"),
+        ]
     );
-    assert!(labels.contains(&"退出 Dock"));
+    assert!(labels.contains(&t("Exit Dock")));
     // New-folder and new-group are separated: one is a disk directory,
     // the other one lives inside the Dock.
     assert!(m.entries[2].sep_after);

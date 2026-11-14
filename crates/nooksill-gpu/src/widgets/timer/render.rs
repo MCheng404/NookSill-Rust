@@ -7,8 +7,14 @@ use super::*;
 impl ToolWindow {
     /// Paints one frame. `now_ms` is the caller's time base.
     pub fn render(&mut self, gpu: &Gpu, now_ms: i64) -> Result<(), GpuError> {
-        // A countdown that reached zero stops the timer.
+        // A countdown that reached zero stops the timer. Persist that: the
+        // ini would otherwise keep the value from before the last run and the
+        // next start would resume a finished timer.
+        let was_running = self.state.running;
         self.state.tick(now_ms);
+        if was_running && !self.state.running {
+            self.dirty = true;
+        }
         // The panel height follows the todo count (too much blank space
         // looks bad).
         self.fit_height(gpu)?;

@@ -3,8 +3,7 @@
 use egui::Ui;
 use nooksill_core::config::Key;
 
-use super::options::MIN_STYLE_OPTS;
-use super::widgets::{card, combo, slider, toggle, Ctx};
+use super::widgets::{card, slider, toggle, Ctx};
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
@@ -45,32 +44,11 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         nooksill_core::i18n::t("Animation"),
         "",
         |ctx, ui| {
-            combo(
-                ctx,
-                ui,
-                Key::MIN_STYLE,
-                nooksill_core::i18n::t("Minimise animation style"),
-                MIN_STYLE_OPTS,
-            );
             toggle(
                 ctx,
                 ui,
                 Key::Bounce,
                 nooksill_core::i18n::t("Bounce when launching an app"),
-                "",
-            );
-            toggle(
-                ctx,
-                ui,
-                Key::MinAnim,
-                nooksill_core::i18n::t("Minimise-into-Dock animation"),
-                nooksill_core::i18n::t("Shrink a minimised window into its icon"),
-            );
-            toggle(
-                ctx,
-                ui,
-                Key::Preview,
-                nooksill_core::i18n::t("Preview windows on hover"),
                 "",
             );
         },

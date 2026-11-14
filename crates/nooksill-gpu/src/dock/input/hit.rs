@@ -63,6 +63,15 @@ impl Dock {
         std::mem::take(&mut self.dirty)
     }
 
+    /// Whether a relayout is pending, without consuming it.
+    ///
+    /// The main loop runs a catch-up layout before painting when a step that
+    /// changes the item list ran after the frame's own layout pass.
+    #[must_use]
+    pub const fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     /// Hit test at a physical-pixel point using last frame's geometry.
     ///
     /// `hot` can be stale when press and move arrive in the same message.

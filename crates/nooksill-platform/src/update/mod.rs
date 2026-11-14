@@ -66,23 +66,39 @@ impl fmt::Display for UpdateError {
             // The anonymous API allows 60 requests per hour; say so plainly so a
             // 403 is not read as "the repository is gone".
             Self::Net(net::NetError::Status(code @ (403 | 429))) => {
-                write!(
-                    f,
-                    "GitHub 接口限流（每小时 60 次，当前 HTTP {code}），请稍后再试"
-                )
+                f.write_str(&nooksill_core::i18n::fmt(
+                    "GitHub API rate limit (60/hour, HTTP {0}); try again later",
+                    &[code.to_string().as_str()],
+                ))
             }
-            Self::Net(e) => write!(f, "网络错误：{e}"),
-            Self::Json => write!(f, "GitHub 返回的内容无法解析"),
-            Self::Http(what) => write!(f, "{what}"),
-            Self::NoAsset => write!(f, "该版本没有可用的 exe 资产"),
-            Self::NoRelease => write!(f, "该通道还没有发布任何版本"),
-            Self::Io(e) => write!(f, "文件读写失败：{e}"),
-            Self::Checksum { expected, actual } => {
-                write!(f, "校验失败：期望 {expected}，实际 {actual}")
-            }
-            Self::AllMirrorsFailed(why) => {
-                write!(f, "所有下载源都失败：{why}")
-            }
+            Self::Net(e) => f.write_str(&nooksill_core::i18n::fmt(
+                "Network error: {0}",
+                &[e.to_string().as_str()],
+            )),
+            Self::Json => f.write_str(nooksill_core::i18n::t(
+                "The GitHub response could not be parsed",
+            )),
+            // Already translated at the call site: every `Http` payload goes
+            // through `t`/`fmt` before it is constructed.
+            Self::Http(what) => f.write_str(what),
+            Self::NoAsset => f.write_str(nooksill_core::i18n::t(
+                "This release has no downloadable exe",
+            )),
+            Self::NoRelease => f.write_str(nooksill_core::i18n::t(
+                "This channel has no published release",
+            )),
+            Self::Io(e) => f.write_str(&nooksill_core::i18n::fmt(
+                "File error: {0}",
+                &[e.to_string().as_str()],
+            )),
+            Self::Checksum { expected, actual } => f.write_str(&nooksill_core::i18n::fmt(
+                "Checksum mismatch: expected {0}, got {1}",
+                &[expected.as_str(), actual.as_str()],
+            )),
+            Self::AllMirrorsFailed(why) => f.write_str(&nooksill_core::i18n::fmt(
+                "Every download source failed: {0}",
+                &[why.as_str()],
+            )),
         }
     }
 }

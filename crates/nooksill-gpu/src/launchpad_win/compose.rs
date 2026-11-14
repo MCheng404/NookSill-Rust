@@ -6,7 +6,7 @@ use super::*;
 impl LaunchpadWindow {
     /// Opens a cell: an app launches, a folder expands.
     pub(super) fn activate(&mut self, k: usize) {
-        let idx = self.page * self.per() + k;
+        let idx = self.top_index(k);
         if !self.filtered() {
             match self.lp.top().get(idx).copied() {
                 Some(Top::App(i)) => {

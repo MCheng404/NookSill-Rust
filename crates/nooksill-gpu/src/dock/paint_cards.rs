@@ -92,9 +92,15 @@ impl Dock {
             if !it.is_sep() || it.cur < 2.0 {
                 continue;
             }
+            // The list can change before the next layout (duplicate, drop), so
+            // a slot may not exist yet; drawing it with the old geometry would
+            // index past the arrays.
+            let Some(&center) = self.geom.act_c.get(i) else {
+                continue;
+            };
             let (lx, ly, lw, lh) = layout::map_rect(
                 self.cfg.edge,
-                self.geom.act_c[i] + it.slide,
+                center + it.slide,
                 self.geom.icon_bottom - m.s * 0.88,
                 0.0,
                 m.s * 0.84,
@@ -116,8 +122,14 @@ impl Dock {
             if it.is_sep() || it.cur < 1.0 || dragged == Some(i) {
                 continue;
             }
+            // Same as the separators: an item added since the last layout has
+            // no slot yet. Its `cur` is still 0 on the frame it appears, but a
+            // later item that kept its size would reach past the arrays.
+            let Some(&slot_l) = self.geom.slot_l.get(i) else {
+                continue;
+            };
             let sz = it.cur;
-            let lx = self.geom.slot_l[i] + it.slide;
+            let lx = slot_l + it.slide;
             // Bounce moves outward along the bar thickness, so subtract from `v`.
             let bo = it.bounce_offset(self.metrics.s);
             self.paint_icon(painter, p, dark, i, it, lx, sz, bo);

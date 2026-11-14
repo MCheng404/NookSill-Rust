@@ -67,7 +67,9 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
         if !name.to_lowercase().ends_with(".lnk") {
             continue;
         }
-        let stem = name.trim_end_matches(".lnk").trim_end_matches(".LNK");
+        // Strip exactly the four extension bytes: one `trim_end_matches` per
+        // spelling leaves `Foo.Lnk` with its extension still attached.
+        let stem = link_stem(name);
         if is_blocked(stem) {
             continue;
         }
@@ -76,6 +78,14 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<AppEntry>) {
             path: path.to_string_lossy().into_owned(),
         });
     }
+}
+
+/// Strip the `.lnk` extension in any casing.
+///
+/// The caller has already checked the lowercase form, so the last four bytes
+/// are ASCII and slicing is safe.
+fn link_stem(name: &str) -> &str {
+    name.get(..name.len().saturating_sub(4)).unwrap_or(name)
 }
 
 /// The two Start Menu directories: machine (`CSIDL_COMMON_PROGRAMS`) and user
@@ -106,6 +116,16 @@ mod tests {
         assert!(!is_blocked("Visual Studio Code"));
         // Substring matching catches "helped" too; that is intended.
         assert!(is_blocked("Helper"));
+    }
+
+    #[test]
+    fn link_extension_is_stripped_in_any_casing() {
+        assert_eq!(link_stem("Steam.lnk"), "Steam");
+        assert_eq!(link_stem("Steam.LNK"), "Steam");
+        assert_eq!(link_stem("Steam.Lnk"), "Steam", "混合大小写也要去掉");
+        assert_eq!(link_stem("微信.lnk"), "微信");
+        // Degenerate input must not panic; the caller filters it out first.
+        assert_eq!(link_stem("ab"), "");
     }
 
     /// Results must be name-ordered and free of duplicates.

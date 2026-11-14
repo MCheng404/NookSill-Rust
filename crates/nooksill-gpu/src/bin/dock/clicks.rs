@@ -21,6 +21,8 @@ impl App {
             self.ppp,
             dark,
         )?;
+        // The window is reused across opens; follow a monitor or DPI change.
+        lw.place_on_target(&self.gpu, self.ppp)?;
         // Grid size follows the config on every open; settings may have changed.
         lw.set_grid(
             self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
@@ -119,8 +121,12 @@ impl App {
         // in Task Manager.
         // Enumerated on demand: the menu opens on a click, and one pass is a
         // few milliseconds. Cheaper than mirroring the scanner's state.
+        // `running_windows()` is keyed by the resolved executable, not the
+        // configured path: a `.lnk` item stores the shortcut in `path` and the
+        // exe in `target`. `running_key` is the same mapping the scanner and
+        // the launcher use, so the window list must go through it too.
         let windows = target
-            .map(|it| it.path.to_lowercase())
+            .and_then(running::running_key)
             .and_then(|exe| nooksill_platform::app_window::running_windows().remove(&exe))
             .unwrap_or_default();
         let opts = nooksill_gpu::menu::MenuOpts {
@@ -217,7 +223,7 @@ impl App {
                     &self.gpu,
                     &mut self.settings_slot,
                     &self.paths,
-                    settings_win::effective_ppp(&self.dock.cfg),
+                    settings_win::effective_ppp(&self.dock.cfg, self.dpi),
                 )?;
                 // Re-read every time; the user may have changed it in Task Manager.
                 sw.state.auto_start = theme::get_autostart();
