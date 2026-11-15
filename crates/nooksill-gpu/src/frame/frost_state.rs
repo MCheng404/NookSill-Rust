@@ -12,15 +12,16 @@ impl FrameRenderer {
         w: u32,
         h: u32,
         spec: crate::frost::Spec,
-        ppp: f32,
+        _ppp: f32,
         cols: std::ops::Range<u32>,
     ) -> Option<TextureView> {
         if self.blur.is_none() {
             self.blur = crate::shaders::frost::GpuBlur::new(&self.device, &self.queue);
         }
         let blur = self.blur.as_mut()?;
-        let scale = f32::from(crate::frost::CAPTURE_PCT) / 100.0;
-        blur.blur_range(bits, w, h, spec.radius, spec.corner_pt * ppp * scale, cols)?;
+        // Corner 0: the renderer clips the rounded outline in screen space, so
+        // the texture must stay a full square (see `frost::round`).
+        blur.blur_range(bits, w, h, spec.radius, 0.0, cols)?;
         blur.view().cloned()
     }
 

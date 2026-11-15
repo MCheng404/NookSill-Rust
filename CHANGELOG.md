@@ -19,6 +19,17 @@
 
 验证：`cargo check --workspace --all-targets`、`cargo test --workspace`（660 项通过 / 22 项忽略）、`./scripts/build.sh --gate`。
 
+### 磨砂圆角改为几何裁剪（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 四角精度 | 圆角从 25% 抓屏纹理的 alpha 移到 UI 层几何网格：新增 `frost::round`（`outline` / `fan` / `image`），`FrameRenderer` 记录 `frost_corner`，整窗 sheet 与柔光 mesh 共用同一轮廓 | 检索：低分辨率纹理圆角放大必阶梯，SDF/几何裁剪分辨率无关（Unity 纹理 vs SDF、Figma 级 SDF、LibGDX 方法对比）；18 pt 圆角在 25% 抓屏下只有约 5.6 texel |
+| 纹理方形 | `blur_frost` 的 corner 传 0，`compose` 不再 `apply_round_alpha`；`apply_round_alpha` / `put_alpha` 降为 `#[cfg(test)]`，继续当 WGSL `coverage` 的对照基准 | 避免纹理 alpha 与几何轮廓双重裁剪，圆角只由一层负责 |
+| 复用 | `rounded_outline` / `rounded_fan` 从 `dock::chrome` 提取到 `frost::round`，渐变底盘与磨砂共用 | 两份圆角实现会漂移 |
+| 验收 | 新增 `#[ignore]` 真机测试：渲染整窗后四角 alpha = 0、中心仍有像素 | 断言几何裁剪确实生效，而不只是 mesh 结构正确 |
+
+文档：`DECISIONS.md` ADR-097、`ARCHITECTURE.md` 不变式 37。
+
 ### 返回按钮可见性、Esc 返回与文案不可选（2026-11-15）
 
 | 项 | 改了什么 | 依据 / 验证 |

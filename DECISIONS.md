@@ -1515,3 +1515,40 @@
 - 一级界面的 Esc 是空操作，没有「关闭窗口」的键盘路径（Alt+F4 仍在系统层）。
 - 气泡（tip）的 Esc 关闭尚未实现；当前 Esc 在气泡打开时被条件挡住，不会误返回，
   也不会关气泡，需要再点一次。
+
+---
+
+## ADR-097 · 磨砂圆角改为几何裁剪，纹理保持方形
+
+**决定**：
+- 新增 `frost::round`：`outline`（四段圆弧）、`fan`（三角扇 + 羽化环）、`image`
+  （按窗口分数取 UV 的圆角贴图）。`dock::chrome` 原先私有的 `rounded_outline` /
+  `rounded_fan` 迁移到这里，渐变底盘与磨砂共用同一份实现。
+- `FrameRenderer` 记录 `frost_corner`（来自 `Spec.corner_pt`）。整窗磨砂图与柔光
+  mesh 都用同一个圆角轮廓裁剪；`corner <= 0.5` 时退回普通方图。
+- 卷积不再烘焙圆角：`blur_frost` 传 `corner = 0`，`compose` 不再调用
+  `apply_round_alpha`，25% 纹理保持方形全不透明。`apply_round_alpha` 与
+  `put_alpha` 降为 `#[cfg(test)]`，继续作为 WGSL `coverage` 的对照基准。
+
+**依据（检索）**：
+- 低分辨率纹理上的圆角 alpha 一旦放大就会阶梯化。Unity 圆角实现对比明确区分
+  「纹理拉伸（放大失真）」与「SDF（放大后仍清晰）」；CSS 圆角锯齿的讨论也把
+  根因归到低分辨率下的像素化渲染与抗锯齿不足。
+- SDF / 几何裁剪在屏幕空间按像素计算距离，天然分辨率无关，并用
+  `fwidth` + `smoothstep` 得到 1 px 抗锯齿（Figma 级 SDF 架构文档、FURY 圆角
+  组件的选型都得出同一结论）。
+- 纹理 alpha 蒙版在缩放时会糊或阶梯，SDF 优于暴力超采样（LibGDX 的方法对比表：
+  SDF 对可缩放边缘最佳，超采样成本高且不锐）。
+- 我们的数字：`Blur` 附近 `corner_pt = 18`，25% 抓屏后半径只有约 5.6 texel，
+  放大 4 倍后这条边由 5 个样本决定；几何轮廓在屏幕空间按 1 px 羽化，不受该
+  分辨率约束。
+
+**代价**：
+- `Spec.corner_pt` 的语义从「纹理 alpha 半径」变成「UI 几何半径」，`blur_frost`
+  忽略它；CPU 侧 `apply_round_alpha` 只剩测试用途，生产路径不再走圆角 coverage。
+- 圆角正确性依赖调用方把 `Spec.corner_pt` 传给 `FrameRenderer`；`Spec::apply`
+  已统一处理，绕过它直接 `set_frost` 的路径需要自己调 `set_frost_corner`。
+- 柔光 mesh 必须共用轮廓，否则会重画四角（已处理）；忘掉这一条会让四角色块
+  以另一种形式回来。
+- WGSL `coverage` 在 `corner = 0` 时恒为 1，仍有几条多余指令，可在下一轮连同
+  `apply_round_alpha` 一起删除；本轮保留是为了不破坏 CPU/GPU 逐通道对照。

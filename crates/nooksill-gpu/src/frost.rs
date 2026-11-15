@@ -126,6 +126,8 @@ impl Spec {
             renderer.clear_frost();
             return;
         };
+        // The sheet corner is geometry in the renderer; the texture stays square.
+        renderer.set_frost_corner(self.corner_pt);
         // One low-frequency field per capture; live frames refresh it too.
         renderer.set_frost_glow(glow::Field::sample(bits, w as usize, h as usize));
         if renderer.set_frost_gpu(bits, w, h, self, ppp) {
@@ -161,14 +163,13 @@ mod capture;
 pub mod glow;
 mod live;
 mod paint;
+pub mod round;
 
 pub use self::capture::{color_field, field_delta, ColorField, GRID_H, GRID_W};
 pub use self::live::{FrostFrame, Live};
-#[cfg(test)]
-pub(crate) use self::paint::apply_dither;
-#[cfg(test)]
-pub(crate) use self::paint::apply_round_alpha;
 pub(crate) use self::paint::compose;
+#[cfg(test)]
+pub(crate) use self::paint::{apply_dither, apply_round_alpha};
 pub use self::paint::{blur_rgba, panel_bg, rounded_coverage};
 
 #[cfg(test)]

@@ -39,6 +39,14 @@ impl FrameRenderer {
         self.glow = Some(field);
     }
 
+    /// Corner radius of the whole-window sheet, in logical points.
+    ///
+    /// The texture stays square: the corner is geometry, so it does not inherit
+    /// the 25% capture resolution.
+    pub fn set_frost_corner(&mut self, corner_pt: f32) {
+        self.frost_corner = corner_pt.max(0.0);
+    }
+
     /// The background layer as a [`crate::frost::Backdrop`].
     ///
     /// Windows that paint their background in pieces (the dock bar and its
@@ -165,25 +173,45 @@ impl FrameRenderer {
         let frost_whole = self.frost_whole;
         // The dock keeps the sheet off; a full-window glow mesh would also
         // paint its transparent hover and reflection margins.
+        let corner = self.frost_corner;
         let glow = if frost_whole { self.glow } else { None };
         let glow_strength = crate::frost::glow_strength();
         let full = self.ctx.run_ui(raw, |ui| {
             if let (Some(id), true) = (frost, frost_whole) {
                 let rect = ui.max_rect();
-                ui.painter().image(
-                    id,
-                    rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
+                let win = [rect.width(), rect.height()];
+                if corner > 0.5 {
+                    // Geometry, not texture alpha: the blur is captured at 25%,
+                    // so an alpha mask baked there is a few texels and turns
+                    // into a staircase once upscaled.
+                    ui.painter()
+                        .add(crate::frost::round::image(rect, corner, id, win));
+                } else {
+                    ui.painter().image(
+                        id,
+                        rect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                }
                 if glow_strength > 0.0 {
                     if let Some(field) = glow {
-                        ui.painter()
-                            .add(egui::epaint::Shape::mesh(crate::frost::glow::mesh(
-                                rect,
-                                field,
-                                glow_strength,
-                            )));
+                        // Clip the glow with the same outline; a square mesh
+                        // would repaint the transparent corners.
+                        let mesh = if corner > 0.5 {
+                            let points = crate::frost::round::outline(rect, corner);
+                            crate::frost::round::fan(rect, &points, |p| {
+                                let u = (p.x - rect.left()) / win[0].max(1.0);
+                                let v = (p.y - rect.top()) / win[1].max(1.0);
+                                (
+                                    egui::epaint::WHITE_UV,
+                                    crate::frost::glow::overlay(field.at(u, v), glow_strength),
+                                )
+                            })
+                        } else {
+                            crate::frost::glow::mesh(rect, field, glow_strength)
+                        };
+                        ui.painter().add(egui::epaint::Shape::mesh(mesh));
                     }
                 }
             }

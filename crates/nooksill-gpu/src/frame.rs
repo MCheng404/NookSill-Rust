@@ -79,6 +79,8 @@ pub struct FrameRenderer {
     reflection: Option<Reflection>,
     /// Frost background layer, drawn below the UI (see `crate::frost`).
     frost: Option<FrostLayer>,
+    /// Sheet corner radius in logical points; 0 draws a square rect.
+    frost_corner: f32,
     /// Low-frequency luminance field of the last capture, for the glow mesh.
     glow: Option<crate::frost::glow::Field>,
     /// Whether the background layer covers the whole window on every frame.

@@ -66,6 +66,7 @@ impl FrameRenderer {
             smoke: None,
             reflection: None,
             frost: None,
+            frost_corner: 0.0,
             glow: None,
             frost_whole: true,
             live: None,

@@ -203,6 +203,7 @@ fn dither_offset(x: u32, y: u32) -> f32 {
 /// Only the four corners need an SDF: outside the corner radius the coverage
 /// is always 255. Running the SDF over the whole image would be wasted work
 /// on the live path, which runs ten times per second.
+#[cfg(test)]
 pub(crate) fn apply_round_alpha(rgba: &mut [u8], w: usize, h: usize, corner: f32) {
     if corner <= 0.0 {
         return; // `blur_rgba` already wrote alpha 255
@@ -240,6 +241,7 @@ pub(crate) fn apply_round_alpha(rgba: &mut [u8], w: usize, h: usize, corner: f32
 /// egui's `ColorImage` reads the result as premultiplied: with alpha 0
 /// outside the corner, leftover bright RGB would bleed into the corner
 /// during linear sampling.
+#[cfg(test)]
 pub(super) fn put_alpha(rgba: &mut [u8], off: usize, a: u8) {
     rgba[off + 3] = a;
     if a < 255 {
@@ -252,7 +254,7 @@ pub(super) fn put_alpha(rgba: &mut [u8], off: usize, a: u8) {
 
 /// CPU fallback: captured bytes -> blur -> rounded alpha -> egui image.
 /// Also the golden reference for the GPU compute path in tests.
-pub(crate) fn compose(bits: &[u8], w: u32, h: u32, spec: Spec, ppp: f32) -> Option<ColorImage> {
+pub(crate) fn compose(bits: &[u8], w: u32, h: u32, spec: Spec, _ppp: f32) -> Option<ColorImage> {
     let (w, h) = (w as usize, h as usize);
     let need = w.checked_mul(h)?.checked_mul(4)?;
     if w == 0 || h == 0 || bits.len() < need {
@@ -262,11 +264,9 @@ pub(crate) fn compose(bits: &[u8], w: u32, h: u32, spec: Spec, ppp: f32) -> Opti
     if rgba.is_empty() {
         return None;
     }
-    // Dither before the rounded alpha: the corner mask then premultiplies the
-    // noisy colour to zero, so the transparent corners stay clean.
     apply_dither(&mut rgba, w, h);
-    let scale = f32::from(CAPTURE_PCT) / 100.0;
-    apply_round_alpha(&mut rgba, w, h, spec.corner_pt * ppp * scale);
+    // The corner is clipped as geometry by the renderer; this texture is a full
+    // square so the rounded alpha never inherits the 25% capture resolution.
     Some(ColorImage::from_rgba_premultiplied([w, h], &rgba))
 }
 
@@ -306,24 +306,23 @@ mod tests {
     }
 
     #[test]
-    fn compose_corners_are_transparent_and_premultiplied() {
+    fn compose_keeps_the_texture_square_for_geometry_corners() {
         let (w, h) = (120usize, 80usize);
         let mut bits = vec![0u8; w * h * 4];
         for px in bits.as_chunks_mut::<4>().0.iter_mut() {
             px.copy_from_slice(&[90, 120, 200, 255]);
         }
+        // `corner_pt` is a renderer-side radius now; the texture ignores it.
         let spec = Spec {
             radius: 4,
             corner_pt: 18.0,
         };
         let img = compose(&bits, w as u32, h as u32, spec, 1.0).expect("compose");
         for idx in [0, w - 1, (h - 1) * w, h * w - 1] {
-            let p = img.pixels[idx];
-            assert_eq!(p.a(), 0, "corner {idx} must be transparent");
             assert_eq!(
-                [p.r(), p.g(), p.b()],
-                [0, 0, 0],
-                "corner {idx} must be premultiplied"
+                img.pixels[idx].a(),
+                255,
+                "corner {idx} must stay opaque; the renderer clips the round outline"
             );
         }
         assert_eq!(img.pixels[(h / 2) * w + w / 2].a(), 255);

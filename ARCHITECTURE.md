@@ -464,6 +464,11 @@ async 运行时带来的调度开销与栈占用都不划算。
     `frost_spec` 不再接收 per-surface key；`PanelBg` / `UiFrost` / `LpFrost` /
     `MenuFrost` / `GroupFrost` 是兼容键，`WidgetBlur` 在启动时并入 `Blur`。
 
+37. **磨砂圆角是几何，不是纹理 alpha**：25% 抓屏纹理必须保持方形全不透明，
+    圆角由 `frost::round::{outline, fan, image}` 在屏幕空间裁剪，柔光 mesh 用
+    同一轮廓。烘焙进低分辨率纹理的圆角放大后必然阶梯；改圆角只改
+    `Spec.corner_pt` 的记录与绘制，不动卷积（ADR-097）。
+
 ## 八、与 C 版的模块映射
 
 | 原版（minidock.c） | Rust | 状态 |
