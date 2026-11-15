@@ -36,6 +36,8 @@ struct Target {
     w: u32,
     h: u32,
     radius: u32,
+    /// Corner radius in capture texels; part of the geometry that bakes alpha.
+    corner: f32,
     params: wgpu::Buffer,
     weights: wgpu::Buffer,
     src: wgpu::Buffer,
@@ -186,7 +188,7 @@ impl GpuBlur {
         }
         let r = clamp_radius(radius);
         let weights = normalized_gaussian_weights(radius, sigma_for_radius(radius));
-        let rebuilt = self.ensure(w, h, r)?;
+        let rebuilt = self.ensure(w, h, r, corner_px)?;
         let (x0, x1) = if rebuilt {
             (0, w)
         } else {
@@ -239,9 +241,11 @@ impl GpuBlur {
 
     /// Returns `Some(true)` when the target was just rebuilt, so this frame
     /// must run the full width.
-    fn ensure(&mut self, w: u32, h: u32, radius: u32) -> Option<bool> {
+    fn ensure(&mut self, w: u32, h: u32, radius: u32, corner: f32) -> Option<bool> {
         if let Some(t) = &self.target {
-            if t.w == w && t.h == h && t.radius == radius {
+            // A changed corner must rebuild too: dirty-column updates would
+            // leave the old rounded alpha in the columns they do not touch.
+            if t.w == w && t.h == h && t.radius == radius && (t.corner - corner).abs() < 0.001 {
                 return Some(false);
             }
         }
@@ -323,6 +327,7 @@ impl GpuBlur {
             w,
             h,
             radius,
+            corner,
             params,
             weights,
             src,
@@ -346,7 +351,7 @@ impl GpuBlur {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frost::{apply_round_alpha, blur_rgba};
+    use crate::frost::{apply_dither, apply_round_alpha, blur_rgba};
     use crate::gpu::Gpu;
 
     /// Builds a deterministic synthetic image with sharp edges and gradients.
@@ -447,7 +452,9 @@ mod tests {
         for (a, b) in gpu_pixels.iter().zip(&cpu_pixels) {
             worst = worst.max((i32::from(*a) - i32::from(*b)).abs());
         }
-        assert!(worst <= 1, "worst pixel delta={worst}");
+        // 1 step from f32 accumulation order plus 1 from the dither landing on
+        // different sides of the quantiser; both paths apply the same dither.
+        assert!(worst <= 2, "worst pixel delta={worst}");
     }
 
     /// A partial recompute must match a full one pixel for pixel, and pixels
@@ -517,6 +524,9 @@ mod tests {
         let src = sample(w as usize, h as usize);
         for (radius, corner) in [(1u32, 0.0f32), (6, 0.0), (12, 7.0)] {
             let mut cpu = blur_rgba(&src, w as usize, h as usize, radius);
+            // Same dither as the shader; without it the comparison would see
+            // up to one step of legitimate difference.
+            apply_dither(&mut cpu, w as usize, h as usize);
             apply_round_alpha(&mut cpu, w as usize, h as usize, corner);
             blur.blur(&src, w, h, radius, corner).expect("dispatch");
             let got = blur.readback().expect("readback");

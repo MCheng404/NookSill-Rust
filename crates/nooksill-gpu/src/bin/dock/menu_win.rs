@@ -152,20 +152,16 @@ pub(super) type MenuSlot = Option<(HWND, FrameRenderer)>;
 
 /// Return the frost config for one panel, if enabled.
 /// `frost::blur_rgba` clamps the radius again (1..12).
-pub(super) fn frost_spec(cfg: &Config, key: Key, corner_pt: f32) -> Option<FrostSpec> {
-    if cfg.get_i32(key) == 0 {
+/// One switch for every frosted surface: the bar material decides.
+///
+/// The old per-surface switches (`UiFrost`, `LpFrost`, `MenuFrost`,
+/// `GroupFrost`) and the `WidgetBlur` override are no longer read; the config
+/// migration merges a custom `WidgetBlur` into `Blur`.
+pub(super) fn frost_spec(cfg: &Config, corner_pt: f32) -> Option<FrostSpec> {
+    if cfg.get_i32(Key::BgMode) != 2 {
         return None;
     }
-    // Widget popups may override the global blur radius; 0 inherits `Blur`.
-    // Every `frost_spec` caller (menu, launchpad, settings, widget panels)
-    // picks this up without changes.
-    let blur = cfg.get_i32(Key::WIDGET_BLUR);
-    let radius = if blur > 0 {
-        blur
-    } else {
-        cfg.get_i32(Key::Blur)
-    }
-    .max(1) as u32;
+    let radius = cfg.get_i32(Key::Blur).clamp(1, 14) as u32;
     Some(FrostSpec { radius, corner_pt })
 }
 

@@ -1,6 +1,6 @@
 //! Calendar popup, opened from the clock card on the bar.
 //!
-//! 392 x 556 logical px: year/month paging plus Today on top, a Monday-first
+//! 420 x 568 logical px: year/month paging plus Today on top, a Monday-first
 //! 6x7 grid with a sub-label per cell (holiday, solar term, lunar day), and the
 //! selected day's details at the bottom.
 //!
@@ -34,9 +34,10 @@ use crate::gpu::{Gpu, GpuError};
 /// Window class name.
 pub const CLASS_NAME: &str = "NookSillCalendar";
 
-/// Panel logical size: 392 wide, height shrinks to 480.
-const PANEL_W: f32 = 392.0;
-const PANEL_H: f32 = 480.0;
+/// Panel logical size; the extra height keeps the 6x7 grid and the four
+/// detail lines from crowding each other.
+const PANEL_W: f32 = 420.0;
+const PANEL_H: f32 = 568.0;
 
 /// Window margin in logical px.
 const PM: f32 = 8.0;

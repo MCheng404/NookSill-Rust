@@ -2,8 +2,6 @@
 
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
-use nooksill_core::config::Key;
-
 use super::about_art::MARK;
 use super::widgets::{card, Ctx};
 use super::Command;
@@ -23,8 +21,8 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         ui,
         "NookSill",
         nooksill_core::i18n::t("A desktop Dock for Windows."),
-        |ctx, ui| {
-            version_row(ctx, ui);
+        |_ctx, ui| {
+            version_row(ui);
             value_row(
                 ui,
                 nooksill_core::i18n::t("Build"),
@@ -92,51 +90,15 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             );
         },
     );
-
-    // Hidden entry: five version clicks unlock it, closing the window drops it.
-    if ctx.state.advanced {
-        card(
-            ctx,
-            ui,
-            nooksill_core::i18n::t("Advanced"),
-            nooksill_core::i18n::t(
-                "Network, updates and experimental rendering; changes apply immediately.",
-            ),
-            |ctx, ui| {
-                super::widgets::toggle(
-                    ctx,
-                    ui,
-                    Key::NET_SECURE_DNS,
-                    nooksill_core::i18n::t("Use secure DNS"),
-                    nooksill_core::i18n::t("Check system DNS with DoH; skip direct connections when poisoned and use mirrors"),
-                );
-                super::widgets::toggle(
-                    ctx,
-                    ui,
-                    Key::NET_MIRROR_ALL,
-                    nooksill_core::i18n::t("Benchmark all mirrors before choosing"),
-                    nooksill_core::i18n::t("Off: download as soon as one mirror is fast enough"),
-                );
-                super::widgets::toggle(
-                    ctx,
-                    ui,
-                    Key::FROST_ILLUSION,
-                    nooksill_core::i18n::t("Experimental: lightweight live frost"),
-                    nooksill_core::i18n::t("A colour-reprojection blur: one real Gaussian keeps the structure, then a low-frequency colour field tracks the desktop; cuts capture and convolution cost. Off returns to the original Gaussian."),
-                );
-            },
-        );
-    }
 }
 
-fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
+fn version_row(ui: &mut Ui) {
     let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 22.0), Sense::hover());
     // Hand-painted widgets still need AccessKit info, for screen readers
     // and kittest.
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, true, nooksill_core::i18n::t("Version"))
+        egui::WidgetInfo::labeled(egui::Role::Label, true, nooksill_core::i18n::t("Version"))
     });
     let painter = ui.painter();
     painter.text(
@@ -153,12 +115,6 @@ fn version_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         FontId::monospace(11.5),
         ui.visuals().weak_text_color(),
     );
-    if resp.clicked() {
-        ctx.state.version_clicks = ctx.state.version_clicks.saturating_add(1);
-        if ctx.state.version_clicks >= 5 {
-            ctx.state.advanced = true;
-        }
-    }
     ui.add_space(7.0);
 }
 

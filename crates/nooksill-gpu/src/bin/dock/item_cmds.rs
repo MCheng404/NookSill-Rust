@@ -230,7 +230,7 @@ impl App {
             dark,
             self.ppp,
             self.start,
-            frost_spec(&self.dock.cfg, Key::MENU_FROST, nooksill_gpu::menu::RADIUS),
+            frost_spec(&self.dock.cfg, nooksill_gpu::menu::RADIUS),
         )
         .unwrap_or_else(|e| {
             eprintln!("托盘菜单显示失败：{e}");
@@ -253,7 +253,7 @@ impl App {
                     settings_win::effective_ppp(&self.dock.cfg, self.dpi),
                 )?;
                 sw.state.auto_start = theme::get_autostart();
-                sw.show(frost_spec(&self.dock.cfg, Key::UI_FROST, 20.0));
+                sw.show(frost_spec(&self.dock.cfg, 20.0));
             }
             Some(MenuCmd::Launchpad) => self.open_launchpad()?,
             Some(MenuCmd::ExitDock) => {

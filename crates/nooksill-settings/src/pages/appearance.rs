@@ -82,13 +82,66 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         ctx,
         ui,
         nooksill_core::i18n::t("Background"),
-        nooksill_core::i18n::t("The bar uses a gradient over a translucent plate. Frost on the three overlays (Launchpad, Settings, context menu) has its own switches and blurs a real desktop capture."),
+        nooksill_core::i18n::t(
+            "One material, one blur and one glow for the bar and every frosted popup.",
+        ),
         |ctx, ui| {
-            combo(ctx, ui, Key::Theme, nooksill_core::i18n::t("Dock theme"), THEME_OPTS);
-            combo(ctx, ui, Key::BgMode, nooksill_core::i18n::t("Background material"), BG_OPTS);
-            slider(ctx, ui, Key::Opacity, nooksill_core::i18n::t("Opacity"), " %");
-            slider(ctx, ui, Key::Blur, nooksill_core::i18n::t("Frost blur strength"), "");
-            toggle(ctx, ui, Key::Border, nooksill_core::i18n::t("Show bar border"), "");
+            combo(
+                ctx,
+                ui,
+                Key::Theme,
+                nooksill_core::i18n::t("Dock theme"),
+                THEME_OPTS,
+            );
+            combo(
+                ctx,
+                ui,
+                Key::BgMode,
+                nooksill_core::i18n::t("Background material"),
+                BG_OPTS,
+            );
+            slider(
+                ctx,
+                ui,
+                Key::Opacity,
+                nooksill_core::i18n::t("Opacity"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::Blur,
+                nooksill_core::i18n::t("Frost blur strength"),
+                "",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::GLOW_STRENGTH,
+                nooksill_core::i18n::t("Frost glow"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::PANEL_OPACITY,
+                nooksill_core::i18n::t("Panel opacity"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::PANEL_OVERLAY,
+                nooksill_core::i18n::t("Panel overlay"),
+                " %",
+            );
+            toggle(
+                ctx,
+                ui,
+                Key::Border,
+                nooksill_core::i18n::t("Show bar border"),
+                "",
+            );
             toggle(
                 ctx,
                 ui,
@@ -177,14 +230,31 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         ctx,
         ui,
         nooksill_core::i18n::t("Widget appearance"),
-        nooksill_core::i18n::t("0 follows the bar or global frost. Card plate, radius, strip gap and overlay blur are independent"),
+        nooksill_core::i18n::t(
+            "0 follows the bar. Card plate, radius and strip gap are independent.",
+        ),
         |ctx, ui| {
-            slider(ctx, ui, Key::WIDGET_OPACITY, nooksill_core::i18n::t("Card opacity"), " %");
-            slider(ctx, ui, Key::WIDGET_RADIUS, nooksill_core::i18n::t("Card corner radius"), " px");
-            slider(ctx, ui, Key::WIDGET_GAP, nooksill_core::i18n::t("Strip member gap"), " px");
-            slider(ctx, ui, Key::WIDGET_BLUR, nooksill_core::i18n::t("Overlay blur radius"), " px");
-            slider(ctx, ui, Key::PANEL_OPACITY, nooksill_core::i18n::t("Panel opacity"), " %");
-            slider(ctx, ui, Key::PANEL_OVERLAY, nooksill_core::i18n::t("Panel overlay"), " %");
+            slider(
+                ctx,
+                ui,
+                Key::WIDGET_OPACITY,
+                nooksill_core::i18n::t("Card opacity"),
+                " %",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::WIDGET_RADIUS,
+                nooksill_core::i18n::t("Card corner radius"),
+                " px",
+            );
+            slider(
+                ctx,
+                ui,
+                Key::WIDGET_GAP,
+                nooksill_core::i18n::t("Strip member gap"),
+                " px",
+            );
         },
     );
 }

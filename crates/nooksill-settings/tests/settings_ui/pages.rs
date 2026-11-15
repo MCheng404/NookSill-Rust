@@ -23,8 +23,9 @@ fn 页面切换后能看到该页控件() {
     // Only the appearance page has this slider, so it proves the switch.
     assert_eq!(h.query_all_by_label("图标大小").count(), 0);
 
-    // Appearance is now the first tab of the Dock group.
-    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
+    // Appearance is the first tab of the Look group.
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
     h.run();
     assert_eq!(h.state().ui.page, Page::Appearance);
     // Both the slider and its label match, hence the `all` query.
@@ -35,18 +36,15 @@ fn 页面切换后能看到该页控件() {
 }
 
 #[test]
-fn 磨砂开关映射到背景材质() {
+fn 性能页不再重复磨砂开关() {
     let mut h = new_harness();
-    h.get_by_label("性能").click();
+    // Performance now lives under the System group, not a primary row.
+    h.state_mut().ui.page = Page::Performance;
     h.run();
+    // The material is chosen once, on the appearance page; a second switch
+    // here used to write the same `BgMode` key and could disagree with it.
+    assert_eq!(h.query_all_by_label("磨砂玻璃背景").count(), 0);
     assert_eq!(h.state().cfg.bg_mode, BgMode::Frost);
-
-    h.get_by_label("磨砂玻璃背景").click();
-    h.run();
-
-    // Off means gradient, not a separate boolean key: the switch is derived
-    // from `bg_mode`, which a refactor could easily break.
-    assert_eq!(h.state().cfg.bg_mode, BgMode::Gradient);
 }
 
 #[test]
@@ -106,20 +104,28 @@ fn 速记入口产出命令() {
 
 /// All widget sliders render on the appearance page, using the shared card.
 #[test]
-fn 外观页小组件参数四条滑条() {
+fn 外观页参数集中在磨砂与卡片两张卡() {
     let mut h = new_harness();
     h.state_mut().ui.page = Page::Appearance;
     h.run();
+    // One frost card owns material, blur, glow and the popup tint; the card
+    // card only keeps the plate geometry. No control may appear twice.
     for label in [
         "卡片不透明度",
         "卡片圆角",
         "条带成员间距",
-        "弹出层模糊半径",
+        "磨砂模糊强度",
+        "磨砂柔光",
         "弹出面板不透明度",
         "弹出面板叠加层",
     ] {
         assert_eq!(h.query_all_by_label(label).count(), 1, "缺滑条：{label}");
     }
+    assert_eq!(
+        h.query_all_by_label("背景材质").count(),
+        1,
+        "材质下拉是唯一的磨砂入口"
+    );
     assert_eq!(
         h.state().cfg.get_i32(Key::WIDGET_OPACITY),
         0,
@@ -173,4 +179,17 @@ fn 热键输入框按配置初始化() {
     assert_eq!(h.state().ui.hotkey_input, "Ctrl+Alt+D");
     assert!(!h.state().ui.hotkey_error);
     assert_eq!(h.query_all_by_label("切换快捷键").count(), 1);
+}
+
+#[test]
+fn 托盘组件开关写回配置() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extras;
+    h.run();
+    assert_eq!(h.state().cfg.get_i32(Key::TRAY_W), 1, "默认显示");
+
+    h.get_by_label("系统托盘组件").click();
+    h.run();
+
+    assert_eq!(h.state().cfg.get_i32(Key::TRAY_W), 0, "点击后应当隐藏");
 }

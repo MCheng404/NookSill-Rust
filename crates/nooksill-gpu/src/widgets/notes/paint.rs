@@ -33,9 +33,9 @@ pub(super) fn paint(
     let rect = ui.max_rect();
     // Same base fill, overlay and text tiers as the other four panels.
     let style = PanelStyle::current(dark, frosted);
-    let (bg, ink, faint, border, field) = palette(&style);
+    let (ink, faint, border, field) = palette(&style);
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    style.paint_base(painter, rect);
     painter.rect_filled(
         rect,
         CornerRadius::same(PanelStyle::R_PANEL),
@@ -249,16 +249,9 @@ pub fn paint_preview(
     );
 }
 
-fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32, Color32) {
-    // Keeps five semantic names so the drawing code below stays unchanged;
-    // all values come from the shared style.
-    (
-        style.bg(),
-        style.ink(),
-        style.ink_sub(),
-        style.border(),
-        style.card(),
-    )
+fn palette(style: &PanelStyle) -> (Color32, Color32, Color32, Color32) {
+    // The base fill comes from `paint_base`; these four are the text tiers.
+    (style.ink(), style.ink_sub(), style.border(), style.card())
 }
 
 #[cfg(test)]

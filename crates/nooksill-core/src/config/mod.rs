@@ -25,6 +25,8 @@ mod key_query;
 mod keys;
 mod migrate;
 
+pub mod panel;
+
 pub use keys::{Key, NUMERIC_KEYS};
 
 /// Dock theme. `0 = dark`, `1 = light`, `2 = follow system`.

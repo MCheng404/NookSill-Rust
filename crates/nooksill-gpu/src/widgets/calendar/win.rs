@@ -49,20 +49,6 @@ pub(super) fn physical_size(ppp: f32) -> (i32, i32) {
     )
 }
 
-/// Places the popup next to the clock card, then clamps it to the monitor.
-///
-/// `anchor` and the result are physical pixels.
-pub(super) fn place(
-    pw: i32,
-    ph: i32,
-    anchor: (f32, f32, f32, f32),
-    edge: Edge,
-    ppp: f32,
-) -> (i32, i32) {
-    let mon = super::super::anchor::monitor_of(anchor);
-    super::super::anchor::place(pw, ph, anchor, edge, ppp, mon)
-}
-
 /// Geometry lives in [`crate::widgets::anchor`]; the placement tests in
 /// `calendar.rs` reach it by this name.
 #[cfg(test)]

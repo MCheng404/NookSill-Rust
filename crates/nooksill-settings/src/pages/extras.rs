@@ -98,6 +98,13 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             toggle(
                 ctx,
                 ui,
+                Key::TRAY_W,
+                nooksill_core::i18n::t("System tray widget"),
+                nooksill_core::i18n::t("Show or hide the tray card on the widget strip"),
+            );
+            toggle(
+                ctx,
+                ui,
                 Key::PANEL_DISMISS,
                 nooksill_core::i18n::t("Dismiss by clicking outside"),
                 nooksill_core::i18n::t("Applies to Calendar, Control Center, Resource Monitor and Timer; off means clicking the card again"),
@@ -190,4 +197,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             );
         },
     );
+
+    super::panel_setup::page(ctx, ui);
 }

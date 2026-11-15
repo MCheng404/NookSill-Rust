@@ -173,27 +173,27 @@ impl NoteWindow {
 
     /// Refreshes the content and shows the panel. `anchor` is the screen rect
     /// (physical px) of the notes icon.
-    pub fn show(&mut self, book: &NoteBook, anchor: (i32, i32, i32, i32)) {
+    pub fn show(
+        &mut self,
+        book: &NoteBook,
+        anchor: (i32, i32, i32, i32),
+        edge: nooksill_core::config::Edge,
+    ) {
         self.notes = book.notes.clone();
         self.clamp_page();
         self.hover = None;
         self.action = None;
         let pw = (W * self.ppp).round() as i32;
         let ph = (H * self.ppp).round() as i32;
-        let (al, at, ar, _) = anchor;
-        let cx = (al + ar) / 2;
-        let work = nooksill_platform::display::work_area_at(cx, at);
-        let mut x = cx - pw / 2;
-        if x < work.left {
-            x = work.left;
-        }
-        if x + pw > work.right {
-            x = work.right - pw;
-        }
-        let mut y = at - ph - 8;
-        if y < work.top {
-            y = work.top;
-        }
+        let (al, at, ar, ab) = anchor;
+        let card = (al as f32, at as f32, ar as f32, ab as f32);
+        let (x, y) = crate::widgets::framework::place_panel(
+            crate::widgets::framework::PanelKind::Notes,
+            (pw, ph),
+            Some(card),
+            edge,
+            self.ppp,
+        );
         self.pos = (x, y);
         unsafe {
             let _ = SetWindowPos(
@@ -205,6 +205,9 @@ impl NoteWindow {
                 ph,
                 SWP_NOACTIVATE | SWP_NOZORDER,
             );
+        }
+        crate::widgets::framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
+        unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
         }
         self.visible = true;
@@ -244,6 +247,7 @@ impl NoteWindow {
         }
         self.visible = false;
         self.hover = None;
+        crate::widgets::framework::release_backdrop(&mut self.renderer, self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
@@ -255,8 +259,10 @@ impl NoteWindow {
     }
 
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_repaint.is_some_and(|t| t <= Instant::now())
+    pub fn due(&mut self) -> bool {
+        self.visible
+            && (self.next_repaint.is_some_and(|t| t <= Instant::now())
+                || self.renderer.frost_pending())
     }
 
     /// Paints one frame.

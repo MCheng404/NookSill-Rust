@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use crate::widgets::style::PanelStyle;
 use egui::{Align2, Color32, CornerRadius, FontId, Rect as EguiRect};
+use nooksill_core::config::Edge;
 use nooksill_core::tool::{format_ms, ToolMode, ToolState, MAX_TODOS};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
@@ -154,6 +155,8 @@ pub struct ToolWindow {
     pos: (i32, i32),
     /// Current window size (physical px), used to detect a relayout.
     size: (i32, i32),
+    /// Anchor and dock edge of the last open, reused when the height changes.
+    placement: Option<((f32, f32, f32, f32), Edge)>,
     ppp: f32,
     /// Timer and todo state, kept in sync with the ini file.
     pub state: ToolState,

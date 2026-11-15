@@ -1,7 +1,7 @@
 //! Performance page: GPU, live usage, costly features, compatibility, presets.
 
 use egui::{RichText, Ui};
-use nooksill_core::config::{BgMode, Config, Key};
+use nooksill_core::config::{Config, Key};
 
 use super::options::{CLOCK_SHOW_OPTS, DATE_FMT_OPTS, MSAA_OPTS};
 use super::widgets::{button, card, combo, row, slider, toggle, toggle_derived, Ctx};
@@ -80,16 +80,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         nooksill_core::i18n::t("Costly features"),
         nooksill_core::i18n::t("Each item lists its cost and can be switched off alone."),
         |ctx, ui| {
-            // Frost is derived from `BgMode`, not a separate boolean key.
-            toggle_derived(
-                ctx,
-                ui,
-                nooksill_core::i18n::t("Frosted glass background"),
-                nooksill_core::i18n::t("Medium: desktop capture + GPU blur every 2.5 s"),
-                ctx.cfg.bg_mode == BgMode::Frost,
-                |cfg, on| cfg.apply_i32(Key::BgMode, if on { 2 } else { 1 }),
-            );
-
             // One switch drives two keys: running dots and the running list.
             toggle_derived(
                 ctx,

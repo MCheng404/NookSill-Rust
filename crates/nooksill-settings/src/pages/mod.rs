@@ -16,6 +16,7 @@ mod items;
 mod library;
 mod nav;
 mod options;
+mod panel_setup;
 mod performance;
 mod position;
 mod preview;
@@ -156,11 +157,6 @@ pub struct SettingsState {
     pub adapter_note: String,
     /// Bottom status bar text.
     pub status: String,
-    /// The About page's hidden entry is unlocked (version clicked 5 times).
-    /// Resets when the window closes.
-    pub advanced: bool,
-    /// Click counter for the version label.
-    pub version_clicks: u8,
     /// Updater state, refreshed by the GPU layer from a background thread.
     pub update: UpdateView,
     /// Address typed into the "add web app" field.
@@ -175,6 +171,11 @@ pub struct SettingsState {
     pub icon_library: Vec<LibIcon>,
     /// Top bar search text; when non-empty only matching nav labels are shown.
     pub nav_filter: String,
+    /// Sliding selection pill of the navigation column.
+    ///
+    /// The motion is 160 ms ease-out: long enough to read as movement, short
+    /// enough that the page never feels like it is waiting for the animation.
+    pub nav_pill: Option<NavPill>,
     /// Currently expanded help bubble, pinned by click or opened by 3 s hover.
     pub tip: Option<Tip>,
     /// Hovered tip dot with its start instant; the 3 s delay spans frames.
@@ -201,6 +202,43 @@ pub struct SettingsState {
     pub edit_args: String,
     /// Group index to merge into; `None` keeps the item on the bar.
     pub edit_group: Option<usize>,
+}
+
+/// The navigation selection pill, sliding from where it was to its new row.
+#[derive(Clone, Copy, Debug)]
+pub struct NavPill {
+    /// Where the slide started; also the position when the target changes.
+    pub from: egui::Rect,
+    /// Row rect of the current selection.
+    pub to: egui::Rect,
+    /// When the current slide started.
+    pub at: std::time::Instant,
+}
+
+impl NavPill {
+    /// Interpolated rect at `now`, ease-out cubic.
+    #[must_use]
+    pub fn cur(&self, now: std::time::Instant) -> egui::Rect {
+        let t = (now.saturating_duration_since(self.at).as_secs_f32() / 0.16).min(1.0);
+        let e = 1.0 - (1.0 - t).powi(3);
+        let mix = |a: f32, b: f32| a + (b - a) * e;
+        egui::Rect::from_min_max(
+            egui::pos2(
+                mix(self.from.min.x, self.to.min.x),
+                mix(self.from.min.y, self.to.min.y),
+            ),
+            egui::pos2(
+                mix(self.from.max.x, self.to.max.x),
+                mix(self.from.max.y, self.to.max.y),
+            ),
+        )
+    }
+
+    /// Whether the slide is still running.
+    #[must_use]
+    pub fn running(&self, now: std::time::Instant) -> bool {
+        now.saturating_duration_since(self.at).as_secs_f32() < 0.16
+    }
 }
 
 /// An expanded help bubble.
@@ -235,13 +273,12 @@ impl Default for SettingsState {
             adapter_note: String::new(),
             status: String::new(),
             nav_filter: String::new(),
+            nav_pill: None,
             tip: None,
             tip_hover: None,
             card_h_prev: Vec::new(),
             card_h: Vec::new(),
             row_bands_prev: Vec::new(),
-            advanced: false,
-            version_clicks: 0,
             update: UpdateView::default(),
             url_input: String::new(),
             hotkey_input: String::new(),
@@ -400,6 +437,17 @@ pub struct Outcome {
 /// The status line is drawn by the window layer, not here.
 pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> Outcome {
     let mut out = Outcome::default();
+    // Settings copy is read-only: dragging a label to select it only fights
+    // the scroll area and leaves stray highlights. Text fields keep their
+    // own selection, so the search box and editors still work.
+    if ui.style().interaction.selectable_labels {
+        // Both themes get the same treatment; a theme switch must not bring
+        // the selection handles back.
+        ui.ctx().all_styles_mut(|s| {
+            s.interaction.selectable_labels = false;
+            s.interaction.multi_widget_text_select = false;
+        });
+    }
     normalize_nav(state);
     update::maybe_prompt(state, cfg);
     update::maybe_ready_prompt(state, cfg);

@@ -44,7 +44,7 @@ pub fn rounded_coverage(x: f32, y: f32, w: f32, h: f32, corner: f32) -> u8 {
     (cov * 255.0).round() as u8
 }
 
-/// Separable gaussian blur over RGBA, with clamped edges.
+/// Separable gaussian blur over RGBA, with normalised edges.
 ///
 /// Two 1D passes cut the cost from `O(r^2)` to `O(2r)`. The weights come
 /// from `glass_backdrop::blur::normalized_gaussian_weights`, the same
@@ -108,9 +108,9 @@ pub fn blur_rgba(src: &[u8], w: usize, h: usize, radius: u32) -> Vec<u8> {
 
 /// One 1D convolution row: `out[base + x * stride] = sum row[x - r + k] * weights[k]`.
 ///
-/// The `r` pixels on each side are out of bounds and clamp to the edge,
-/// extending the border pixels. The middle section has neither clamp nor
-/// branch, and is the only part that has to run fast.
+/// Edge pixels use [`edge_taps`], which drops out-of-bounds taps instead of
+/// repeating the border. The middle section has no branch and is the only part
+/// that has to run fast.
 pub(super) fn conv_row(
     row: &[f32],
     out: &mut [f32],
@@ -123,7 +123,7 @@ pub(super) fn conv_row(
     let taps = weights.len();
     if w >= taps {
         for x in 0..r {
-            out[base + x * stride] = clamp_taps(row, x, r, weights);
+            out[base + x * stride] = edge_taps(row, x, r, weights);
         }
         for x in r..w - r {
             let win = &row[x - r..x - r + taps];
@@ -134,27 +134,68 @@ pub(super) fn conv_row(
             out[base + x * stride] = acc;
         }
         for x in w - r..w {
-            out[base + x * stride] = clamp_taps(row, x, r, weights);
+            out[base + x * stride] = edge_taps(row, x, r, weights);
         }
     } else {
         // The row is narrower than the kernel, so every pixel clamps and
         // there is no middle section.
         for x in 0..w {
-            out[base + x * stride] = clamp_taps(row, x, r, weights);
+            out[base + x * stride] = edge_taps(row, x, r, weights);
         }
     }
 }
 
-/// 1D convolution with clamped taps, used only for the edges and narrow rows.
+/// 1D convolution at the edges: out-of-bounds taps are dropped, not clamped.
+///
+/// Clamping repeats the border pixel. At a corner both passes clamp, so the
+/// whole corner becomes one flat colour patch once the blur is upscaled.
+/// Renormalising by the weights that were actually used keeps the average
+/// brightness and continues the desktop texture into the corner.
 #[inline]
-pub(super) fn clamp_taps(row: &[f32], x: usize, r: usize, weights: &[f32]) -> f32 {
-    let last = row.len() - 1;
+pub(super) fn edge_taps(row: &[f32], x: usize, r: usize, weights: &[f32]) -> f32 {
     let mut acc = 0.0f32;
+    let mut wsum = 0.0f32;
     for (k, wt) in weights.iter().enumerate() {
-        let sx = (x + k).saturating_sub(r).min(last);
-        acc += row[sx] * wt;
+        let sx = (x + k) as isize - r as isize;
+        if sx >= 0 && (sx as usize) < row.len() {
+            acc += row[sx as usize] * wt;
+            wsum += *wt;
+        }
     }
-    acc
+    if wsum > 0.0 {
+        acc / wsum
+    } else {
+        0.0
+    }
+}
+
+/// One 8-bit step of deterministic noise before quantisation.
+///
+/// The blur texture is 8-bit and gets upscaled four times, so a smooth
+/// gradient shows contour bands. Wrapping `u32` math matches `frost.wgsl`
+/// exactly, which keeps the CPU/GPU comparison test meaningful.
+pub(crate) fn apply_dither(rgba: &mut [u8], w: usize, h: usize) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let n = (w * h).min(rgba.len() / 4);
+    for i in 0..n {
+        let d = dither_offset((i % w) as u32, (i / w) as u32);
+        for c in 0..3 {
+            let v = f32::from(rgba[i * 4 + c]) + d;
+            rgba[i * 4 + c] = v.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+fn dither_offset(x: u32, y: u32) -> f32 {
+    let mut h = x
+        .wrapping_mul(1_664_525)
+        .wrapping_add(y.wrapping_mul(1_013_904_223));
+    h = (h ^ (h >> 16)).wrapping_mul(2_246_822_519);
+    h = (h ^ (h >> 13)).wrapping_mul(3_266_489_917);
+    h ^= h >> 16;
+    f32::from(((h >> 24) & 255) as u8) / 255.0 - 0.5
 }
 
 /// Writes the rounded alpha and the premultiplied colour into the blur result.
@@ -221,7 +262,70 @@ pub(crate) fn compose(bits: &[u8], w: u32, h: u32, spec: Spec, ppp: f32) -> Opti
     if rgba.is_empty() {
         return None;
     }
+    // Dither before the rounded alpha: the corner mask then premultiplies the
+    // noisy colour to zero, so the transparent corners stay clean.
+    apply_dither(&mut rgba, w, h);
     let scale = f32::from(CAPTURE_PCT) / 100.0;
     apply_round_alpha(&mut rgba, w, h, spec.corner_pt * ppp * scale);
     Some(ColorImage::from_rgba_premultiplied([w, h], &rgba))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uniform(taps: usize) -> Vec<f32> {
+        vec![1.0 / taps as f32; taps]
+    }
+
+    #[test]
+    fn edge_taps_renormalises_instead_of_repeating_the_border() {
+        let row: Vec<f32> = (0..16).map(|v| v as f32).collect();
+        let w = uniform(5);
+        // x=0 keeps sources 0,1,2: normalised that is 1.0, clamping gave 0.6.
+        let left = edge_taps(&row, 0, 2, &w);
+        assert!((left - 1.0).abs() < 1e-5, "left edge got {left}");
+        // The right edge drops the last two taps instead of repeating row[15].
+        let right = edge_taps(&row, row.len() - 1, 2, &w);
+        let want = (13.0 + 14.0 + 15.0) / 3.0;
+        assert!((right - want).abs() < 1e-5, "right edge got {right}");
+    }
+
+    #[test]
+    fn edge_taps_matches_a_full_convolution_when_all_taps_are_inside() {
+        let row: Vec<f32> = (0..16).map(|v| v as f32).collect();
+        let w = uniform(5);
+        let x = 8;
+        let want: f32 = w
+            .iter()
+            .enumerate()
+            .map(|(k, wt)| row[x + k - 2] * wt)
+            .sum();
+        let got = edge_taps(&row, x, 2, &w);
+        assert!((got - want).abs() < 1e-5);
+    }
+
+    #[test]
+    fn compose_corners_are_transparent_and_premultiplied() {
+        let (w, h) = (120usize, 80usize);
+        let mut bits = vec![0u8; w * h * 4];
+        for px in bits.as_chunks_mut::<4>().0.iter_mut() {
+            px.copy_from_slice(&[90, 120, 200, 255]);
+        }
+        let spec = Spec {
+            radius: 4,
+            corner_pt: 18.0,
+        };
+        let img = compose(&bits, w as u32, h as u32, spec, 1.0).expect("compose");
+        for idx in [0, w - 1, (h - 1) * w, h * w - 1] {
+            let p = img.pixels[idx];
+            assert_eq!(p.a(), 0, "corner {idx} must be transparent");
+            assert_eq!(
+                [p.r(), p.g(), p.b()],
+                [0, 0, 0],
+                "corner {idx} must be premultiplied"
+            );
+        }
+        assert_eq!(img.pixels[(h / 2) * w + w / 2].a(), 255);
+    }
 }

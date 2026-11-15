@@ -55,7 +55,8 @@ pub(super) fn section_of_numeric(name: &str) -> &'static str {
     match name {
         // Widget strip: position, order, toggles, double-width mask.
         "WSide" | "WOrder" | "WideMask" | "NotifyW" | "CtrlCenter" | "CcEnergy" | "CcHotspot"
-        | "ResMon" | "ToolW" | "ModeW" | "PanelDismiss" => return "widgets",
+        | "ResMon" | "ToolW" | "ModeW" | "PanelDismiss" | "PanelPos" | "PanelPosOverride"
+        | "PanelBg" | "PreloadPanels" | "GlowStrength" => return "widgets",
         // Launchpad.
         "Launchpad" | "LpCols" | "LpRows" => return "widgets.launchpad",
         // System integration: Explorer context menu, tray icon, auto update.
@@ -288,6 +289,16 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("UpdChannel", 0, 1, 0, false, false),
     ("UpdPrompt", 0, 1, 1, true, false),
     ("UpdAuto", 0, 1, 0, true, false),
+    // PanelPos: 0 above the widget, 1 centred on screen, 2 automatic.
+    ("PanelPos", 0, 2, 0, false, false),
+    // PanelPosOverride: two bits per panel, 0 inherits PanelPos.
+    ("PanelPosOverride", 0, 4095, 0, false, false),
+    // PanelBg: 0 follows the bar, 1 solid, 2 gradient, 3 frosted.
+    ("PanelBg", 0, 3, 0, false, false),
+    // PreloadPanels: create the popup windows at startup, off = lazy again.
+    ("PreloadPanels", 0, 1, 1, true, false),
+    // GlowStrength: soft-light overlay strength in percent; 0 disables it.
+    ("GlowStrength", 0, 100, 50, false, false),
 ];
 
 impl Key {
@@ -532,6 +543,16 @@ impl Key {
     pub const UPD_PROMPT: Key = Key::Numeric(117);
     /// `UpdAuto`: download silently and replace on the next launch.
     pub const UPD_AUTO: Key = Key::Numeric(118);
+    /// `PanelPos`: default placement for widget panels.
+    pub const PANEL_POS: Key = Key::Numeric(119);
+    /// `PanelPosOverride`: per-panel placement, two bits each.
+    pub const PANEL_POS_OVERRIDE: Key = Key::Numeric(120);
+    /// `PanelBg`: background material for widget panels.
+    pub const PANEL_BG: Key = Key::Numeric(121);
+    /// `PreloadPanels`: build the popup windows at startup instead of first click.
+    pub const PRELOAD_PANELS: Key = Key::Numeric(122);
+    /// `GlowStrength`: soft-light overlay strength in percent.
+    pub const GLOW_STRENGTH: Key = Key::Numeric(123);
 
     /// `UiAccentDockIcons`: apply the accent color to dock icons.
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);

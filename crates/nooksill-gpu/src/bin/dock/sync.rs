@@ -209,10 +209,12 @@ impl App {
             return;
         };
         let now = nooksill_gpu::tool_win::now_ms();
+        let snapshot = win.state.clone();
+        self.tool_state = snapshot.clone();
         self.disk.submit(WriteJob {
             items: None,
             config: None,
-            tool: Some((Box::new(win.state.clone()), now)),
+            tool: Some((Box::new(snapshot), now)),
             notes: None,
         });
     }

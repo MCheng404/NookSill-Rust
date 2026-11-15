@@ -14,8 +14,9 @@ use super::common::{harness, new_harness};
 #[test]
 fn 导航栏在左且整行可点() {
     let mut h = new_harness();
-    // The appearance page now lives in the Dock group's second-level tabs.
-    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
+    // The appearance page now lives in the first tab of the Look group.
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
     h.run();
     assert_eq!(h.state().ui.page, Page::Appearance);
 
@@ -96,7 +97,8 @@ fn 点击气泡外收起() {
     );
 
     // Click an unrelated navigation row; the click still lands.
-    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
     h.run();
 
     assert_eq!(
@@ -152,20 +154,20 @@ fn 过滤态点击优先于自动跳页() {
 #[test]
 fn 搜索过滤导航并自动切页() {
     let mut h = new_harness();
-    h.state_mut().ui.nav_filter = "性能".to_owned();
+    h.state_mut().ui.nav_filter = "关于".to_owned();
     h.run();
 
     assert_eq!(
         h.state().ui.page,
-        Page::Performance,
+        Page::About,
         "常规页已被过滤，应自动跳到唯一匹配的一级页"
     );
-    assert_eq!(h.state().ui.nav_filter, "性能", "过滤词要一直留在输入框里");
+    assert_eq!(h.state().ui.nav_filter, "关于", "过滤词要一直留在输入框里");
 
-    // Clearing the filter does not move back; the page stays on Performance.
+    // Clearing the filter does not move back; the page stays on About.
     h.state_mut().ui.nav_filter = String::new();
     h.run();
-    assert_eq!(h.state().ui.page, Page::Performance);
+    assert_eq!(h.state().ui.page, Page::About);
 }
 
 /// Opening a group turns the sidebar into its tabs; the bottom back row
@@ -173,14 +175,18 @@ fn 搜索过滤导航并自动切页() {
 #[test]
 fn 二级导航的返回按钮回到一级() {
     let mut h = new_harness();
-    h.get_by_role_and_label(egui::Role::Tab, "Dock 栏").click();
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
     h.run();
-    assert_eq!(h.state().ui.sub, Some(NavGroup::Dock));
+    assert_eq!(h.state().ui.sub, Some(NavGroup::Look));
     assert_eq!(h.state().ui.page, Page::Appearance);
+    // The group name moved to the window title bar; the column must not
+    // repeat it as a small caption above the tabs.
+    assert_eq!(h.query_all_by_label("外观与质感").count(), 0);
 
-    h.get_by_role_and_label(egui::Role::Tab, "位置").click();
+    h.get_by_role_and_label(egui::Role::Tab, "效果").click();
     h.run();
-    assert_eq!(h.state().ui.page, Page::Position);
+    assert_eq!(h.state().ui.page, Page::Effect);
 
     h.get_by_role_and_label(egui::Role::Button, "< 返回")
         .click();
@@ -190,19 +196,61 @@ fn 二级导航的返回按钮回到一级() {
     h.get_by_role_and_label(egui::Role::Tab, "常规");
 }
 
+/// Switching tabs must start a slide, not jump: the pill's start and target
+/// differ until the 160 ms ease-out finishes.
+#[test]
+fn 切换标签会启动滑动指示块() {
+    let mut h = new_harness();
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::Tab, "效果").click();
+    h.run();
+
+    let pill = h.state().ui.nav_pill.expect("a pill follows the selection");
+    assert_ne!(pill.from, pill.to, "a new target must start a slide");
+    assert_eq!(
+        pill.to.width(),
+        pill.from.width(),
+        "the pill only slides vertically"
+    );
+}
+
+/// Escape steps back a level; it must not be a close shortcut.
+#[test]
+fn esc_返回上一级而不是关窗() {
+    let mut h = new_harness();
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
+    h.run();
+    assert_eq!(h.state().ui.sub, Some(NavGroup::Look));
+
+    h.input_mut().events.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    h.run();
+
+    assert!(h.state().ui.sub.is_none(), "Esc 应返回一级");
+    assert_eq!(h.state().ui.page, Page::General, "回到进入前的页面");
+}
+
 /// Every Dock tab renders without a panic, and the live preview stays above
 /// the cards (the sliders still exist below it).
 #[test]
 fn 二级各标签都带预览且内容可见() {
     let mut h = new_harness();
-    for (tab, label) in [
-        (Page::Appearance, "图标大小"),
-        (Page::Position, "Dock 位置（居中）"),
-        (Page::Effect, "环境烟雾"),
+    for (tab, label, group) in [
+        (Page::Appearance, "图标大小", NavGroup::Look),
+        (Page::Position, "Dock 位置（居中）", NavGroup::Behaviour),
+        (Page::Effect, "环境烟雾", NavGroup::Look),
     ] {
         h.state_mut().ui.page = tab;
         h.run();
-        assert_eq!(h.state().ui.sub, Some(NavGroup::Dock));
+        assert_eq!(h.state().ui.sub, Some(group));
         assert!(
             h.query_all_by_label(label).count() >= 1,
             "{tab:?} 的控件应仍在"

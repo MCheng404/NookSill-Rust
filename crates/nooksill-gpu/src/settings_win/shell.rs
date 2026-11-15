@@ -98,8 +98,11 @@ pub fn shell_with_frost(
             .max_rect(egui::Rect::from_min_size(bar.min, egui::vec2(nav_w, bar_h)))
             .layout(Layout::top_down(Align::Center)),
     );
+    // Inside a group the brand slot doubles as the group title: the sidebar
+    // no longer repeats it, so this is the only place naming the column.
+    let brand_text = state.sub.map_or("NookSill", |g| g.label());
     brand.centered_and_justified(|ui| {
-        ui.label(RichText::new("NookSill").size(20.0).strong());
+        ui.label(RichText::new(brand_text).size(20.0).strong());
     });
 
     // Search: shares `nooksill_settings::text_field` with every other input.

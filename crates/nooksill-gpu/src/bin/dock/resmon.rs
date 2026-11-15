@@ -66,8 +66,13 @@ impl App {
                             win.attach_public();
                             self.resmon_slot = Some(win);
                         }
-                        if let Some(win) = self.resmon_slot.as_mut() {
-                            win.show();
+                        let anchor = self.dock.widget_screen_rect(
+                            nooksill_core::layout::WidgetKind::Resource,
+                            self.pos.0,
+                            self.pos.1,
+                        );
+                        if let (Some(win), Some(anchor)) = (self.resmon_slot.as_mut(), anchor) {
+                            win.show_at(anchor, self.dock.cfg.edge);
                         }
                     }
                 }
@@ -119,15 +124,22 @@ impl App {
                         }
                     } else {
                         if self.tool_slot.is_none() {
-                            // Read `[Tool]` only on the first open: while
-                            // closed the panel is not in memory, and should not be.
-                            let ini = Ini::load(&self.paths.ini)?;
-                            let state = nooksill_core::tool::ToolState::load(&ini);
-                            let win = ToolWindow::new(&self.gpu, self.ppp, dark, state)?;
+                            // The ini was parsed once at boot; no disk read on open.
+                            let win = ToolWindow::new(
+                                &self.gpu,
+                                self.ppp,
+                                dark,
+                                self.tool_state.clone(),
+                            )?;
                             self.tool_slot = Some(win);
                         }
-                        if let Some(win) = self.tool_slot.as_mut() {
-                            win.show();
+                        let anchor = self.dock.widget_screen_rect(
+                            nooksill_core::layout::WidgetKind::Tool,
+                            self.pos.0,
+                            self.pos.1,
+                        );
+                        if let (Some(win), Some(anchor)) = (self.tool_slot.as_mut(), anchor) {
+                            win.show_at(anchor, self.dock.cfg.edge);
                             if trace::geom() {
                                 eprintln!("[widget] 计时器面板已显示");
                             }

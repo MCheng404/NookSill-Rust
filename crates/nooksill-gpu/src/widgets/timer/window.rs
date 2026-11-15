@@ -2,6 +2,7 @@
 
 use super::win::{class_pcwstr, physical_size, wndproc};
 use super::*;
+use crate::widgets::framework::{self, PanelKind};
 
 impl ToolWindow {
     /// Creates the window (hidden).
@@ -53,6 +54,7 @@ impl ToolWindow {
             input: crate::input::Input::default(),
             pos: (x, y),
             size: (pw, ph),
+            placement: None,
             ppp,
             state,
             hits: Hits::default(),
@@ -95,7 +97,26 @@ impl ToolWindow {
         self.visible
     }
 
-    pub fn show(&mut self) {
+    /// Opens beside `anchor` (or centred, per the published policy).
+    pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: Edge) {
+        self.placement = Some((anchor, edge));
+        let (pw, ph) = physical_size(self.ppp, panel_h(self.state.todos.len()));
+        let (x, y) =
+            framework::place_panel(PanelKind::Tool, (pw, ph), Some(anchor), edge, self.ppp);
+        self.pos = (x, y);
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                pw,
+                ph,
+                windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
+                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+            );
+        }
+        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
         }
@@ -108,6 +129,7 @@ impl ToolWindow {
             return;
         }
         self.visible = false;
+        framework::release_backdrop(&mut self.renderer, self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
@@ -115,9 +137,9 @@ impl ToolWindow {
         self.typed.clear();
     }
 
-    /// Whether the next frame is due.
+    /// Whether the next frame is due, including a new backdrop capture.
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_repaint <= Instant::now()
+    pub fn due(&mut self) -> bool {
+        self.visible && (self.next_repaint <= Instant::now() || self.renderer.frost_pending())
     }
 }

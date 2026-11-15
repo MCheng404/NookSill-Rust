@@ -39,10 +39,10 @@ pub(super) fn paint(ui: &mut egui::Ui, st: &mut EditState) {
     let dark = st.dark;
     // Same base fill, overlay and text tiers as the other popup panels.
     let style = PanelStyle::current(dark, st.frosted);
-    let (bg, border, ink, faint) = (style.bg(), style.border(), style.ink(), style.ink_sub());
+    let (border, ink, faint) = (style.border(), style.ink(), style.ink_sub());
 
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    style.paint_base(painter, rect);
     painter.rect_filled(
         rect,
         CornerRadius::same(PanelStyle::R_PANEL),

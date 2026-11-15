@@ -184,6 +184,12 @@ impl Key {
         Key::UPD_CHANNEL,
         Key::UPD_PROMPT,
         Key::UPD_AUTO,
+        // Widget panel placement, background and eager construction.
+        Key::PANEL_POS,
+        Key::PANEL_POS_OVERRIDE,
+        Key::PANEL_BG,
+        Key::PRELOAD_PANELS,
+        Key::GLOW_STRENGTH,
     ];
 
     /// Every key that needs reading and writing: the row-order table first,

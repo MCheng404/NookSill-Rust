@@ -27,6 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
     let mut args = std::env::args().skip(1);
     let dir = args.next().unwrap_or_else(|| "scratch".to_owned());
+    // `scratch/` is a throwaway output directory and may have been cleaned.
+    std::fs::create_dir_all(&dir)?;
     let dark = args.next().as_deref() != Some("light");
     let ppp = 1.25_f32;
     let gpu = Gpu::new("")?;
@@ -167,7 +169,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dark,
         |ui| note_win::paint_preview(ui, dark, false, &book, 0, Some(0)),
     )?;
+    // One shot per published material: a mode that silently paints the default
+    // is exactly the regression these offscreen renders exist to catch.
+    for (code, name) in [(0, "follow"), (1, "solid"), (2, "gradient"), (3, "frost")] {
+        let mut cfg = Config::default();
+        cfg.apply_i32(Key::PANEL_BG, code);
+        nooksill_gpu::panel_style::sync_prefs(&cfg);
+        shot(
+            &gpu,
+            &format!("{dir}/panel_notes_{name}.bmp"),
+            nw,
+            nh,
+            ppp,
+            dark,
+            |ui| note_win::paint_preview(ui, dark, code == 0 || code == 3, &book, 0, Some(0)),
+        )?;
+    }
     nooksill_gpu::panel_style::sync_prefs(&Config::default());
+
+    // A material that silently paints the default is the regression this tool
+    // exists to catch: three panels used to draw their own base fill.
+    let solid = std::fs::read(format!("{dir}/panel_notes_solid.bmp"))?;
+    let gradient = std::fs::read(format!("{dir}/panel_notes_gradient.bmp"))?;
+    let frost = std::fs::read(format!("{dir}/panel_notes_frost.bmp"))?;
+    assert_ne!(solid, gradient, "gradient material is a no-op");
+    assert_ne!(solid, frost, "frost material is a no-op");
+    println!("material pixel check: solid / gradient / frost produce distinct frames");
     Ok(())
 }
 

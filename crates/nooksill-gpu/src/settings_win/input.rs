@@ -80,10 +80,9 @@ impl SettingsWindow {
                 self.input.set_modifiers(current_modifiers());
                 let vk = wparam.0 as u32;
                 if let Some(key) = map_vk(vk) {
+                    // Escape is not a close shortcut here: the UI uses it to
+                    // step back a navigation level and dismiss popups.
                     self.input.key(key, msg == WM_KEYDOWN);
-                    if key == egui::Key::Escape && msg == WM_KEYDOWN {
-                        self.close_requested = true;
-                    }
                 }
                 self.next_repaint = Some(Instant::now());
                 None

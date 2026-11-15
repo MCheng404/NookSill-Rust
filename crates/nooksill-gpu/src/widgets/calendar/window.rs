@@ -1,7 +1,8 @@
 //! Calendar window lifecycle: creation, placement and dates.
 
-use super::win::{class_pcwstr, physical_size, place, wndproc};
+use super::win::{class_pcwstr, physical_size, wndproc};
 use super::*;
+use crate::widgets::framework::{self, PanelKind};
 
 impl CalendarWindow {
     /// Creates the window (hidden). Use [`Self::show_at`] to place it by the
@@ -93,10 +94,14 @@ impl CalendarWindow {
     /// Re-placed on every open: the bar may have changed edge, size or monitor.
     pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: Edge) {
         let (pw, ph) = physical_size(self.ppp);
-        let (x, y) = place(pw, ph, anchor, edge, self.ppp);
+        let (x, y) =
+            framework::place_panel(PanelKind::Calendar, (pw, ph), Some(anchor), edge, self.ppp);
         self.pos = (x, y);
         unsafe {
             let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
+        unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOWNA);
         }
         self.visible = true;
@@ -110,6 +115,7 @@ impl CalendarWindow {
             return;
         }
         self.visible = false;
+        framework::release_backdrop(&mut self.renderer, self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
@@ -117,8 +123,8 @@ impl CalendarWindow {
 
     /// Whether the repaint deadline has passed.
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_repaint <= Instant::now()
+    pub fn due(&mut self) -> bool {
+        self.visible && (self.next_repaint <= Instant::now() || self.renderer.frost_pending())
     }
 
     /// Follows a "today" that changed across midnight.

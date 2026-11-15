@@ -62,14 +62,11 @@ impl FrameRenderer {
             queue: gpu.queue.clone(),
             shaders: crate::shaders::ShaderRuntime::new(&gpu.device, &gpu.queue),
             blur: None,
-            illusion: None,
             frost_size: None,
-            stripe: 0,
-            last_frame: None,
-            last_mode: false,
             smoke: None,
             reflection: None,
             frost: None,
+            glow: None,
             frost_whole: true,
             live: None,
             frost_spec: None,
@@ -127,27 +124,5 @@ impl FrameRenderer {
         };
         self.register_frost_view(&view);
         true
-    }
-
-    /// First frame of the combined path: one full true Gaussian. Later frames
-    /// use [`Self::poll_illusion`] for a partial true Gaussian plus colour
-    /// field compensation.
-    pub fn set_frost_illusion(
-        &mut self,
-        bits: &[u8],
-        w: u32,
-        h: u32,
-        spec: crate::frost::Spec,
-        _ppp: f32,
-    ) -> bool {
-        let frame = crate::frost::FrostFrame {
-            bits: Arc::new(bits.to_vec()),
-            w,
-            h,
-            x0: 0,
-            x1: w,
-            field: Arc::new(crate::frost::color_field(bits, w as usize, h as usize)),
-        };
-        self.rebuild_illusion_base(&frame, spec)
     }
 }

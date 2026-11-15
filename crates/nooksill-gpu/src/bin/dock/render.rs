@@ -69,9 +69,7 @@ impl App {
     }
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Panel styling is a process-wide preference (the seven popup
-        // constructors take no `Config`), synced per frame so a settings change
-        // applies next frame. Costs two table lookups and two atomic writes.
+        // Panel style and placement are process-wide; popup constructors take no Config.
         nooksill_gpu::panel_style::sync_prefs(&self.dock.cfg);
         // The dock theme, not the settings theme: `UiTheme` and `DockTheme`
         // invert 0/1, so mixing them repaints the dock in the wrong palette.

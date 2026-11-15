@@ -2,6 +2,7 @@
 //! Every rectangle gets at least `R_SMALL` corners; pills use half their short side.
 
 use egui::{Color32, CornerRadius, Painter, Rect, Stroke, StrokeKind};
+use nooksill_core::config::panel::{Backdrop, Prefs};
 use nooksill_core::config::{Config, Key};
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -13,6 +14,8 @@ static PANEL_OVERLAY: AtomicU8 = AtomicU8::new(28);
 
 /// Refresh the panel prefs after a config load or edit.
 pub fn sync_prefs(cfg: &Config) {
+    crate::widgets::framework::prefs::sync_prefs(cfg);
+    crate::frost::set_glow_strength(cfg.get_i32(Key::GLOW_STRENGTH));
     PANEL_OPACITY.store(
         cfg.get_i32(Key::PANEL_OPACITY).clamp(0, 100) as u8,
         Ordering::Relaxed,
@@ -31,6 +34,8 @@ pub struct PanelStyle {
     ///
     /// Then the base fill becomes a translucent tint so the blur shows through.
     pub frosted: bool,
+    /// Resolved background material; `FollowBar` never reaches this field.
+    pub material: Backdrop,
     /// User opacity percent; `0` picks an automatic value from `frosted`.
     opacity: u8,
     /// Overlay strength, `0..100`.
@@ -53,6 +58,7 @@ impl PanelStyle {
         Self {
             dark,
             frosted,
+            material: Prefs::from_cfg(cfg).material(cfg.bg_mode),
             opacity: cfg.get_i32(Key::PANEL_OPACITY).clamp(0, 100) as u8,
             overlay: cfg.get_i32(Key::PANEL_OVERLAY).clamp(0, 100) as u8,
         }
@@ -64,6 +70,7 @@ impl PanelStyle {
         Self {
             dark,
             frosted,
+            material: crate::widgets::framework::prefs::material(),
             opacity: PANEL_OPACITY.load(Ordering::Relaxed),
             overlay: PANEL_OVERLAY.load(Ordering::Relaxed),
         }
@@ -75,6 +82,7 @@ impl PanelStyle {
         Self {
             dark,
             frosted,
+            material: Backdrop::Frost,
             opacity: 0,
             overlay: 28,
         }
@@ -87,7 +95,7 @@ impl PanelStyle {
     fn alpha(&self) -> u8 {
         let pct = if self.opacity > 0 {
             self.opacity as f32
-        } else if self.frosted {
+        } else if self.frosted && self.material == Backdrop::Frost {
             78.0
         } else {
             97.0
@@ -202,7 +210,7 @@ impl PanelStyle {
     /// Paints the panel frame: base fill, overlay, then the hairline border.
     pub fn paint_frame(&self, painter: &Painter, rect: Rect) {
         let radius = CornerRadius::same(Self::R_PANEL);
-        painter.rect_filled(rect, radius, self.bg());
+        self.paint_base(painter, rect);
         painter.rect_filled(rect, radius, self.overlay());
         painter.rect_stroke(
             rect,
@@ -210,6 +218,56 @@ impl PanelStyle {
             Stroke::new(1.0, self.border()),
             StrokeKind::Middle,
         );
+    }
+
+    /// Base fill for every material.
+    ///
+    /// Three panels draw their own overlay and border; they must still call
+    /// this so a material switch is not silently ignored there.
+    pub fn paint_base(&self, painter: &Painter, rect: Rect) {
+        let radius = CornerRadius::same(Self::R_PANEL);
+        if self.material != Backdrop::Gradient {
+            painter.rect_filled(rect, radius, self.bg());
+            return;
+        }
+        // Flat two-colour fill; the outer corners stay rounded on the end bands.
+        const STEPS: i32 = 16;
+        let h = rect.height();
+        if h <= 0.0 {
+            painter.rect_filled(rect, radius, self.bg());
+            return;
+        }
+        let (top, bottom) = if self.dark {
+            ((24_u8, 25_u8, 30_u8), (40_u8, 43_u8, 52_u8))
+        } else {
+            ((246_u8, 247_u8, 250_u8), (224_u8, 228_u8, 238_u8))
+        };
+        let a = self.bg().a();
+        for i in 0..STEPS {
+            let t = (f64::from(i) + 0.5) / f64::from(STEPS);
+            let mix = |lo: u8, hi: u8| {
+                (f64::from(lo) + (f64::from(hi) - f64::from(lo)) * t)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            let fill = Color32::from_rgba_unmultiplied(
+                mix(top.0, bottom.0),
+                mix(top.1, bottom.1),
+                mix(top.2, bottom.2),
+                a,
+            );
+            let y0 = rect.top() + h * i as f32 / STEPS as f32;
+            let y1 = rect.top() + h * (i + 1) as f32 / STEPS as f32;
+            let band =
+                Rect::from_min_max(egui::pos2(rect.left(), y0), egui::pos2(rect.right(), y1));
+            let corners = CornerRadius {
+                nw: if i == 0 { radius.nw } else { 0 },
+                ne: if i == 0 { radius.ne } else { 0 },
+                se: if i == STEPS - 1 { radius.se } else { 0 },
+                sw: if i == STEPS - 1 { radius.sw } else { 0 },
+            };
+            painter.rect_filled(band, corners, fill);
+        }
     }
 
     /// Paints a pill-shaped element (button, tag, switch border).
@@ -270,6 +328,38 @@ mod tests {
         custom.opacity = 40;
         assert_eq!(custom.bg().a(), 102, "用户值必须覆盖自动值");
         assert!(custom.bg().a() < solid.bg().a());
+    }
+
+    #[test]
+    fn solid_stays_opaque_when_a_stale_backdrop_is_present() {
+        let mut s = PanelStyle::preview(true, true);
+        s.material = Backdrop::Solid;
+        assert_eq!(s.bg().a(), PanelStyle::preview(true, false).bg().a());
+    }
+
+    #[test]
+    fn material_resolves_follow_bar_from_config() {
+        let mut cfg = Config::default();
+        assert_eq!(
+            PanelStyle::from_cfg(&cfg, true, false).material,
+            Backdrop::Frost
+        );
+        cfg.apply_i32(Key::BgMode, 0);
+        assert_eq!(
+            PanelStyle::from_cfg(&cfg, true, false).material,
+            Backdrop::Solid
+        );
+        cfg.apply_i32(Key::BgMode, 1);
+        assert_eq!(
+            PanelStyle::from_cfg(&cfg, true, false).material,
+            Backdrop::Gradient
+        );
+        cfg.apply_i32(Key::PANEL_BG, 1);
+        assert_eq!(
+            PanelStyle::from_cfg(&cfg, true, false).material,
+            Backdrop::Gradient,
+            "PanelBg is a legacy key; the bar material decides"
+        );
     }
 
     #[test]

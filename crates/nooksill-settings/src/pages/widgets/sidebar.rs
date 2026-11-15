@@ -20,45 +20,60 @@ pub(crate) fn sidebar(ui: &mut Ui, state: &mut SettingsState) {
 
 fn primary(ui: &mut Ui, state: &mut SettingsState) {
     let filter = state.nav_filter.trim().to_lowercase();
-    let current = state.page;
-    let mut first_page: Option<Page> = None;
-    let mut current_visible = false;
-    let mut clicked: Option<NavItem> = None;
-
+    let mut rows: Vec<(NavItem, Rect, egui::Response)> = Vec::new();
     for item in NavItem::PRIMARY {
         if !item.matches(&filter) {
             continue;
         }
-        // Only a plain page can be auto-selected: jumping into a group on a
-        // search keystroke would replace the whole column unexpectedly.
-        if let NavItem::Page(p) = item {
-            if first_page.is_none() {
-                first_page = Some(p);
-            }
-        }
-        let selected = match item {
-            NavItem::Page(p) => p == current,
-            NavItem::Group(g) => g.tabs().contains(&current),
-        };
-        if selected {
-            current_visible = true;
-        }
-        if nav_item(ui, item.label(), selected).clicked() {
-            // Applying after the loop keeps the click from being overwritten
-            // by the auto-jump below.
-            clicked = Some(item);
-            state.tip = None;
-            state.tip_hover = None;
-        }
+        let (rect, resp) = nav_row(ui, item.label(), nav_selected(item, state.page));
+        rows.push((item, rect, resp));
     }
 
-    if let Some(item) = clicked {
-        apply(item, state, &filter);
-    } else if !current_visible {
-        if let Some(p) = first_page {
+    // Apply the click before painting: the pill then starts from where it was
+    // and heads for the new row in this very frame.
+    let clicked = rows.iter().position(|(_, _, r)| r.clicked());
+    if let Some(i) = clicked {
+        state.tip = None;
+        state.tip_hover = None;
+        apply(rows[i].0, state, &filter);
+    }
+
+    let selected = rows
+        .iter()
+        .find(|(item, _, _)| nav_selected(*item, state.page))
+        .map(|(_, rect, _)| *rect);
+    match selected {
+        Some(to) => draw_pill(ui, state, to),
+        None => state.nav_pill = None,
+    }
+    for (item, rect, resp) in &rows {
+        paint_nav_row(
+            ui,
+            *rect,
+            item.label(),
+            nav_selected(*item, state.page),
+            resp.hovered(),
+        );
+    }
+
+    // Only a plain page can be auto-selected: jumping into a group on a search
+    // keystroke would replace the whole column unexpectedly.
+    if clicked.is_none() && selected.is_none() {
+        if let Some(p) = rows.iter().find_map(|(item, _, _)| match item {
+            NavItem::Page(p) => Some(*p),
+            NavItem::Group(_) => None,
+        }) {
             state.page = p;
             state.sub = None;
         }
+    }
+}
+
+/// Whether `item` owns `page`.
+fn nav_selected(item: NavItem, page: Page) -> bool {
+    match item {
+        NavItem::Page(p) => p == page,
+        NavItem::Group(g) => g.tabs().contains(&page),
     }
 }
 
@@ -84,39 +99,63 @@ fn apply(item: NavItem, state: &mut SettingsState, filter: &str) {
 
 fn tabs(ui: &mut Ui, state: &mut SettingsState, group: NavGroup) {
     let filter = state.nav_filter.trim().to_lowercase();
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(group.label()).small().weak());
-    ui.add_space(6.0);
+    // The group name is the window title in this mode; a second, smaller copy
+    // at the top of the column was redundant and hard to read.
+    ui.add_space(8.0);
 
-    let current = state.page;
-    let mut first_visible: Option<Page> = None;
-    let mut current_visible = false;
-    let mut clicked: Option<Page> = None;
+    let mut rows: Vec<(Page, Rect, egui::Response)> = Vec::new();
     for p in group.tabs() {
         if !filter.is_empty() && !p.title().to_lowercase().contains(&filter) {
             continue;
         }
-        if first_visible.is_none() {
-            first_visible = Some(*p);
-        }
-        if current == *p {
-            current_visible = true;
-        }
-        if nav_item(ui, p.title(), current == *p).clicked() {
-            clicked = Some(*p);
-            state.tip = None;
-            state.tip_hover = None;
-        }
+        let (rect, resp) = nav_row(ui, p.title(), state.page == *p);
+        rows.push((*p, rect, resp));
     }
-    if let Some(p) = clicked {
-        state.page = p;
-    } else if !current_visible {
-        if let Some(p) = first_visible {
-            state.page = p;
+
+    let clicked = rows.iter().position(|(_, _, r)| r.clicked());
+    if let Some(i) = clicked {
+        state.tip = None;
+        state.tip_hover = None;
+        state.page = rows[i].0;
+    }
+    let selected = rows
+        .iter()
+        .find(|(p, _, _)| *p == state.page)
+        .map(|(_, rect, _)| *rect);
+    match selected {
+        Some(to) => draw_pill(ui, state, to),
+        None => state.nav_pill = None,
+    }
+    for (p, rect, resp) in &rows {
+        paint_nav_row(ui, *rect, p.title(), *p == state.page, resp.hovered());
+    }
+    if clicked.is_none() && selected.is_none() {
+        if let Some((p, _, _)) = rows.first() {
+            state.page = *p;
         }
     }
 
+    // Escape steps out of the group. A focused text field consumes it first
+    // (egui surrenders focus on Escape), and an open popup or editor owns it,
+    // so this only fires when the column itself has focus.
+    let typing = ui.memory(|m| m.focused().is_some());
+    if !typing
+        && state.modal.is_none()
+        && state.tip.is_none()
+        && ui.input(|i| i.key_pressed(egui::Key::Escape))
+    {
+        go_back(state);
+    }
+
     back_row(ui, state);
+}
+
+/// Returns to the page the group was opened from.
+fn go_back(state: &mut SettingsState) {
+    state.page = state.return_page;
+    state.sub = None;
+    state.tip = None;
+    state.tip_hover = None;
 }
 
 /// Bottom-pinned return row; it stays visible while the tab strip scrolls.
@@ -135,64 +174,118 @@ fn back_row(ui: &mut Ui, state: &mut SettingsState) {
     let label = nooksill_core::i18n::t("< Back");
     let (r, resp) = row.allocate_exact_size(Vec2::new(rect.width(), h), Sense::click());
     let draw = r.translate(magnet_offset(&row, r, 2.0, 40.0));
-    if resp.hovered() {
-        row.painter()
-            .rect_filled(draw, CornerRadius::same(13), hover(&row));
-    }
+    let vis = row.visuals();
+    let accent = vis.selection.bg_fill;
+    // Always-on accent fill plus a left bar: a hover-only row at the bottom of
+    // a long tab list was too easy to miss, and this is the only way out.
+    let alpha = if resp.hovered() { 46 } else { 26 };
+    row.painter().rect_filled(
+        draw,
+        CornerRadius::same(13),
+        Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha),
+    );
+    row.painter().rect_filled(
+        Rect::from_min_size(
+            egui::pos2(draw.left() + 5.0, draw.top() + 7.0),
+            Vec2::new(3.0, (draw.height() - 14.0).max(1.0)),
+        ),
+        CornerRadius::same(2),
+        accent,
+    );
     row.painter().text(
-        egui::pos2(draw.left() + 14.0, draw.center().y),
+        egui::pos2(draw.left() + 16.0, draw.center().y),
         egui::Align2::LEFT_CENTER,
         label,
-        FontId::proportional(13.0),
-        row.visuals().weak_text_color(),
+        FontId::proportional(13.5),
+        vis.strong_text_color(),
+    );
+    // The shortcut is part of the affordance: without it nobody guesses that
+    // Escape also goes back.
+    row.painter().text(
+        egui::pos2(draw.right() - 10.0, draw.center().y),
+        egui::Align2::RIGHT_CENTER,
+        "Esc",
+        FontId::monospace(10.5),
+        vis.weak_text_color(),
     );
     resp.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, label));
     if resp.clicked() {
-        state.page = state.return_page;
-        state.sub = None;
-        state.tip = None;
-        state.tip_hover = None;
+        go_back(state);
     }
 }
 
-/// One navigation item: a full-width rounded block, accent-filled when
-/// selected.
-///
-/// Not `selectable_label`, which shrinks to the text width and leaves the list
-/// ragged with a hit area no wider than the label.
-fn nav_item(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
+/// Allocates one full-width navigation row; painting happens in a second pass
+/// so the sliding pill can sit below every label.
+fn nav_row(ui: &mut Ui, text: &str, selected: bool) -> (Rect, egui::Response) {
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, NAV_ITEM_H), Sense::click());
-
-    // The magnet moves the drawing; the hit rect stays put.
-    let draw = rect.translate(magnet_offset(ui, rect, 2.5, 56.0));
-
-    if ui.is_rect_visible(rect) {
-        let vis = ui.visuals();
-        let (bg, fg) = if selected {
-            (
-                vis.selection.bg_fill.linear_multiply(0.70),
-                vis.selection.stroke.color,
-            )
-        } else if resp.hovered() {
-            (hover(ui), vis.strong_text_color())
-        } else {
-            (Color32::TRANSPARENT, vis.text_color())
-        };
-        if bg != Color32::TRANSPARENT {
-            ui.painter().rect_filled(draw, CornerRadius::same(13), bg);
-        }
-        ui.painter().text(
-            egui::pos2(draw.left() + 14.0, draw.center().y),
-            egui::Align2::LEFT_CENTER,
-            text,
-            FontId::proportional(13.0),
-            fg,
-        );
-    }
-
     // Self-drawn widgets must report themselves, or screen readers and
     // kittest cannot find the node.
     resp.widget_info(|| WidgetInfo::selected(egui::Role::Tab, true, selected, text));
-    resp
+    (rect, resp)
+}
+
+/// Label and hover fill of one row; the selection background is the pill.
+fn paint_nav_row(ui: &Ui, rect: Rect, text: &str, selected: bool, hovered: bool) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    // The magnet moves the drawing; the hit rect stays put.
+    let draw = rect.translate(magnet_offset(ui, rect, 2.5, 56.0));
+    let vis = ui.visuals();
+    if hovered && !selected {
+        ui.painter()
+            .rect_filled(draw, CornerRadius::same(13), hover(ui));
+    }
+    let fg = if selected {
+        vis.selection.stroke.color
+    } else if hovered {
+        vis.strong_text_color()
+    } else {
+        vis.text_color()
+    };
+    ui.painter().text(
+        egui::pos2(draw.left() + 14.0, draw.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        FontId::proportional(13.0),
+        fg,
+    );
+}
+
+/// Slides the accent-filled selection block to `to`.
+///
+/// 160 ms ease-out cubic: WinUI's navigation pill uses 150 ms, and anything
+/// past ~250 ms reads as lag rather than motion.
+fn draw_pill(ui: &Ui, state: &mut SettingsState, to: Rect) {
+    let now = std::time::Instant::now();
+    let pill = match state.nav_pill {
+        // Target unchanged: keep the running slide.
+        Some(p) if p.to == to => p,
+        // Target moved: start again from wherever the pill is right now.
+        Some(p) => crate::pages::NavPill {
+            from: p.cur(now),
+            to,
+            at: now,
+        },
+        None => crate::pages::NavPill {
+            from: to,
+            to,
+            at: now,
+        },
+    };
+    let running = pill.running(now);
+    ui.painter().rect_filled(
+        pill.cur(now),
+        CornerRadius::same(13),
+        ui.visuals().selection.bg_fill.linear_multiply(0.70),
+    );
+    state.nav_pill = Some(pill);
+    if running {
+        // A deadline, not an immediate repaint: the next frame is only needed
+        // after a display interval, and an immediate request would keep the
+        // headless harness from ever settling.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
+    }
 }

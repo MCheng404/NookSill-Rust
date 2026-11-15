@@ -5,6 +5,7 @@ pub mod anchor;
 pub mod calendar;
 pub mod control;
 pub mod editor;
+pub mod framework;
 pub mod group;
 pub mod notes;
 pub mod resource;

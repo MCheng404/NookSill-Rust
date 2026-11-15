@@ -2,6 +2,7 @@
 
 use super::win::{class_pcwstr, wndproc};
 use super::*;
+use crate::widgets::framework::{self, PanelKind};
 
 impl GroupWindow {
     /// Creates the window (hidden).
@@ -98,12 +99,13 @@ impl GroupWindow {
         kids: Vec<GroupKid>,
         anchor: (i32, i32, i32, i32),
         fan: FanSpec,
+        edge: nooksill_core::config::Edge,
     ) -> Result<(), GpuError> {
         self.title = title.to_owned();
         self.kids = kids;
         // A tall column may not fit the screen; the fitting step may fall back
         // to the grid, so the stored spec is what paint and hit tests use.
-        let (al, at, ar, _ab) = anchor;
+        let (al, at, ar, ab) = anchor;
         let cx = (al + ar) / 2;
         let work = nooksill_platform::display::work_area_at(cx, at);
         let avail = (
@@ -125,19 +127,8 @@ impl GroupWindow {
         let ph = (lh * self.ppp).round() as i32;
         self.renderer.resize(gpu, pw as u32, ph as u32)?;
 
-        // Above the group, horizontally centered; moved down when it would
-        // hit the top of the screen.
-        let mut x = cx - pw / 2;
-        if x < work.left {
-            x = work.left;
-        }
-        if x + pw > work.right {
-            x = work.right - pw;
-        }
-        let mut y = at - ph - 8;
-        if y < work.top {
-            y = work.top;
-        }
+        let card = (al as f32, at as f32, ar as f32, ab as f32);
+        let (x, y) = framework::place_panel(PanelKind::Group, (pw, ph), Some(card), edge, self.ppp);
         self.pos = (x, y);
         unsafe {
             let _ = SetWindowPos(
@@ -149,6 +140,9 @@ impl GroupWindow {
                 ph,
                 SWP_NOACTIVATE | SWP_NOZORDER,
             );
+        }
+        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
+        unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
         }
         self.visible = true;
@@ -161,6 +155,7 @@ impl GroupWindow {
             return;
         }
         self.visible = false;
+        framework::release_backdrop(&mut self.renderer, self.hwnd);
         self.hover = None;
         self.press = None;
         unsafe {
@@ -173,9 +168,11 @@ impl GroupWindow {
         std::mem::replace(&mut self.action, GroupAction::None)
     }
 
-    /// Whether a repaint is due.
+    /// Whether a repaint is due, including a new backdrop capture.
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_repaint.is_some_and(|t| t <= Instant::now())
+    pub fn due(&mut self) -> bool {
+        self.visible
+            && (self.next_repaint.is_some_and(|t| t <= Instant::now())
+                || self.renderer.frost_pending())
     }
 }

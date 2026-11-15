@@ -187,6 +187,11 @@ fn numeric_constants_match_table_rows() {
         (Key::UPD_CHANNEL, "UpdChannel"),
         (Key::UPD_PROMPT, "UpdPrompt"),
         (Key::UPD_AUTO, "UpdAuto"),
+        (Key::PANEL_POS, "PanelPos"),
+        (Key::PANEL_POS_OVERRIDE, "PanelPosOverride"),
+        (Key::PANEL_BG, "PanelBg"),
+        (Key::PRELOAD_PANELS, "PreloadPanels"),
+        (Key::GLOW_STRENGTH, "GlowStrength"),
     ];
     for &(key, name) in pairs {
         assert_eq!(key.name(), name, "常量与表行错位");

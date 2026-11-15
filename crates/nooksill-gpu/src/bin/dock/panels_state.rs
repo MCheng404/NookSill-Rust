@@ -41,7 +41,7 @@ impl App {
                     self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
                     self.dock.cfg.get_i32(Key::LP_ROWS).max(2) as usize,
                 );
-                lw.open(frost_spec(&self.dock.cfg, Key::LP_FROST, 0.0));
+                lw.open(frost_spec(&self.dock.cfg, 0.0));
                 return Ok(true);
             }
             "settings" => {
@@ -52,7 +52,7 @@ impl App {
                     settings_win::effective_ppp(&self.dock.cfg, self.dpi),
                 )?;
                 sw.state.auto_start = nooksill_platform::theme::get_autostart();
-                sw.show(frost_spec(&self.dock.cfg, Key::UI_FROST, 20.0));
+                sw.show(frost_spec(&self.dock.cfg, 20.0));
                 return Ok(true);
             }
             other => {
@@ -102,10 +102,13 @@ impl App {
         }
         if let Some(win) = self.tool_slot.as_ref() {
             let now = nooksill_gpu::tool_win::now_ms();
+            let snapshot = win.state.clone();
+            // Panels are dropped below; a later recreate must see this state.
+            self.tool_state = snapshot.clone();
             self.disk.submit(WriteJob {
                 items: None,
                 config: None,
-                tool: Some((Box::new(win.state.clone()), now)),
+                tool: Some((Box::new(snapshot), now)),
                 notes: None,
             });
         }

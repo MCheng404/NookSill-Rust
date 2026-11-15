@@ -24,8 +24,15 @@ fn unpack(c: u32) -> vec3<f32> {
     );
 }
 
-fn clamp_i(v: i32, last: i32) -> i32 {
-    return clamp(v, 0, last);
+// Integer hash dither, +/-0.5 of one 8-bit step. The texture is 8-bit and is
+// upscaled four times, so a smooth blur would otherwise show contour bands.
+// Integer math keeps the CPU reference bit-identical (same wrapping ops).
+fn dither_offset(x: u32, y: u32) -> f32 {
+    var h = x * 1664525u + y * 1013904223u;
+    h = (h ^ (h >> 16u)) * 2246822519u;
+    h = (h ^ (h >> 13u)) * 3266489917u;
+    h = h ^ (h >> 16u);
+    return f32((h >> 24u) & 255u) / 255.0 - 0.5;
 }
 
 fn coverage(x: f32, y: f32) -> f32 {
@@ -53,12 +60,18 @@ fn h_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let y = i32(i % p.height);
     let r = i32(p.radius);
+    // Drop out-of-bounds taps and renormalise; clamping repeats the border
+    // pixel and turns both corner passes into one flat colour patch.
     var acc = vec3<f32>(0.0);
+    var wsum = 0.0;
     for (var k = 0u; k < p.taps; k = k + 1u) {
-        let sx = clamp_i(x + i32(k) - r, i32(p.width) - 1);
-        acc += unpack(src[u32(y * i32(p.width) + sx)]) * weights[k];
+        let sx = x + i32(k) - r;
+        if (sx >= 0 && sx < i32(p.width)) {
+            acc += unpack(src[u32(y * i32(p.width) + sx)]) * weights[k];
+            wsum += weights[k];
+        }
     }
-    mid[u32(x * i32(p.height) + y)] = vec4<f32>(acc, 0.0);
+    mid[u32(x * i32(p.height) + y)] = vec4<f32>(acc / max(wsum, 0.00001), 0.0);
 }
 
 @compute @workgroup_size(64)
@@ -71,12 +84,18 @@ fn v_blur(@builtin(global_invocation_id) gid: vec3<u32>) {
     let y = i32(i % p.height);
     let r = i32(p.radius);
     var acc = vec3<f32>(0.0);
+    var wsum = 0.0;
     for (var k = 0u; k < p.taps; k = k + 1u) {
-        let sy = clamp_i(y + i32(k) - r, i32(p.height) - 1);
-        acc += mid[u32(x * i32(p.height) + sy)].xyz * weights[k];
+        let sy = y + i32(k) - r;
+        if (sy >= 0 && sy < i32(p.height)) {
+            acc += mid[u32(x * i32(p.height) + sy)].xyz * weights[k];
+            wsum += weights[k];
+        }
     }
+    acc = acc / max(wsum, 0.00001);
 
-    let rgb = floor(clamp(acc, vec3<f32>(0.0), vec3<f32>(255.0)) + vec3<f32>(0.5));
+    let d = dither_offset(u32(x), u32(y));
+    let rgb = floor(clamp(acc + d, vec3<f32>(0.0), vec3<f32>(255.0)) + vec3<f32>(0.5));
     let a = floor(coverage(f32(x), f32(y)) * 255.0 + 0.5);
     var out_rgb = rgb;
     if (a < 255.0) {

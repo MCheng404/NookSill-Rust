@@ -5,6 +5,24 @@ use super::*;
 /// English weekday names; the Chinese names come from core::calendar.
 const WEEKDAY_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/// Relaxed layout: one source for both painting and the fit test below.
+const SIDE_PAD: f32 = 18.0;
+const TOP_PAD: f32 = 18.0;
+const NAV_H: f32 = 36.0;
+const HEAD_GAP: f32 = 14.0;
+const HEAD_H: f32 = 32.0;
+const CELL_H: f32 = 54.0;
+const INFO_GAP: f32 = 12.0;
+const LINE_H: f32 = 26.0;
+const INFO_TOP: f32 = 12.0;
+
+const FONT_NAV: f32 = 15.0;
+const FONT_TODAY: f32 = 14.0;
+const FONT_WEEKDAY: f32 = 12.0;
+const FONT_DAY: f32 = 16.0;
+const FONT_SUB: f32 = 10.5;
+const FONT_INFO: f32 = 13.0;
+
 /// Paints navigation, weekday header, grid and the selected day's details.
 ///
 /// Everything is positioned explicitly. Returns the frame's hit rects.
@@ -29,11 +47,11 @@ pub(super) fn draw_panel(
     let line_c = style.line();
 
     // Layout baseline, all values from `CalDraw`'s `Sc` numbers.
-    let x0 = rect.left() + PM + 16.0;
-    let y0 = rect.top() + PM + 14.0;
-    let cw = PANEL_W - 2.0 * PM - 32.0;
-    let bw = 30.0_f32;
-    let nav_h = 34.0_f32;
+    let x0 = rect.left() + PM + SIDE_PAD;
+    let y0 = rect.top() + PM + TOP_PAD;
+    let cw = PANEL_W - 2.0 * PM - 2.0 * SIDE_PAD;
+    let bw = 32.0_f32;
+    let nav_h = NAV_H;
 
     let mut hits = Hits::default();
 
@@ -93,21 +111,21 @@ pub(super) fn draw_panel(
         egui::pos2(nx[0] + bw + 31.0, y0 + nav_h * 0.5),
         Align2::CENTER_CENTER,
         nooksill_core::i18n::fmt("Year {0}", &[(state.year).to_string().as_str()]),
-        FontId::proportional(14.0),
+        FontId::proportional(FONT_NAV),
         tc,
     );
     painter.text(
         egui::pos2(nx[2] + bw + 24.0, y0 + nav_h * 0.5),
         Align2::CENTER_CENTER,
         nooksill_core::i18n::fmt("Month {0}", &[(state.month).to_string().as_str()]),
-        FontId::proportional(14.0),
+        FontId::proportional(FONT_NAV),
         tc,
     );
     painter.text(
         hits.nav[4].center(),
         Align2::CENTER_CENTER,
         nooksill_core::i18n::t("Today"),
-        FontId::proportional(13.0),
+        FontId::proportional(FONT_TODAY),
         if matches!(hover, Some(Hit::Nav(4))) {
             Color32::WHITE
         } else {
@@ -116,10 +134,10 @@ pub(super) fn draw_panel(
     );
 
     // Weekday header, Monday first.
-    let wy = y0 + nav_h + 8.0;
+    let wy = y0 + nav_h + HEAD_GAP;
     let cell_w = cw / 7.0;
-    let cell_h = 46.0_f32;
-    let gy = wy + 26.0;
+    let cell_h = CELL_H;
+    let gy = wy + HEAD_H;
     for i in 0..7 {
         // i = 0 is Monday, i.e. WEEKDAY[(1+0)%7].
         let name = calendar::weekday_name(((i + 1) % 7) as u32);
@@ -127,7 +145,7 @@ pub(super) fn draw_panel(
             egui::pos2(x0 + (i as f32 + 0.5) * cell_w, wy + 12.0),
             Align2::CENTER_CENTER,
             name,
-            FontId::proportional(11.0),
+            FontId::proportional(FONT_WEEKDAY),
             if i >= 5 { red } else { sub },
         );
     }
@@ -175,7 +193,7 @@ pub(super) fn draw_panel(
             egui::pos2(cx, cy - 2.0),
             Align2::CENTER_BOTTOM,
             c.day.to_string(),
-            FontId::proportional(15.0),
+            FontId::proportional(FONT_DAY),
             num_color,
         );
 
@@ -192,13 +210,13 @@ pub(super) fn draw_panel(
             egui::pos2(cx, cy + 2.0),
             Align2::CENTER_TOP,
             &c.sub,
-            FontId::proportional(9.5),
+            FontId::proportional(FONT_SUB),
             sub_color,
         );
     }
 
     // Details of the selected day.
-    let info_y = gy + 6.0 * cell_h + 6.0;
+    let info_y = gy + 6.0 * cell_h + INFO_GAP;
     painter.line_segment(
         [egui::pos2(x0, info_y), egui::pos2(x0 + cw, info_y)],
         Stroke::new(1.0, line_c),
@@ -259,17 +277,43 @@ pub(super) fn draw_panel(
         None => String::new(),
     };
 
-    let lh = 22.0;
+    let lh = LINE_H;
     let lines = [(line1, tc), (line2, tc), (line3, sub), (line4, sub)];
     for (i, (text, color)) in lines.iter().enumerate() {
         painter.text(
-            egui::pos2(x0, info_y + 10.0 + i as f32 * lh),
+            egui::pos2(x0, info_y + INFO_TOP + i as f32 * lh),
             Align2::LEFT_TOP,
             text,
-            FontId::proportional(12.0),
+            FontId::proportional(FONT_INFO),
             *color,
         );
     }
 
     hits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The looser spacing must not push the fourth detail line off the panel.
+    #[test]
+    fn relaxed_layout_fits_and_keeps_nav_buttons_apart() {
+        let y0 = PM + TOP_PAD;
+        let wy = y0 + NAV_H + HEAD_GAP;
+        let gy = wy + HEAD_H;
+        let info_y = gy + 6.0 * CELL_H + INFO_GAP;
+        let last_line = info_y + INFO_TOP + 3.0 * LINE_H + FONT_INFO + 2.0;
+        assert!(
+            last_line < PANEL_H - PM,
+            "last detail line overflows: {last_line}"
+        );
+
+        let cw = PANEL_W - 2.0 * PM - 2.0 * SIDE_PAD;
+        assert!(cw / 7.0 >= CELL_H * 0.9, "cells became narrow strips");
+
+        let bw = 32.0_f32;
+        let nav_end = 132.0 + bw + 48.0 + bw;
+        assert!(cw - 58.0 > nav_end, "nav buttons overlap Today");
+    }
 }

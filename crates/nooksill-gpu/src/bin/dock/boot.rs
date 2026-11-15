@@ -73,6 +73,11 @@ impl App {
             }
         }
         let mut cfg = Config::from_ini(&ini);
+        // The per-popup blur override is gone; keep a value the user tuned.
+        let widget_blur = cfg.get_i32(Key::WIDGET_BLUR);
+        if widget_blur > 0 {
+            cfg.apply_i32(Key::Blur, widget_blur);
+        }
         // A monitor index outlives the screen it named: unplugging the second
         // display leaves `Monitor=1` behind. Fall back to the primary instead of
         // silently drawing nothing.
@@ -98,6 +103,8 @@ impl App {
             ));
         }
         let notes = nooksill_core::note::NoteBook::load(&ini);
+        // One ini read at startup; preloading and the lazy timer open reuse it.
+        let tool_state = nooksill_core::tool::ToolState::load(&ini);
         let items: Vec<DockItem> = raw.iter().map(DockItem::from_item).collect();
 
         // An auto-hidden taskbar on the same edge still shrinks the work area
@@ -289,6 +296,7 @@ impl App {
             watcher: nooksill_gpu::popup::Watcher::default(),
             panel_was_open: false,
             last_launch_ms,
+            tool_state,
             tool_save_at,
             widgets_dump,
             fps_frames: 0,

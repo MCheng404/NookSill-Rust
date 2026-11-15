@@ -19,7 +19,6 @@
 //! `Rgba8Unorm` egui applies its own gamma encoding and the readback turns
 //! panel grey 24 into grey 81.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_wgpu::wgpu::TextureView;
@@ -30,12 +29,6 @@ use crate::gpu::{Gpu, GpuError};
 use crate::offscreen::Offscreen;
 use crate::present::LayeredPresenter;
 pub use crate::present::Reflection;
-
-/// Per frame the full gaussian covers at most `1/STRIPES` of the width. When
-/// the changed columns fit the budget they all run the real blur; otherwise
-/// the stripes rotate and the rest is reprojected from the colour field, which
-/// caps the peak instead of falling back to a full-width convolution.
-const TRUE_BLUR_STRIPES: u32 = 4;
 
 /// The two things the caller needs after a frame is rendered.
 ///
@@ -78,22 +71,16 @@ pub struct FrameRenderer {
     shaders: crate::shaders::ShaderRuntime,
     /// Lazily created: only windows that enable frost pay for the pipeline.
     blur: Option<crate::shaders::frost::GpuBlur>,
-    /// Experimental live-blur plus illusion combination; both switches must be on.
-    illusion: Option<crate::shaders::illusion::Illusion>,
     /// Size of the current base texture; a size change requires a rebuild.
     frost_size: Option<(u32, u32)>,
-    /// Which stripe runs the real gaussian next (0..[`TRUE_BLUR_STRIPES`]).
-    stripe: u32,
-    /// Last captured frame; rebuilds at once when a switch flips on a static desktop.
-    last_frame: Option<crate::frost::FrostFrame>,
-    /// Blur path used last frame, to detect switch changes.
-    last_mode: bool,
     /// Smoke compute output, registered after `run_ui` produces it.
     smoke: Option<crate::shaders::smoke::SharedLayer>,
     /// Reflection parameters; `None` = draw none (settings window and menus).
     reflection: Option<Reflection>,
     /// Frost background layer, drawn below the UI (see `crate::frost`).
     frost: Option<FrostLayer>,
+    /// Low-frequency luminance field of the last capture, for the glow mesh.
+    glow: Option<crate::frost::glow::Field>,
     /// Whether the background layer covers the whole window on every frame.
     ///
     /// True for the popups, whose window *is* the blurred panel. False for the

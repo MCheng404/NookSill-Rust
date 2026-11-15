@@ -41,7 +41,7 @@ rayon 只用来并行派发图标批；像素处理本身已移到 GPU compute�
 | 窗口枚举 | `Scanner` | 1.2 s / 100 ms 一轮，都在后台 |
 | 写 ini | `DiskWriter` | 停手 400 ms 后才写 |
 | 毛玻璃抓屏 | `frost::Live` | 变化时 50 ms / 静止退避到 800 ms；另有 25 ms 像素探针负责提前唤醒 |
-| 毛玻璃模糊 | **UI 线程**（`shaders::frost` compute） | 只重算变化的列，零回读；实验路径改为 `shaders::illusion` 色场重投影 |
+| 毛玻璃模糊 | **UI 线程**（`shaders::frost` compute） | 只重算变化的列，零回读 |
 | 烟雾光栅 | **UI 线程**（`shaders::smoke` compute） | 每帧上传流场，输出直接注册为 egui 纹理 |
 
 ## 二、crate 依赖
@@ -121,11 +121,8 @@ Dock 完全隐藏时屏蔽残留期限。依据见 ADR-075。
 所以只 dispatch 变化列 `[x-r, x+r)`，其余像素留在纹理里不动。
 CPU `blur_rgba` / `compose` 保留为回退路径与像素级对照基准。
 
-`FrostIllusion` 打开后走另一条路：只在开窗时（以及色场大变且节流到期时）
-跑上面那次真高斯拿结构基底，其余帧由 `shaders::illusion` 用 24×16
-低频色场做**时域色彩重投影**，90 ms 插值过渡，每帧一个无循环 compute
-pass；过渡期间主动 `request_repaint_after`，静止时零提交。原算法不删，
-开关关掉就整幅回到它（见 ADR-073）。
+磨砂只有这一条路径。实验性的 `illusion` 色场重投影已整条移除，
+`FrostIllusion` 键保留在 ini 里以兼容旧配置，但不再读取（ADR-094）。
 
 ### GPU shader 框架：`gpu/shaders/`
 
@@ -135,8 +132,7 @@ pass；过渡期间主动 `request_repaint_after`，静止时零提交。原算�
 
 | 模块 | GPU 做什么 | CPU 参考 |
 |---|---|---|
-| `frost.wgsl` | 两趟可分离高斯 + 圆角 + 预乘（支持脏列范围） | `frost::blur_rgba` |
-| `illusion.wgsl` | 低频色场双线性重投影 + 时间插值（实验性） | `frost::color_field` |
+| `frost.wgsl` | 两趟可分离高斯 + 圆角 + 预乘 + 抖动（支持脏列范围） | `frost::blur_rgba` |
 | `smoke.wgsl` | 双线性放大 + 三层噪声 + 调色 + pre/post | `Fluid::raster` / `post` |
 | `icon.wgsl` | 图标圆角 alpha 遮罩 | `core::icon::apply_round_mask` |
 | `puff.wgsl` | 64×64 软边烟团贴图 | `SmokeFx::puff_rgba_cpu` |
@@ -231,6 +227,26 @@ cargo run -p nooksill-gpu --example settings_shot -- 出图.bmp 外观 [dark]
 
 走的是与真实窗口完全相同的 `FrameRenderer` + `settings_win::shell`，只把最后
 一步的 `UpdateLayeredWindow` 换成写 BMP。
+
+### 组件面板：声明式注册表 + 运行时
+
+七个面板原先各写一套定位（锚点 / 居中 / 自己算「上方居中」）和一套背景：
+日历与控制中心锚在卡片旁，计时器 / 资源 / 速记读 `centered_on_target`，
+应用组另算一遍；面板的 `FrameRenderer` 从未启用磨砂。现在两层收口：
+
+```
+core::config::panel     REGISTRY / PanelKind / Placement / Backdrop / Prefs（纯数据）
+      ↓ 每帧 sync_prefs
+gpu::widgets/framework  prefs（进程级） → placement（纯几何） → runtime（Win32 + 抓屏绑定）
+      ↓
+widgets/{calendar,control,timer,resource,notes,group,editor}   只声明 kind，共用 paint_frame
+```
+
+位置三档（跟随组件 / 屏幕居中 / 自动）由 `framework::placement::place` 一个纯函数
+决定，`Auto` 比较未钳制的理想矩形与工作区；背景四档（跟随栏体 / 纯色 / 渐变 /
+磨砂）由 `PanelStyle` 绘制，`runtime::apply_backdrop` 负责挂实时抓屏并在收起时释放。
+新增一个组件 = `REGISTRY` 加一行 + 面板打开时调一次 `place_panel` /
+`apply_backdrop`，`nooksill_gpu::calendar_win` 等公开路径不变（ADR-088）。
 
 ## 四、帧调度：空闲不提交
 
@@ -341,19 +357,21 @@ async 运行时带来的调度开销与栈占用都不划算。
     并同时挡 `NaN` / 无穷。可变上界的 clamp（如 `w as f32 - 1.001`）
     也要先保证上界非负。
 16. **所有弹出面板的视觉样式只有一个来源**：`gpu::widgets::style::PanelStyle`。
-    七个面板（日历 / 控制中心 / 计时器 / 资源 / 速记 / 分组 / 编辑）统一
-    走 `paint_frame()`（底色 → 磨砂叠加层 → 细边框）与
-    `ink / ink_sub / faint / card / card_hover / line`；圆角只用
+    **底色一律走 `paint_base()`**：日历 / 控制中心 / 计时器 / 资源经
+    `paint_frame()` 间接调用，速记 / 分组 / 编辑自己画叠加层与细边框，
+    但底色必须调同一个方法（曾漏掉这三处，材质开关对它们静默无效）。
+    文字层级统一走 `ink / ink_sub / faint / card / card_hover / line`；圆角只用
     `R_PANEL / R_CARD / R_FIELD / R_SMALL` 或 `pill(h)`，**不留锐角**。
     注意 `argbc(a,r,g,b)` 是 alpha 在前，与 egui 的
     `from_rgba_unmultiplied(r,g,b,a)` 相反 —— 这个项目已经因此错两次。
     配置经进程级 `sync_prefs` 同步，不要在单个面板里另读 `Config`。
     这些面板的物理位置统一在 `gpu::widgets/`（见不变式 17）。
 17. **小组件代码按「一个面板一个模块」放在 `gpu::widgets/`**：
-    `calendar / control / timer / resource / notes / group / editor / style`。
+    `calendar / control / timer / resource / notes / group / editor / style / framework`。
     `lib.rs` 用 `pub use widgets::calendar as calendar_win` 保留旧路径，
     外部调用方可以逐步迁移；模块内部一律用 `widgets::` 新路径。
-    新增小组件只需在 `widgets/mod.rs` 加一行声明。
+    新增小组件只需在 `widgets/mod.rs` 加一行声明，并在
+    `core::config::panel::REGISTRY` 加一行描述。
 18. **拖入走 `gpu::drop_target::DockDropTarget`（OLE `IDropTarget`）**，
     `DragAcceptFiles` 只是注册失败时的兜底。`DragOver` 只负责把落点写进
     [`Dock::set_external_drop`]，数据落地一律在 `Drop` 里走
@@ -401,6 +419,50 @@ async 运行时带来的调度开销与栈占用都不划算。
 29. **几何按目标显示器现算，不缓存主屏**：工作区、`AppBar` 预留、DPI 都从 `[Settings] Monitor` 取（`work_area` / `monitor_rect` / `monitor_dpi`），越界回退主屏；`App::sync_monitor` 在序号或 `Dock.geom_epoch`（`WM_DPICHANGED` / `WM_DISPLAYCHANGE` 自增）变化时重算，`step_relayout` 同时比较尺寸与原点。弹窗按锚点钳制（`widgets::anchor` + `display::monitor_at` / `work_area_at`），没有锚点的居中面板读 `display::target_work_area()`。任何新窗口都不要直接写 `work_area(0)` / `monitor_rect(0)`（ADR-079）。
 30. **抓屏背景要求窗口把自己排除出捕获**：`frost::Live` 读的是「屏幕在该矩形上显示的内容」，活窗口不调 `exclude_from_capture`（`WDA_EXCLUDEFROMCAPTURE`）就会抓到自己；`x ← blur(0.6·tint + 0.4·x)` 的不动点是一片纯色，磨砂会静默退化成塑料。排除只在真的画磨砂时开（`Config::frost_enabled()`），关闭或退出走 `allow_capture`，代价是开着磨砂的窗口不进截图/录屏。背景按件取：`FrameRenderer::frost_backdrop` 给出 `frost::Backdrop { tex, win }`，绘制一律走 `chrome::rounded_frost`，UV 是「窗口内分数」，不要整张 `Shape::image` 贴上去——栏体上下留出的悬垂与倒影边距里没有模糊底；`draw_frame` 里那句整窗 `painter().image(...)` 由 `FrameRenderer::set_frost_whole_window` 控制，默认给面板、栏体在启动时关掉。换帧由 `Live::has_frame` 驱动（`App::step_frost` 返回 `true` 才重绘），不要用定时器轮询，否则静止时也会出帧，破坏零帧待机；只改半径走 `set_frost_spec`，不要重启线程（ADR-080）。
 31. **同一条线程上的两个窗口，一次只画一个**：栏体、设置窗口、起动台和七个面板都在一条 UI 线程、一个 wgpu 设备上，一轮循环只购买一次 present。`pump()` 只把 `msg.hwnd == 栏体` 的消息算作「栏体有新消息」，其他窗口的输入只打断等待；设置窗口的连续重绘按显示器刷新节流（不是 1 ms），且它一进入连续动画（`SettingsWindow::animating`）栏体就当轮停画，`wait(yielded)` 同时收起烟雾的帧间隔唤醒。判断「谁该出帧」只看这两个事实，不要用「设置窗口可见」当条件——光标闪烁和一次性刷新必须让栏体继续动（ADR-081）。
+
+32. **组件面板的位置与背景只有一条出口**：定位一律走
+    `framework::place_panel`（内部调 `placement::place`，锚点几何只有
+    `widgets::anchor` 一份；`monitor_of` 与 `work_area_of` 必须用同一个
+    `center_of`，否则副屏锚点会按主屏工作区居中）。底色一律走
+    `PanelStyle::paint_base`，抓屏绑定走
+    `framework::{apply_backdrop, refresh_backdrop, release_backdrop}`。
+    面板自己不再调 `centered_on_target` / `SetWindowPos` 算位置，也不自己
+    `start_live_frost`；窗口尺寸变化后必须 `refresh_backdrop`（旧模糊纹理会被
+    拉伸），首次抓屏失败必须 `release_backdrop` 交回截图可见性。静态面板的
+    `due()` 必须把 `renderer.frost_pending()` 并进判据，否则抓屏线程产出的
+    新帧不会触发重绘，磨砂会停在第一帧（ADR-080 同一条约束）。
+
+33. **预加载与懒加载共用同一批 slot**：`App::preload_panels()` 只填 `None`
+    的六个面板 slot，创建失败的留空、由点击路径补建；预加载的窗口一律隐藏，
+    不调用 `show_*`。预加载不得绕过 `new()` 里的 `attach()` ——
+    `GWLP_USERDATA` 必须指向 `Pin<Box<Self>>` 的最终地址（不变式 2）。
+    `reset_panels_for_scale()` 销毁后本会话回到懒加载，下次启动再预加载。
+    **预加载不得读盘或读注册表**：`[Tool]` 由 `boot` 解析进 `App::tool_state`，
+    暗色判定用主循环缓存的 `system_dark`；写盘提交与 DPI 重建前同步回缓存
+    （ADR-090）。
+
+34. **磨砂卷积的边缘不得钳制到边界像素**：`frost::paint::edge_taps` 与
+    `frost.wgsl` 的两趟卷积都必须丢弃越界 tap 并按实际权重和归一化。
+    钳制会让左上角在水平、垂直两趟同时反复采样同一个像素，放大后就成了
+    纯色方块；这是所有磨砂窗口共用的内核，改一处必须两处同步，并跑
+    `#[ignore]` 的 CPU/GPU 逐通道对照。`GpuBlur::Target` 把 `corner` 也算进
+    重建判定，避免脏列更新时四角残留旧 alpha（ADR-091）。
+
+35. **柔光是抓屏内容的函数，不是常量蒙版**：`frost::glow::Field` 从捕获的
+    桌面降采样成 4×4 低频亮度，`mesh()` 展开成 5×5 顶点；两者与
+    `soft_light()` 都是纯函数，必须保持无 Win32 依赖以便无头单测。柔光层
+    画在整窗 frost sheet 之后、`build(ui)` 之前，**栏体（`frost_whole=false`）
+    不画**，否则透明的悬停区与倒影边距会出现矩形亮块。强度由
+    `frost::glow_strength()` 发布，`panel_style::sync_prefs` 负责同步
+    `GlowStrength`（ADR-092）。
+
+36. **8-bit 后处理输出必须抖动，磨砂只有一套开关**：`frost.wgsl` 在
+    `textureStore` 前加整数哈希的 ±0.5 步噪声，CPU
+    `apply_dither` 用相同的 wrapping 运算。磨砂纹理放大 4 倍显示，不抖动就会
+    看到色带；改公式必须两边同步，CPU/GPU 最终图像的容差 2 就是留给抖动的
+    合法余量（ADR-093）。磨砂材质只有 `BgMode`、强度只有 `Blur`，
+    `frost_spec` 不再接收 per-surface key；`PanelBg` / `UiFrost` / `LpFrost` /
+    `MenuFrost` / `GroupFrost` 是兼容键，`WidgetBlur` 在启动时并入 `Blur`。
 
 ## 八、与 C 版的模块映射
 

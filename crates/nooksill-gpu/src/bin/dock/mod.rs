@@ -22,6 +22,7 @@ use nooksill_core::layout::Rect as LRect;
 use nooksill_core::running;
 use nooksill_core::smoke::{Tuning, PALETTE};
 use nooksill_core::store;
+use nooksill_core::tool::ToolState;
 use nooksill_gpu::calendar_win::CalendarWindow;
 use nooksill_gpu::cc_win::CcWindow;
 use nooksill_gpu::dock::{Dock, DockItem};
@@ -278,11 +279,11 @@ struct App {
     /// Edit popup (rename, create). Modal like the menu, so it reuses the
     /// same slot type.
     edit_slot: EditSlot,
-    /// Group panel, created lazily: most sessions never use groups.
+    /// Group panel; preloaded unless `PreloadPanels` is off.
     group_slot: Option<Pin<Box<GroupWindow>>>,
     /// Index of the group shown by the group panel within `raw`.
     group_index: Option<usize>,
-    /// Notes panel, created lazily.
+    /// Notes panel; preloaded unless `PreloadPanels` is off.
     note_slot: Option<Pin<Box<NoteWindow>>>,
     /// All notes; the source of truth, written back as a whole `[Notes]`.
     notes: nooksill_core::note::NoteBook,
@@ -315,13 +316,13 @@ struct App {
     /// When the system samples were last refreshed, for the resource monitor
     /// card.
     last_sysinfo: std::time::Instant,
-    /// Resource monitor detail panel, created lazily.
+    /// Resource monitor detail panel; preloaded unless `PreloadPanels` is off.
     resmon_slot: Option<Pin<Box<ResMonWindow>>>,
-    /// Timer and todo panel, also created lazily.
+    /// Timer and todo panel; preloaded unless `PreloadPanels` is off.
     tool_slot: Option<Pin<Box<ToolWindow>>>,
-    /// Calendar popup, created lazily.
+    /// Calendar popup; preloaded unless `PreloadPanels` is off.
     calendar_slot: Option<Pin<Box<CalendarWindow>>>,
-    /// Control centre panel, created lazily: it holds COM interfaces.
+    /// Control centre panel; preloaded unless `PreloadPanels` is off (COM).
     cc_slot: Option<Pin<Box<CcWindow>>>,
     /// Launchpad, created lazily and only once: it owns an icon thread.
     launchpad_slot: Option<Pin<Box<LaunchpadWindow>>>,
@@ -347,6 +348,8 @@ struct App {
     /// or fullscreen, and an immediate check would make the Dock hide and
     /// come back.
     last_launch_ms: Option<u64>,
+    /// Timer snapshot from the startup ini read; preload and lazy open reuse it.
+    tool_state: ToolState,
     /// When the timer panel changes should hit the disk, debounced together
     /// with the config.
     tool_save_at: Option<Instant>,
@@ -474,6 +477,7 @@ mod menu_win;
 mod misc;
 mod panels_notes;
 mod panels_state;
+mod preload;
 mod render;
 mod resmon;
 mod run_loop;

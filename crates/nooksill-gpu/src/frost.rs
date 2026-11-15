@@ -15,7 +15,7 @@
 //! carries its changed column range so the convolution only recomputes the
 //! columns that actually changed.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -65,19 +65,20 @@ const MIN_CAPTURE_GAP: Duration = Duration::from_millis(40);
 /// one full capture at this interval.
 const PROBE_FORCE_GAP: Duration = Duration::from_millis(300);
 
-/// Experimental "visual illusion" blur switch. Process-wide: the main loop
-/// syncs it from config every frame.
-static ILLUSION: AtomicBool = AtomicBool::new(false);
+/// Soft-light strength in percent, published from the settings prefs.
+static GLOW_STRENGTH: AtomicU8 = AtomicU8::new(50);
 
-/// Switch the experimental blur path. The gaussian path stays available.
-pub fn set_illusion(on: bool) {
-    ILLUSION.store(on, Ordering::Relaxed);
+/// Set the soft-light strength from config (0..100).
+pub fn set_glow_strength(percent: i32) {
+    GLOW_STRENGTH.store(percent.clamp(0, 100) as u8, Ordering::Relaxed);
 }
 
-/// Whether the experimental blur path is on.
+/// Strength as a fraction of the neutral source; 0.5 is the shipped default.
+/// The frosted tint above this layer transmits about a fifth of it, so the
+/// visible effect stays restrained even at the top of the slider.
 #[must_use]
-pub fn illusion() -> bool {
-    ILLUSION.load(Ordering::Relaxed)
+pub fn glow_strength() -> f32 {
+    f32::from(GLOW_STRENGTH.load(Ordering::Relaxed)) / 100.0
 }
 
 /// Frost parameters for one window open. `None` = the feature is off.
@@ -125,9 +126,8 @@ impl Spec {
             renderer.clear_frost();
             return;
         };
-        if illusion() && renderer.set_frost_illusion(bits, w, h, self, ppp) {
-            return;
-        }
+        // One low-frequency field per capture; live frames refresh it too.
+        renderer.set_frost_glow(glow::Field::sample(bits, w as usize, h as usize));
         if renderer.set_frost_gpu(bits, w, h, self, ppp) {
             return;
         }
@@ -158,11 +158,14 @@ pub fn allow_capture(hwnd: HWND) {
 }
 
 mod capture;
+pub mod glow;
 mod live;
 mod paint;
 
 pub use self::capture::{color_field, field_delta, ColorField, GRID_H, GRID_W};
 pub use self::live::{FrostFrame, Live};
+#[cfg(test)]
+pub(crate) use self::paint::apply_dither;
 #[cfg(test)]
 pub(crate) use self::paint::apply_round_alpha;
 pub(crate) use self::paint::compose;
@@ -255,16 +258,27 @@ mod tests {
             for x in 0..w {
                 for c in 0..3 {
                     // Real 2D convolution: the kernel is the outer product of
-                    // the two 1D weights, not a diagonal sum.
+                    // the two 1D weights, not a diagonal sum. Out-of-bounds
+                    // taps are dropped and the used weights renormalised, so
+                    // this matches the separable path at the edges too.
                     let mut acc = 0.0f32;
+                    let mut wsum = 0.0f32;
                     for (j, wy) in weights.iter().enumerate() {
-                        let sy = (y as i32 + j as i32 - r).clamp(0, h as i32 - 1) as usize;
+                        let sy = y as i32 + j as i32 - r;
+                        if sy < 0 || sy >= h as i32 {
+                            continue;
+                        }
                         for (k, wx) in weights.iter().enumerate() {
-                            let sx = (x as i32 + k as i32 - r).clamp(0, w as i32 - 1) as usize;
-                            acc += f32::from(src[(sy * w + sx) * 4 + c]) * wy * wx;
+                            let sx = x as i32 + k as i32 - r;
+                            if sx < 0 || sx >= w as i32 {
+                                continue;
+                            }
+                            acc +=
+                                f32::from(src[(sy as usize * w + sx as usize) * 4 + c]) * wy * wx;
+                            wsum += wy * wx;
                         }
                     }
-                    let want = acc.round().clamp(0.0, 255.0) as i32;
+                    let want = (acc / wsum.max(1e-5)).round().clamp(0.0, 255.0) as i32;
                     let got = i32::from(fast[(y * w + x) * 4 + c]);
                     assert!(
                         (got - want).abs() <= 1,
@@ -350,7 +364,6 @@ mod tests {
             h: 1,
             x0,
             x1,
-            field: Arc::new(vec![[0.0; 3]; GRID_W * GRID_H]),
         }
     }
 

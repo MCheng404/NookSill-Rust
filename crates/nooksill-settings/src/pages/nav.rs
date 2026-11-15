@@ -9,45 +9,49 @@ use super::Page;
 /// A primary entry that owns a set of content pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavGroup {
-    Dock,
+    Look,
+    Behaviour,
     Content,
-    Update,
+    System,
 }
 
 impl NavGroup {
-    pub const ALL: [NavGroup; 3] = [NavGroup::Dock, NavGroup::Content, NavGroup::Update];
+    pub const ALL: [NavGroup; 4] = [
+        NavGroup::Look,
+        NavGroup::Behaviour,
+        NavGroup::Content,
+        NavGroup::System,
+    ];
 
     /// Primary navigation label; group labels are not page titles.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            NavGroup::Dock => nooksill_core::i18n::t("Dock bar"),
+            NavGroup::Look => nooksill_core::i18n::t("Look & feel"),
+            NavGroup::Behaviour => nooksill_core::i18n::t("Behaviour"),
             NavGroup::Content => nooksill_core::i18n::t("Content & library"),
-            NavGroup::Update => nooksill_core::i18n::t("Updates & network"),
+            NavGroup::System => nooksill_core::i18n::t("System"),
         }
     }
 
     /// Tabs shown while the group is open, in navigation order.
+    ///
+    /// Grouped by intent, not by module: what it looks like, how it behaves,
+    /// what it holds, and how it updates.
     #[must_use]
     pub fn tabs(self) -> &'static [Page] {
         match self {
-            NavGroup::Dock => &[
-                Page::Appearance,
-                Page::Position,
-                Page::Icons,
-                Page::Interaction,
-                Page::Extras,
-                Page::Effect,
-            ],
+            NavGroup::Look => &[Page::Appearance, Page::Effect, Page::Icons],
+            NavGroup::Behaviour => &[Page::Position, Page::Interaction, Page::Extras],
             NavGroup::Content => &[Page::Items, Page::Library, Page::Add],
-            NavGroup::Update => &[Page::UpdatePolicy, Page::UpdateNetwork],
+            NavGroup::System => &[Page::Performance, Page::UpdatePolicy, Page::UpdateNetwork],
         }
     }
 
     /// Groups whose tabs render the live Dock preview above the cards.
     #[must_use]
     pub fn shows_preview(self) -> bool {
-        matches!(self, NavGroup::Dock)
+        matches!(self, NavGroup::Look | NavGroup::Behaviour)
     }
 
     /// The group owning `page`, if the page is never a primary entry.
@@ -67,11 +71,11 @@ pub enum NavItem {
 impl NavItem {
     /// Order of the primary column. Group entries replace the pages they own.
     pub const PRIMARY: [NavItem; 6] = [
+        NavItem::Group(NavGroup::Look),
         NavItem::Page(Page::General),
-        NavItem::Group(NavGroup::Dock),
-        NavItem::Page(Page::Performance),
+        NavItem::Group(NavGroup::Behaviour),
         NavItem::Group(NavGroup::Content),
-        NavItem::Group(NavGroup::Update),
+        NavItem::Group(NavGroup::System),
         NavItem::Page(Page::About),
     ];
 

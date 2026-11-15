@@ -18,9 +18,10 @@ use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW,
-    ShowWindow, GWLP_USERDATA, SW_HIDE, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
+    SetWindowPos, ShowWindow, GWLP_USERDATA, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::frame::FrameRenderer;
@@ -149,8 +150,21 @@ impl ResMonWindow {
         self.visible
     }
 
-    /// Shows the panel and samples the data once.
-    pub fn show(&mut self) {
+    /// Shows the panel under the published placement policy.
+    pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: nooksill_core::config::Edge) {
+        let (pw, ph) = physical_size(self.ppp);
+        let (x, y) = crate::widgets::framework::place_panel(
+            crate::widgets::framework::PanelKind::Resource,
+            (pw, ph),
+            Some(anchor),
+            edge,
+            self.ppp,
+        );
+        self.pos = (x, y);
+        unsafe {
+            let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        crate::widgets::framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
         }
@@ -164,15 +178,16 @@ impl ResMonWindow {
             return;
         }
         self.visible = false;
+        crate::widgets::framework::release_backdrop(&mut self.renderer, self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
 
-    /// Whether the refresh deadline has passed.
+    /// Whether the refresh deadline has passed or a backdrop frame arrived.
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_refresh <= Instant::now()
+    pub fn due(&mut self) -> bool {
+        self.visible && (self.next_refresh <= Instant::now() || self.renderer.frost_pending())
     }
 
     /// Samples the data once more.

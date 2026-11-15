@@ -3,6 +3,7 @@
 use super::paint::{draw_panel, Input};
 use super::win::physical_size;
 use super::*;
+use crate::widgets::framework::{self, PanelKind};
 
 impl ToolWindow {
     /// Paints one frame. `now_ms` is the caller's time base.
@@ -70,7 +71,12 @@ impl ToolWindow {
         }
         self.renderer.resize(gpu, pw as u32, ph as u32)?;
         self.size = (pw, ph);
-        let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
+        let (x, y) = match self.placement {
+            Some((anchor, edge)) => {
+                framework::place_panel(PanelKind::Tool, (pw, ph), Some(anchor), edge, self.ppp)
+            }
+            None => nooksill_platform::display::centered_on_target(pw, ph),
+        };
         self.pos = (x, y);
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
@@ -84,6 +90,8 @@ impl ToolWindow {
                     | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
             );
         }
+        // The blur texture is sized to the old window; a resize must recapture.
+        framework::refresh_backdrop(&mut self.renderer, self.hwnd, self.ppp);
         Ok(())
     }
 }

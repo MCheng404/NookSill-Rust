@@ -46,9 +46,9 @@ pub(super) fn paint(
     let rect = ui.max_rect();
     // Shared panel style: base fill, overlay, hairline, three text tiers.
     let style = PanelStyle::current(dark, frosted);
-    let (bg, ink, faint, border) = (style.bg(), style.ink(), style.ink_sub(), style.border());
+    let (ink, faint, border) = (style.ink(), style.ink_sub(), style.border());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(PanelStyle::R_PANEL), bg);
+    style.paint_base(painter, rect);
     painter.rect_filled(
         rect,
         CornerRadius::same(PanelStyle::R_PANEL),

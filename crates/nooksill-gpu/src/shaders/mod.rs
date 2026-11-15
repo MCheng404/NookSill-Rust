@@ -212,6 +212,5 @@ impl ShaderRuntime {
 
 pub mod frost;
 pub mod icon;
-pub mod illusion;
 pub mod puff;
 pub mod smoke;

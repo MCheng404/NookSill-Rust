@@ -89,21 +89,6 @@ pub(super) fn network_page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             );
         },
     );
-    card(
-        ctx,
-        ui,
-        nooksill_core::i18n::t("Experimental"),
-        nooksill_core::i18n::t("Changes apply immediately."),
-        |ctx, ui| {
-            toggle(
-                ctx,
-                ui,
-                Key::FROST_ILLUSION,
-                nooksill_core::i18n::t("Experimental: lightweight live frost"),
-                nooksill_core::i18n::t("A colour-reprojection blur: one real Gaussian keeps the structure, then a low-frequency colour field tracks the desktop; cuts capture and convolution cost. Off returns to the original Gaussian."),
-            );
-        },
-    );
 }
 
 /// Status line plus the buttons allowed by the current update stage.

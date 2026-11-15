@@ -209,11 +209,6 @@ impl SettingsWindow {
     }
 
     pub fn hide(&mut self) {
-        // The hidden entry point only lives for this session: closing the
-        // window takes back the advanced card, so the next open needs the
-        // five version clicks again.
-        self.state.advanced = false;
-        self.state.version_clicks = 0;
         self.renderer.stop_live_frost();
         crate::frost::allow_capture(self.hwnd);
         unsafe {

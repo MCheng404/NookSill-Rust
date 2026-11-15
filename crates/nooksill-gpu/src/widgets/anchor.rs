@@ -14,17 +14,53 @@ const CARD_MARGIN: f32 = 8.0;
 /// Visible gap between the panel and the card, at 96 DPI.
 const PANEL_GAP: f32 = 4.0;
 
+/// Centre of the anchor rect, in physical pixels.
+#[must_use]
+pub fn center_of(anchor: (f32, f32, f32, f32)) -> (i32, i32) {
+    let (al, at, ar, ab) = anchor;
+    (
+        ((al + ar) * 0.5).round() as i32,
+        ((at + ab) * 0.5).round() as i32,
+    )
+}
+
 /// Monitor rect (not the work area) of the screen the anchor sits on.
 ///
 /// Clamping must use `rcMonitor`: covering the taskbar is fine, hanging off the
 /// screen is not.
 #[must_use]
 pub fn monitor_of(anchor: (f32, f32, f32, f32)) -> Rect {
+    let (x, y) = center_of(anchor);
+    nooksill_platform::display::monitor_at(x, y)
+}
+
+/// Work area of the anchor's monitor; centering must use the same screen as
+/// clamping, or a tray-opened panel on a second monitor lands on the primary.
+#[must_use]
+pub fn work_area_of(anchor: (f32, f32, f32, f32)) -> Rect {
+    let (x, y) = center_of(anchor);
+    nooksill_platform::display::work_area_at(x, y)
+}
+
+/// Unclamped top-left corner, in physical pixels.
+///
+/// `Auto` placement compares this against the work area: a clamped panel
+/// would always look like it fits.
+#[must_use]
+pub fn ideal(pw: i32, ph: i32, anchor: (f32, f32, f32, f32), edge: Edge, ppp: f32) -> (f32, f32) {
     let (al, at, ar, ab) = anchor;
-    nooksill_platform::display::monitor_at(
-        ((al + ar) * 0.5).round() as i32,
-        ((at + ab) * 0.5).round() as i32,
-    )
+    let ax = (al + ar) * 0.5;
+    let ay = (at + ab) * 0.5;
+    let margin = (CARD_MARGIN * ppp).round();
+    let gap = (PANEL_GAP * ppp).round();
+    let half_w = pw as f32 * 0.5;
+    let half_h = ph as f32 * 0.5;
+    match edge {
+        Edge::Top => (ax - half_w, ab - margin + gap),
+        Edge::Left => (ar - margin + gap, ay - half_h),
+        Edge::Right => (al - pw as f32 + margin - gap, ay - half_h),
+        Edge::Bottom => (ax - half_w, at - ph as f32 + margin - gap),
+    }
 }
 
 /// Top-left corner for a `pw` x `ph` panel hanging off `anchor`.
@@ -40,19 +76,7 @@ pub fn place(
     ppp: f32,
     mon: Rect,
 ) -> (i32, i32) {
-    let (al, at, ar, ab) = anchor;
-    let ax = (al + ar) * 0.5;
-    let ay = (at + ab) * 0.5;
-    let margin = (CARD_MARGIN * ppp).round();
-    let gap = (PANEL_GAP * ppp).round();
-    let half_w = pw as f32 * 0.5;
-    let half_h = ph as f32 * 0.5;
-    let (x, y) = match edge {
-        Edge::Top => (ax - half_w, ab - margin + gap),
-        Edge::Left => (ar - margin + gap, ay - half_h),
-        Edge::Right => (al - pw as f32 + margin - gap, ay - half_h),
-        Edge::Bottom => (ax - half_w, at - ph as f32 + margin - gap),
-    };
+    let (x, y) = ideal(pw, ph, anchor, edge, ppp);
     let mut xi = x.round() as i32;
     let mut yi = y.round() as i32;
     if xi + pw > mon.right {
@@ -81,6 +105,12 @@ mod tests {
         right: 3840,
         bottom: 1080,
     };
+
+    #[test]
+    fn center_of_rounds_and_accepts_a_zero_sized_cursor_anchor() {
+        assert_eq!(center_of((2400.0, 990.0, 2461.0, 1070.0)), (2431, 1030));
+        assert_eq!(center_of((10.0, 20.0, 10.0, 20.0)), (10, 20));
+    }
 
     #[test]
     fn bottom_dock_puts_the_panel_above_the_card() {

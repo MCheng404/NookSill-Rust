@@ -48,19 +48,6 @@ pub(super) fn physical_size(ppp: f32, tiles: usize) -> (i32, i32) {
     )
 }
 
-/// Places the panel next to the card by the same rules as the calendar
-/// popup, then clamps it into the monitor.
-pub(super) fn place(
-    pw: i32,
-    ph: i32,
-    anchor: (f32, f32, f32, f32),
-    edge: nooksill_core::config::Edge,
-    ppp: f32,
-) -> (i32, i32) {
-    let mon = super::super::anchor::monitor_of(anchor);
-    super::super::anchor::place(pw, ph, anchor, edge, ppp, mon)
-}
-
 /// Converts client coords (physical px) to logical points.
 pub(super) fn client_pos(lparam: LPARAM, ppp: f32) -> (f32, f32) {
     let x = (lparam.0 & 0xffff) as u16 as i16 as f32;

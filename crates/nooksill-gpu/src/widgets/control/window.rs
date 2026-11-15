@@ -1,7 +1,8 @@
 //! Control centre lifecycle: creation, placement and pending tile order.
 
-use super::win::{class_pcwstr, physical_size, place, wndproc};
+use super::win::{class_pcwstr, physical_size, wndproc};
 use super::*;
+use crate::widgets::framework::{self, PanelKind};
 
 impl CcWindow {
     /// Creates the window (hidden).
@@ -138,10 +139,19 @@ impl CcWindow {
             }
         }
         let (pw, ph) = physical_size(self.ppp, self.tiles.len());
-        let (x, y) = place(pw, ph, anchor, edge, self.ppp);
+        let (x, y) = framework::place_panel(
+            PanelKind::ControlCenter,
+            (pw, ph),
+            Some(anchor),
+            edge,
+            self.ppp,
+        );
         self.pos = (x, y);
         unsafe {
             let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
+        unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOWNA);
         }
         self.visible = true;
@@ -154,14 +164,15 @@ impl CcWindow {
             return;
         }
         self.visible = false;
+        framework::release_backdrop(&mut self.renderer, self.hwnd);
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
     }
 
     #[must_use]
-    pub fn due(&self) -> bool {
-        self.visible && self.next_repaint <= Instant::now()
+    pub fn due(&mut self) -> bool {
+        self.visible && (self.next_repaint <= Instant::now() || self.renderer.frost_pending())
     }
 
     /// Sets the icon theme color.

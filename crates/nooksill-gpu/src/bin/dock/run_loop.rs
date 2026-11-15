@@ -146,15 +146,26 @@ impl App {
     /// menu is modal and must sit after clicks but before settings; disk writes
     /// come after settings so this round's changes are already in `cfg`.
     pub(super) fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut preload = self.dock.cfg.get_i32(Key::PRELOAD_PANELS) != 0;
+        if preload {
+            self.preload_panels();
+        }
         let mut msg = MSG::default();
         loop {
             let mut need_frame = false;
-            // The experimental blur switch lives in `Config`, but the capture
-            // thread and every `FrameRenderer` need it immediately; sync per
-            // frame so a settings change applies without a restart.
-            nooksill_gpu::frost::set_illusion(self.dock.cfg.get_i32(Key::FROST_ILLUSION) != 0);
+            // Panel constructors take no Config; publish before any open this round.
+            nooksill_gpu::widgets::framework::sync_prefs(&self.dock.cfg);
             // A settings edit changes the combination without a restart.
             self.sync_global_hotkey();
+            // Turning preloading on takes effect at once; turning it off only
+            // affects the next launch, since dropping live windows is disruptive.
+            let want = self.dock.cfg.get_i32(Key::PRELOAD_PANELS) != 0;
+            if want != preload {
+                preload = want;
+                if preload {
+                    self.preload_panels();
+                }
+            }
 
             // 1. Drain the queue; one frame per message would jitter.
             match pump(&mut msg, self.hwnd) {

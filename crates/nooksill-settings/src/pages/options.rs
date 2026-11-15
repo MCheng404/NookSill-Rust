@@ -10,6 +10,21 @@ pub(crate) const UI_THEME_OPTS: &[(i32, &str)] = &[(0, "Light"), (1, "Dark"), (2
 
 pub(crate) const BG_OPTS: &[(i32, &str)] = &[(0, "Solid"), (1, "Gradient"), (2, "Frosted glass")];
 
+/// Widget panel placement; `2` centres the panel when it would not fit.
+pub(crate) const PANEL_POS_OPTS: &[(i32, &str)] = &[
+    (0, "Above the widget"),
+    (1, "Screen centre"),
+    (2, "Automatic"),
+];
+
+/// Per-panel override; `0` inherits [`PANEL_POS_OPTS`].
+pub(crate) const PANEL_OVERRIDE_OPTS: &[(i32, &str)] = &[
+    (0, "Follow global setting"),
+    (1, "Above the widget"),
+    (2, "Screen centre"),
+    (3, "Automatic"),
+];
+
 pub(crate) const EDGE_OPTS: &[(i32, &str)] = &[
     (0, "Screen bottom"),
     (1, "Screen top"),
@@ -118,6 +133,8 @@ mod tests {
             THEME_OPTS,
             UI_THEME_OPTS,
             BG_OPTS,
+            PANEL_POS_OPTS,
+            PANEL_OVERRIDE_OPTS,
             EDGE_OPTS,
             MODE_OPTS,
             PLATE_OPTS,

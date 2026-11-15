@@ -2,9 +2,6 @@
 
 use super::*;
 
-/// Illusion animation repaint interval, about one frame at 60 Hz.
-const ILLUSION_FRAME_MS: u64 = 16;
-
 impl FrameRenderer {
     /// Remaining time until egui's next requested repaint; `None` means idle.
     #[must_use]
@@ -35,6 +32,11 @@ impl FrameRenderer {
     /// blurred rectangle around the bar.
     pub const fn set_frost_whole_window(&mut self, on: bool) {
         self.frost_whole = on;
+    }
+
+    /// Publish the captured desktop field behind the soft-light overlay.
+    pub fn set_frost_glow(&mut self, field: crate::frost::glow::Field) {
+        self.glow = Some(field);
     }
 
     /// The background layer as a [`crate::frost::Backdrop`].
@@ -155,31 +157,16 @@ impl FrameRenderer {
         mut build: impl FnMut(&mut egui::Ui),
     ) -> FrameOutcome {
         // A live frost frame must land before `run_ui` claims texture deltas.
-        // Switching the mode has to change the path right away even without a
-        // new frame (see `refresh_for_mode`).
-        let mode = crate::frost::illusion();
-        let mode_changed = mode != self.last_mode;
-        self.last_mode = mode;
-        let had_new = self.poll_frost();
-        if mode_changed && !had_new {
-            self.refresh_for_mode(mode);
-        }
-        // Color transition of the experimental path: each frame advances the
-        // interpolation by one step and asks for a repaint, so the desktop
-        // changes smoothly instead of jumping once a full frame is ready.
-        let (illusion_view, animating) = self.advance_illusion();
-        if let Some(view) = illusion_view {
-            self.register_frost_view(&view);
-        }
-        if animating {
-            self.ctx
-                .request_repaint_after(Duration::from_millis(ILLUSION_FRAME_MS));
-        }
+        self.poll_frost();
         let frost = self.frost.as_ref().map(FrostLayer::id);
         // The dock switches this off: its window rect is not the bar. A
         // full-window sheet there would blur the hover area above the bar and
         // the reflection margin, both of which must stay transparent.
         let frost_whole = self.frost_whole;
+        // The dock keeps the sheet off; a full-window glow mesh would also
+        // paint its transparent hover and reflection margins.
+        let glow = if frost_whole { self.glow } else { None };
+        let glow_strength = crate::frost::glow_strength();
         let full = self.ctx.run_ui(raw, |ui| {
             if let (Some(id), true) = (frost, frost_whole) {
                 let rect = ui.max_rect();
@@ -189,6 +176,16 @@ impl FrameRenderer {
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                if glow_strength > 0.0 {
+                    if let Some(field) = glow {
+                        ui.painter()
+                            .add(egui::epaint::Shape::mesh(crate::frost::glow::mesh(
+                                rect,
+                                field,
+                                glow_strength,
+                            )));
+                    }
+                }
             }
             build(ui);
         });

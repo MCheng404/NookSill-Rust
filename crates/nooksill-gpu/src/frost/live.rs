@@ -1,6 +1,6 @@
 //! The live capture thread and its frame merging.
 
-use super::capture::{color_field, count_diff, dirty_columns, report, trace, ColorField};
+use super::capture::{count_diff, dirty_columns, report, trace};
 use super::*;
 
 /// One captured frame. Bytes are shared with the UI thread, not copied again.
@@ -14,8 +14,6 @@ pub struct FrostFrame {
     /// keeps the previous texture.
     pub x0: u32,
     pub x1: u32,
-    /// Low-frequency colour field of the frame, unused by the classic path.
-    pub field: Arc<ColorField>,
 }
 
 /// Background capture thread for a visible panel.
@@ -203,7 +201,6 @@ pub(super) fn run(hwnd: isize, out: &Sender<FrostFrame>, waker: Waker, stop: &Re
                     } else {
                         0
                     };
-                    let field = Arc::new(color_field(bits, w as usize, h as usize));
                     dims = (w, h);
                     let snapshot = Arc::new(bits.to_vec());
                     prev = Some(snapshot.clone());
@@ -219,7 +216,6 @@ pub(super) fn run(hwnd: isize, out: &Sender<FrostFrame>, waker: Waker, stop: &Re
                             h,
                             x0,
                             x1,
-                            field,
                         })
                         .is_err()
                     {

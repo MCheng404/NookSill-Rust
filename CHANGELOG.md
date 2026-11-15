@@ -7,6 +7,132 @@
 
 ## 未发布 — 2.0.0 之后（2026-11-08）
 
+### 组件面板框架、位置可选与完整背景模式（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 声明式组件注册表 | 新增 `core::config::panel`（`REGISTRY` / `PanelKind` / `Placement` / `Backdrop` / `Prefs`）与 `gpu::widgets/framework`（`prefs` / `placement` / `runtime`）；七个面板改为只声明 `PanelKind`，公开路径 `calendar_win` 等不变 | 定位原先分裂为锚点、`centered_on_target`、应用组与速记各自硬算共四套，背景只作用于栏体。策略放 `core` 可被 settings 与 gpu 共用并无头单测；ADR-088 |
+| 弹窗位置可选 | 新增 `PanelPos`（跟随组件 / 屏幕居中 / 自动）与 `PanelPosOverride`（六个组件各 2 bit 覆盖）；`framework::placement::place` 是唯一几何出口，`Auto` 比较未钳制的理想矩形与工作区 | 换屏 / 换边时四份钳制规则各自漂移（ADR-077 / 079）。新增 6 项纯几何单测覆盖副屏、越界、超大面板与无锚点回退 |
+| 完整背景模式 | 新增 `PanelBg`（跟随栏体 / 纯色 / 渐变 / 磨砂）；`PanelStyle::paint_frame` 按材质绘制，`framework::apply_backdrop` 给面板挂实时抓屏并在收起时释放，`due()` 并入 `frost_pending()` | 面板的 `FrameRenderer` 原先从未启用磨砂，三态对弹窗不完整；静态面板不加背景帧判据会停在第一帧（ADR-080） |
+| 细化开关 | 设置页新增「组件弹窗」卡片：全局位置、六个逐组件位置下拉，以及 `PanelOpacity` / `PanelOverlay` / `WidgetBlur` 三个滑条；三个新键与消费者同轮落地 | `PORTING.md` §9.7 纪律：界面与实现必须同一提交落地。新增 7 条 i18n 键，en / zh_cn 分段表按字节序插入 |
+| 文档与备份 | `CONFIG.md` 五之七、`ARCHITECTURE.md` 组件框架小节与不变式 17/32、`DECISIONS.md` ADR-088；改动前建立 `backup/widget-framework-20261115` 分支 | 键位序、位域语义与「只走一条出口」的不变式写进文档，避免下次再逐面板复制 |
+
+验证：`cargo check --workspace --all-targets`、`cargo test --workspace`（660 项通过 / 22 项忽略）、`./scripts/build.sh --gate`。
+
+### 返回按钮可见性、Esc 返回与文案不可选（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 返回按钮 | 常驻强调色底（hover 加深）+ 左侧 3 px 强调条 + `strong` 文字 + 右侧 `Esc` 键帽提示；返回逻辑与 Esc 共用 `go_back()` | hover-only 的弱色文字在 4 个 tab 的底部容易被忽略 |
+| Esc 语义 | `settings_win` 删除「Esc → 关窗」映射；`sidebar::tabs()` 处理 Esc 返回一级。输入框有焦点 / modal 打开 / 气泡打开时不触发，一级界面 Esc 不关窗 | 用户明确要求；Windows 设置类应用 Esc = 返回，关窗交给 Alt+F4 |
+| 文案不可选 | `settings_ui` 首次进入把 `selectable_labels` 与 `multi_widget_text_select` 置 false，`all_styles_mut` 同时覆盖明暗主题；`TextEdit` 不受影响 | egui 官方全局关闭方式；拖动选择只会和 ScrollArea 抢手势 |
+| 测试 | 新增 `esc_返回上一级而不是关窗`；设置页 52 项 | 注入 `Event::Key` 后断言 `sub` 回到一级 |
+
+文档：`DECISIONS.md` ADR-096。
+验证：`./scripts/build.sh --gate`（676 项通过 / 21 项忽略）、设置页 52 项；`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `5122f9d8…`）校验通过。
+
+### 导航选中块滑动与组名上移（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 侧栏小组名 | 删除二级导航顶部的组名小字 | 字号太小，且与顶栏重复 |
+| 顶栏标题 | 组内时顶栏品牌位显示组名，一级仍显示「NookSill」 | 组名只留一处，一眼能看出当前在哪一组 |
+| 滑动选中块 | 导航行拆成 allocate / paint 两遍，选中背景改为独立的 `NavPill`，160 ms ease-out cubic 从上一行滑到新行；动画帧用 `request_repaint_after(16 ms)` | WinUI NavigationView 150 ms、WinPodX 150 ms OutCubic、通用区间 150–250 ms；`request_repaint()` 会让 kittest 永不 settle |
+| 测试 | 新增 `切换标签会启动滑动指示块`；二级导航测试断言侧栏不再出现组名 | 设置页 51 项全过 |
+
+文档：`DECISIONS.md` ADR-095。
+验证：`./scripts/build.sh --gate`（675 项通过 / 21 项忽略）、设置页 51 项；`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `3634c8d4…`）校验通过。
+
+### 设置重排、去隐藏入口与去实验功能（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 设置分组 | 「Dock bar」6 个 tab 拆成四组按意图：**Look & feel**（Appearance / Effect / Icons）、**Behaviour**（Position / Interaction / Extras）、**Content & library**、**System**（Performance / UpdatePolicy / UpdateNetwork）；一级另留 General 与 About | 视觉、行为、杂项混在同一个组里，导航与搜索都变长 |
+| 去隐藏解锁 | 删掉 About 页「连点版本号 5 次」的 `version_clicks` / `advanced` 状态与隐藏「高级」卡片，版本行改为纯展示 | 用户要求；原本藏在里面的 `NET_SECURE_DNS` / `NET_MIRROR_ALL` 在「更新与网络」页已有正门，能力不丢 |
+| 去实验功能 | 删除整套 illusion：`shaders/illusion.rs`、`illusion.wgsl`、`FrostFrame.field`、`poll_illusion` / `rebuild_illusion_base` / `advance_illusion` / `refresh_for_mode`、`set_illusion` / `illusion()`、`TRUE_BLUR_STRIPES`；更新页「Experimental」卡片删除；`FrostIllusion` 键保留在 ini 但不读 | 两条渲染路径双倍维护、默认关闭、实际使用面接近零；ADR-094 |
+| i18n 修复 | `Behaviour` 与 `Benchmarking mirrors…` 顺序纠正 | 表乱序导致二分查找把已注册的键报成 unregistered，三个 i18n 测试连锁失败 |
+| 测试 | 导航断言 `Dock 栏` → `外观与质感`；搜索自动切页改断言 About；性能页改为直接设 `Page::Performance` | 分组变了，旧断言不再成立 |
+
+验证：`./scripts/build.sh --gate`（674 项通过 / 21 项忽略）、设置页 50 项；`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `84165c30…`）校验通过，exe 内已检不到 `Experimental: lightweight`，`Look & feel` 存在。
+
+### 磨砂设置统一与后处理抖动（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 8-bit 色带 | `frost.wgsl` 的 `v_blur` 与 `illusion.wgsl` 在量化前加整数哈希抖动（±0.5/255）；CPU `apply_dither` 用同一 wrapping 运算，放在圆角预乘之前 | 检索：8-bit 每通道 256 级，低对比渐变必然出色带，标准做法是量化前加 <1 LSB 抖动；egui 的 `dithering` 只作用于最终屏幕量化，救不回纹理内已丢的精度 |
+| 对照容差 | CPU/GPU **最终图像**容差 1→2，裸纹理对照仍为 1 | 抖动落点 1 + f32 累加顺序 1，实测 worst=2 |
+| 磨砂统一 | `BgMode` 唯一材质、`Blur` 唯一强度、`GlowStrength` 唯一柔光；`frost_spec` 去掉 per-surface key；`Prefs` 的 backdrop 与 blur 同源 | Windows Acrylic / Apple HIG 都是「一套材质 + 场景变体」；原四套 per-surface 开关加 `PanelBg` 是移植期碎片 |
+| 界面去重 | `WidgetBlur` / `PanelOpacity` / `PanelOverlay` 从两处减到一处；性能页移除 `BgMode` 开关；组件卡片只留预加载与位置 | 同一键两种控件会互相打架：性能页关磨砂写 `BgMode=1`，外观页材质下拉却显示「渐变」 |
+| 兼容 | `UiFrost` / `LpFrost` / `MenuFrost` / `GroupFrost` / `PanelBg` 保留在 ini 但不读；`WidgetBlur > 0` 启动时并入 `Blur` | ini 键是契约，不删；`CONFIG.md` 五之十登记兼容关系 |
+
+验证：`./scripts/build.sh --gate`（675 项通过 / 23 项忽略）、5 项真机 frost 对照、设置页 51 项（含改写后的磨砂去重断言）；`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `ab24449e…`）校验通过。
+
+### 内容自适应柔光磨砂（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 柔光叠加层 | 新增 `frost/glow.rs`：4×4 低频亮度场 → W3C `soft-light` 公式 → 5×5 顶点 mesh，画在整窗磨砂图之后、面板 tint 之前 | 检索 W3C Compositing §10.1.10、Apple HIG Materials、Microsoft Acrylic 配方（模糊后加混合层保对比）、Bloom 调参经验；结论与代价见 ADR-092 |
+| 亮暗主题适配 | 亮处压暗、暗处提亮，方向跟内容走，不读主题标志 | Apple「调整背景亮度以保易读」；`Cs=0.5` 为中性点，默认强度 50 对应 `Cs ∈ [0.25, 0.75]`，公式天然把叠加 alpha 限制在 0.5 内 |
+| 类实时 | `Spec::apply` 与 `poll_frost` 每次抓屏更新亮度场；每帧仅 25 顶点、无逐像素纹理上传 | 不烘焙进 GPU 卷积纹理，避免破坏 ADR-080 的脏列优化（全局柔光场会让脏列外像素也必须重算） |
+| 可调 | 新增 `[widgets] GlowStrength`（`Key::Numeric(123)`，0..100，默认 50）与设置页「磨砂柔光」滑条，1 条 i18n 键 | 滑条即「柔光怎么调」的答案：0 关闭、50 默认、70 更明显 |
+| 栏体例外 | `frost_whole=false` 时不画整窗 mesh | 栏体窗口含透明悬停区与倒影边距，整窗 mesh 会画出矩形亮块 |
+
+验证：新增 7 项纯函数单测（公式中性点/方向/范围、亮度场、叠加色、mesh 结构与索引）、1 项 `#[ignore]` 真机渲染测试；`./scripts/build.sh --gate`（675 项通过 / 23 项忽略）、5 项真机磨砂对照 + 1 项柔光渲染；`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `22ff7ffa…`）校验通过。
+
+### 磨砂四角色块修复（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 四角纯色块 | `clamp_taps` → `edge_taps`：越界高斯 tap 丢弃、按实际权重和归一化；`frost.wgsl` 的 h / v 两趟同步 | 左上角在水平与垂直两趟都被钳到同一个边缘像素，25% 抓屏图放大 4 倍后成为纯色方块；半径越大越明显，所有磨砂窗口共用这条内核 |
+| 圆角残留 | `GpuBlur::Target` 记录 `corner` 并纳入 `ensure()` 重建判定 | 半径变化但脏列只重算部分列时，未触及的列留着旧圆角 alpha，四角出现拼接块 |
+| 参考实现同步 | `separable_blur_matches_naive_2d` 的朴素 2D 卷积改用同一套边缘语义；新增 3 项 CPU 回归 | 有效 tap 集合是笛卡尔积，可分离与 2D 外积在归一化下仍等价 |
+| 真机对照 | 4 项 `#[ignore]` GPU 逐通道测试实跑全过 | CPU 与 WGSL 差 ≤1；全量 `--ignored` 中 `scanner_reports_running_apps` 因无窗口枚举会话超时，与本修复无关 |
+
+文档：`ARCHITECTURE.md` 不变式 34、`DECISIONS.md` ADR-091。
+验证：`./scripts/build.sh --gate`（668 项通过 / 22 项忽略）、4 项 `#[ignore]` 真机
+CPU/GPU 逐通道对照全过；`./scripts/package.sh --release` 产物
+`dist/NookSill-2.0.0-win64.exe`（sha256 `cae32ac6…`）校验通过，exe 内含新版
+WGSL 文本且不含已删除的 `clamp_i`。
+
+### 日历宽松、组件 I/O 收敛与托盘开关（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 日历放宽 | 面板 392×480 → 420×568；单元格行高 46→54、导航/表头/详情区间距加大、详情行距 22→26、六处字号上调；布局数值抽成 `paint.rs` 常量 | 原布局 6×7 网格加 4 行详情几乎贴到面板底。新增 `relaxed_layout_fits_and_keeps_nav_buttons_apart`，守住不溢出、格不过窄、导航按钮不与 Today 重叠 |
+| 组件侧 I/O 收敛 | `boot` 解析 `[Tool]` 缓存进 `App::tool_state`，删掉预加载与计时器懒加载路径的 `Ini::load`；暗色判定复用 `system_dark`；写盘提交与 DPI 重建前同步缓存 | UI 线程同步读整份 UTF-16 ini 违反 ADR-037。改后 `bin/dock` 的 `Ini::load` 只剩启动一次与配置导入 / 导出；ADR-090 |
+| 托盘组件开关 | 设置页「组件」卡片新增 `TrayW` 开关，补 2 条 i18n 键与 kittest 回归 | `layout::metrics::is_enabled` 早有消费者，设置页却从未暴露，属 `PORTING.md` §9.7 同类「有实现没界面」；`托盘组件开关写回配置` 验证默认 1、点击写 0 |
+| 文档 | `CONFIG.md` 五之八补组件 I/O 段，`ARCHITECTURE.md` 不变式 33 补「预加载不读盘」，新增 ADR-090 | 同步写清剩余 I/O 来源（磨砂抓屏）与关闭路径 |
+| dist 交付 | 按长期约定，`--gate` 后 `./scripts/package.sh --release` 重建 exe 与 sha256 | 产物供实测 |
+
+验证：`./scripts/build.sh --gate`（665 项通过 / 22 项忽略）、`./scripts/package.sh --release`；产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `298f9745…`）校验通过，exe 内含 `System tray widget` 与 `PreloadPanels` 键名。
+
+### 组件预加载与 dist 交付约定（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 预加载开关 | 新增 `[widgets] PreloadPanels`（`Key::Numeric(122)`，默认 1）与 `bin/dock/preload.rs`：启动时创建六个隐藏面板窗口与渲染器 | 首次点击延迟来自窗口类注册 + `FrameRenderer::new`（CJK 字体图集、wgpu 管线、MSAA 离屏纹理、DIB）；六个 slot 原先全部懒加载 |
+| 失败不阻断启动 | 逐个 `match`，任一面板创建失败只留空该 slot 并记一行诊断，点击路径照常补建 | 控制中心要建 COM 音频、应用组要起图标线程，个别会话可能失败 |
+| 开关生效时机 | `run()` 每轮比对配置：0→1 立即补建；1→0 不销毁已建窗口，下次启动回到懒加载 | 运行中销毁 `Pin<Box<..>>` 会连带销毁 HWND，正打开的面板会直接消失 |
+| 设置页与文案 | 「组件弹窗」卡片最上方加开关，新增 2 条 i18n 键（en / zh_cn 分段表按序插入） | 设置页暴露与实现同轮落地，不留空壳 |
+| 测试与文档 | `preload_panels_is_on_by_default_and_lives_in_widgets`（默认值 / 段 / ini 往返）；`CONFIG.md` 五之八、`ARCHITECTURE.md` 不变式 33、`DECISIONS.md` ADR-089 | 门禁 + 全量测试 |
+| dist 交付 | 清空 `dist/` 后重新 `./scripts/package.sh --release` 产出 exe 与 sha256 | 用户要求**每次修改都构建 dist 产物供实测**，已写入项目长期约定 |
+
+验证：`./scripts/build.sh --gate`（663 项通过 / 22 项忽略）、`./scripts/package.sh --release`；产物 `dist/NookSill-2.0.0-win64.exe`（8,209,920 字节）与 `.sha256` 校验通过，exe 内含 `PreloadPanels` 键名。
+
+### 组件面板打磨：材质生效、抓屏降级与离屏验收（2026-11-15）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 材质开关对三个面板静默无效 | 速记 / 分组 / 编辑原先自己 `rect_filled(bg)`，绕过 `paint_frame`；抽出 `PanelStyle::paint_base()` 作为唯一底色出口，三个面板改调它 | `panels_shot` 四材质离屏对比抓到 `solid` 与 `gradient` **0 字节差异**；修复后相差 868246 字节，差异断言已固化进 example |
+| 抓屏失败不降级 | `apply_backdrop` 检查 `frost_on()`，失败即释放抓屏层并 `allow_capture`，退回不透明底色 | RDP / 虚拟机下原本会留下「既没有磨砂、截图里也看不到」的窗口（`BUILD.md` 排错表同源） |
+| resize 后模糊纹理被拉伸 | 新增 `refresh_backdrop`，计时器 `fit_height` 在 `SetWindowPos` 后重抓一帧，不重启抓屏线程 | `FrameRenderer::resize` 只重建 offscreen 与 DIB，不动 frost 纹理 |
+| 副屏锚点按主屏居中 | `anchor` 抽出 `center_of`，`monitor_of` 与 `work_area_of` 共用；`place_panel` 有锚点时按锚点屏取工作区 | 托盘 / 光标打开的速记落在副屏时，居中判据原读 `target_work_area()`（Dock 所在屏），与钳制用的 monitor 不是同一屏 |
+| 材质与半透明判定脱节 | `alpha()` 增加 `material == Frost` 条件；补 1 项回归 | 配置已切纯色但残留纹理时，不应再画 78% 半透明底 |
+| 验收工具 | `panels_shot` 增加四材质出图与像素 `assert_ne!`，命令见 `CONFIG.md` 五之七 | 项目纪律「验收优先做工具，不靠人肉截图」；本次漏改正是靠这套工具抓出来的 |
+| 文档纠偏 | 不变式 16 / 32 原写「七个面板统一走 `paint_frame()`」，与代码不符，改为「底色统一走 `paint_base()`」；补写降级、尺寸变化与生效时机 | 上一轮照着不准确的不变式推导，才漏掉三个自绘面板 |
+
+验证：`cargo check --workspace --all-targets`、`cargo run -p nooksill-gpu --example panels_shot -- scratch/panel-polish dark`（11 张 BMP + 材质像素断言通过）、`./scripts/build.sh --gate`（662 项通过 / 22 项忽略）。
+
 ### 移除死开关与错误文案本地化（2026-11-14）
 
 | 项 | 改了什么 | 依据 / 验证 |

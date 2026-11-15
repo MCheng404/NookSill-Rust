@@ -28,7 +28,7 @@ impl App {
             self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
             self.dock.cfg.get_i32(Key::LP_ROWS).max(2) as usize,
         );
-        lw.open(frost_spec(&self.dock.cfg, Key::LP_FROST, 0.0));
+        lw.open(frost_spec(&self.dock.cfg, 0.0));
         Ok(())
     }
 
@@ -167,7 +167,7 @@ impl App {
             dark,
             self.ppp,
             self.start,
-            frost_spec(&self.dock.cfg, Key::MENU_FROST, nooksill_gpu::menu::RADIUS),
+            frost_spec(&self.dock.cfg, nooksill_gpu::menu::RADIUS),
         ) {
             Ok(cmd) => cmd,
             Err(e) => {
@@ -227,7 +227,7 @@ impl App {
                 )?;
                 // Re-read every time; the user may have changed it in Task Manager.
                 sw.state.auto_start = theme::get_autostart();
-                sw.show(frost_spec(&self.dock.cfg, Key::UI_FROST, 20.0));
+                sw.show(frost_spec(&self.dock.cfg, 20.0));
             } else {
                 self.run_menu_cmd(cmd, hit);
             }
