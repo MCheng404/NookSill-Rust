@@ -29,6 +29,7 @@
 | 验收 | 新增 `#[ignore]` 真机测试：渲染整窗后四角 alpha = 0、中心仍有像素 | 断言几何裁剪确实生效，而不只是 mesh 结构正确 |
 
 文档：`DECISIONS.md` ADR-097、`ARCHITECTURE.md` 不变式 37。
+验证：`./scripts/build.sh --gate`（679 项通过 / 22 项忽略）、真机四角测试（四角 alpha 0、中心填充）、`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `933dc4f3…`）校验通过。
 
 ### 返回按钮可见性、Esc 返回与文案不可选（2026-11-15）
 
