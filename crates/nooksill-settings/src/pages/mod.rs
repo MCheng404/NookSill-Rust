@@ -8,6 +8,7 @@ mod about_art;
 mod add;
 mod appearance;
 mod effect;
+pub mod extensions;
 mod extras;
 mod general;
 mod icons;
@@ -20,14 +21,18 @@ mod panel_setup;
 mod performance;
 mod position;
 mod preview;
+mod resmon_setup;
 mod update;
+mod view;
 mod widgets;
 
+use self::extensions::{ExtensionRow, PluginRow};
 use egui::Ui;
-use nooksill_core::config::Config;
+use nooksill_core::config::{Config, Key};
 use nooksill_core::item::Item;
 
 pub use nav::{NavGroup, NavItem};
+pub use view::{ItemEdit, LibIcon, UpdateView};
 pub(crate) use widgets::Ctx;
 pub use widgets::{Modal, ModalAction};
 
@@ -49,10 +54,11 @@ pub enum Page {
     UpdatePolicy,
     UpdateNetwork,
     About,
+    Extensions,
 }
 
 impl Page {
-    pub const ALL: [Page; 14] = [
+    pub const ALL: [Page; 15] = [
         Page::General,
         Page::Appearance,
         Page::Position,
@@ -67,6 +73,7 @@ impl Page {
         Page::UpdatePolicy,
         Page::UpdateNetwork,
         Page::About,
+        Page::Extensions,
     ];
 
     #[must_use]
@@ -86,6 +93,7 @@ impl Page {
             Page::UpdatePolicy => nooksill_core::i18n::t("Update policy"),
             Page::UpdateNetwork => nooksill_core::i18n::t("Network"),
             Page::About => nooksill_core::i18n::t("About"),
+            Page::Extensions => nooksill_core::i18n::t("Extensions"),
         }
     }
 
@@ -123,6 +131,9 @@ impl Page {
                 nooksill_core::i18n::t("DNS checks, mirror selection and experimental switches.")
             }
             Page::About => nooksill_core::i18n::t("Version, project URL, author and licence."),
+            Page::Extensions => nooksill_core::i18n::t(
+                "Discover and manage apps publishing a Host Link v1 manifest.",
+            ),
         }
     }
 }
@@ -132,10 +143,10 @@ impl Page {
 #[derive(Clone, Debug)]
 pub struct SettingsState {
     pub page: Page,
+    /// Highlighted primary row; survives a return so the group stays selected.
+    pub primary: NavItem,
     /// Open group; while set, the sidebar shows its content tabs instead.
     pub sub: Option<NavGroup>,
-    /// Primary page to restore when the back row is pressed.
-    pub return_page: Page,
     /// The one modal on screen, drawn above a softened settings surface.
     pub modal: Option<Modal>,
     /// The update popup has already been offered in this window session.
@@ -165,6 +176,10 @@ pub struct SettingsState {
     pub hotkey_input: String,
     /// Whether the last hotkey text failed to parse.
     pub hotkey_error: bool,
+    /// Discovered Host Link apps, refreshed by the host after a scan.
+    pub extensions: Vec<ExtensionRow>,
+    /// Plugin packs discovered from plugin.json folders.
+    pub plugins: Vec<PluginRow>,
     /// Icon folder selected on the library page (empty = none).
     pub icon_dir: String,
     /// Preview rows: one per item, filled by the host after a scan.
@@ -176,7 +191,15 @@ pub struct SettingsState {
     /// The motion is 160 ms ease-out: long enough to read as movement, short
     /// enough that the page never feels like it is waiting for the animation.
     pub nav_pill: Option<NavPill>,
-    /// Currently expanded help bubble, pinned by click or opened by 3 s hover.
+    /// Reveal of the navigation column after a level change.
+    pub nav_wipe: Option<NavWipe>,
+    /// Open colour swatch for one key; `None` means no palette is expanded.
+    pub color_edit: Option<Key>,
+    /// Text currently typed into the expanded HEX field.
+    pub color_hex: String,
+    /// Luminance field for the soft-light overlays, filled by the host each frame.
+    pub glow: Option<crate::glow::Field>,
+    /// Help bubble pinned by click or opened by 3 s hover.
     pub tip: Option<Tip>,
     /// Hovered tip dot with its start instant; the 3 s delay spans frames.
     pub tip_hover: Option<(egui::Id, std::time::Instant)>,
@@ -202,6 +225,15 @@ pub struct SettingsState {
     pub edit_args: String,
     /// Group index to merge into; `None` keeps the item on the bar.
     pub edit_group: Option<usize>,
+}
+
+/// Reveal direction of the navigation column after a level change.
+#[derive(Clone, Copy, Debug)]
+pub struct NavWipe {
+    /// Top-first when a group opens, bottom-first when it closes.
+    pub down: bool,
+    /// When the reveal started.
+    pub at: std::time::Instant,
 }
 
 /// The navigation selection pill, sliding from where it was to its new row.
@@ -259,8 +291,8 @@ impl Default for SettingsState {
     fn default() -> Self {
         Self {
             page: Page::General,
+            primary: NavItem::Page(Page::General),
             sub: None,
-            return_page: Page::General,
             modal: None,
             update_prompted: false,
             update_ready_prompted: false,
@@ -274,6 +306,10 @@ impl Default for SettingsState {
             status: String::new(),
             nav_filter: String::new(),
             nav_pill: None,
+            nav_wipe: None,
+            glow: None,
+            color_edit: None,
+            color_hex: String::new(),
             tip: None,
             tip_hover: None,
             card_h_prev: Vec::new(),
@@ -283,6 +319,8 @@ impl Default for SettingsState {
             url_input: String::new(),
             hotkey_input: String::new(),
             hotkey_error: false,
+            extensions: Vec::new(),
+            plugins: Vec::new(),
             icon_dir: String::new(),
             icon_library: Vec::new(),
             row_bands: Vec::new(),
@@ -293,37 +331,6 @@ impl Default for SettingsState {
             edit_args: String::new(),
             edit_group: None,
         }
-    }
-}
-
-/// Editable fields of an item; name, path and arguments are applied together.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ItemEdit {
-    pub name: String,
-    pub path: String,
-    pub args: String,
-    /// Group index to merge into; `None` keeps the item on the bar.
-    pub group: Option<usize>,
-}
-
-/// One row of the icon-library preview.
-#[derive(Clone)]
-pub struct LibIcon {
-    /// Item name the row belongs to.
-    pub name: String,
-    /// File that would be used; empty when nothing matched.
-    pub path: String,
-    /// Decoded icon for the preview; `None` when nothing matched.
-    pub tex: Option<egui::TextureHandle>,
-}
-
-impl std::fmt::Debug for LibIcon {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LibIcon")
-            .field("name", &self.name)
-            .field("path", &self.path)
-            .field("has_icon", &self.tex.is_some())
-            .finish()
     }
 }
 
@@ -338,9 +345,7 @@ pub enum Command {
     ToggleAutostart(bool),
     PickIconDir,
     AutoMatch,
-    /// Scan the icon folder and fill `SettingsState::icon_library`.
     LoadIconLibrary,
-    /// Use `path` as the icon of item `index` (clicked a preview tile).
     UseIcon {
         index: usize,
         path: String,
@@ -353,12 +358,9 @@ pub enum Command {
     AddTrash,
     ExportAll,
     Import,
-    /// Open a link in the default browser.
     OpenUrl(&'static str),
-    /// Check for updates on a background thread; the result lands in
     /// [`UpdateView`].
     CheckUpdate,
-    /// Download and verify a new version.
     DownloadUpdate,
     /// Replace this binary with the downloaded one and restart.
     ApplyUpdate,
@@ -382,47 +384,16 @@ pub enum Command {
     AddNote,
     /// Open the notes panel.
     OpenNotes,
-}
-
-/// The updater as seen by the UI.
-///
-/// Strings and flags only: this layer does not know the network types, the GPU
-/// layer translates `update::Release` into them.
-#[derive(Clone, Debug, Default)]
-pub struct UpdateView {
-    /// One status line ("checking", "up to date", "found 1.0.1", or an error).
-    pub status: String,
-    /// A newer version can be downloaded.
-    pub available: bool,
-    /// Downloaded and verified, waiting for a restart.
-    pub ready: bool,
-    /// A request is in flight; buttons are disabled.
-    pub busy: bool,
-    /// Version text of the offered release, for the popup.
-    pub version: String,
-    /// Release notes, trimmed by the popup.
-    pub notes: String,
-    /// The offered release belongs to the beta channel.
-    pub prerelease: bool,
-    /// Bytes received by the download in progress.
-    pub bytes_done: u64,
-    /// Asset size from release metadata; 0 means unknown.
-    pub bytes_total: u64,
-    /// Smoothed download rate in bytes per second; 0 means unknown yet.
-    pub bytes_per_sec: u64,
-    /// Seconds left at that rate; 0 means unknown.
-    pub eta_secs: u32,
-}
-
-impl UpdateView {
-    /// `None` outside an active download, or when the server gave no size.
-    #[must_use]
-    pub fn progress(&self) -> Option<f32> {
-        if !self.busy || self.bytes_total == 0 {
-            return None;
-        }
-        Some((self.bytes_done as f32 / self.bytes_total as f32).clamp(0.0, 1.0))
-    }
+    HostLinkRescan,
+    HostLinkCheck(String),
+    HostLinkActivate(String),
+    HostLinkAddToDock {
+        id: String,
+        name: String,
+    },
+    PluginRescan,
+    PluginToggle(String, bool),
+    OpenDynamicUrl(String),
 }
 
 /// Result of one frame.
@@ -504,6 +475,16 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
             egui::StrokeKind::Inside,
         );
 
+        // The sidebar is a single translucent wash; soft light over it keeps
+        // the same graduated surface as the shell and the cards.
+        crate::glow::paint(
+            ui,
+            nav_rect,
+            18.0,
+            ctx.state.glow,
+            ctx.cfg.get_i32(nooksill_core::config::Key::GLOW_STRENGTH),
+        );
+
         // Inset by 6 px so the selection pill does not touch the edge.
         let mut nav_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -549,6 +530,7 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
                 Page::UpdatePolicy => update::policy_page(&mut ctx, ui),
                 Page::UpdateNetwork => update::network_page(&mut ctx, ui),
                 Page::About => about::page(&mut ctx, ui),
+                Page::Extensions => extensions::page(&mut ctx, ui),
             });
 
         // Bubbles last: every row's hover and click state is settled by now, so
@@ -559,20 +541,15 @@ pub fn settings_ui(ui: &mut Ui, cfg: &mut Config, state: &mut SettingsState) -> 
     out
 }
 
-/// A page owned by a group is always shown with that group's tab strip, even
-/// when the host sets `page` directly (headless tests do this).
+/// Re-derive the primary entry only when page and highlight disagree.
+/// A return keeps them in step, so the group is not reopened.
 fn normalize_nav(state: &mut SettingsState) {
-    match state.sub {
-        None => {
-            if let Some(group) = NavGroup::containing(state.page) {
-                state.return_page = Page::General;
-                state.sub = Some(group);
-            }
-        }
-        Some(group) => {
-            if !group.tabs().contains(&state.page) {
-                state.sub = NavGroup::containing(state.page);
-            }
-        }
+    let in_sync = match state.sub {
+        Some(g) => g.tabs().contains(&state.page),
+        None => state.primary.owns(state.page),
+    };
+    if !in_sync {
+        state.primary = NavItem::for_page(state.page);
+        state.sub = NavGroup::containing(state.page);
     }
 }

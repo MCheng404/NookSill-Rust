@@ -50,10 +50,15 @@ impl Config {
             .and_then(Hotkey::parse)
             .unwrap_or(Hotkey::DEFAULT);
         cfg.cc_order = ini.get("widgets", "Order").unwrap_or_default().to_owned();
+        cfg.res_order = ini
+            .get("widgets", "ResOrder")
+            .map(crate::resource::clean_order)
+            .unwrap_or_default();
         cfg.language = ini
             .get("general", "Language")
             .unwrap_or_default()
             .to_owned();
+        cfg.plugin_enabled = ini.get("plugins", "Enabled").unwrap_or_default().to_owned();
         cfg.clamp();
         cfg
     }
@@ -81,7 +86,26 @@ impl Config {
         } else {
             ini.set("widgets", "Order", &self.cc_order);
         }
+        if self.res_order.is_empty() {
+            ini.remove_key("widgets", "ResOrder");
+        } else {
+            ini.set(
+                "widgets",
+                "ResOrder",
+                crate::resource::clean_order(&self.res_order),
+            );
+        }
         // An explicit empty line keeps "follow the system" visible in the file.
         ini.set("general", "Language", &self.language);
+        if self.plugin_enabled.is_empty() {
+            ini.remove_key("plugins", "Enabled");
+        } else {
+            ini.set("plugins", "Enabled", &self.plugin_enabled);
+        }
+        if self.plugin_base.is_empty() {
+            ini.remove_key("plugins", "Base");
+        } else {
+            ini.set("plugins", "Base", &self.plugin_base);
+        }
     }
 }

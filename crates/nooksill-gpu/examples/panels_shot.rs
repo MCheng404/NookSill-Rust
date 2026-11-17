@@ -1,4 +1,4 @@
-//! Renders the group and quick-note panels offscreen to BMPs.
+//! Renders the group, quick-note and resource panels offscreen to BMPs.
 //!
 //! ```text
 //! cargo run -p nooksill-gpu --example panels_shot -- out_dir [light]
@@ -22,6 +22,8 @@ use nooksill_gpu::frame::FrameRenderer;
 use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::group_win::{self, GroupKid};
 use nooksill_gpu::note_win;
+use nooksill_gpu::resmon_win;
+use nooksill_platform::SysInfo;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     nooksill_core::i18n::configure("", nooksill_platform::locale::ui_language_id());
@@ -32,6 +34,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dark = args.next().as_deref() != Some("light");
     let ppp = 1.25_f32;
     let gpu = Gpu::new("")?;
+
+    // Resource monitor: every row type in the shipped order, so labels,
+    // values, bar widths and row spacing can be checked in pixels.
+    let res_order = nooksill_core::resource::ResKind::DEFAULT_ORDER.to_vec();
+    shot(
+        &gpu,
+        &format!("{dir}/panel_resource.bmp"),
+        resmon_win::PANEL_W,
+        resmon_win::logical_height(&res_order),
+        ppp,
+        dark,
+        |ui| {
+            resmon_win::paint_preview(
+                ui,
+                dark,
+                false,
+                SysInfo {
+                    cpu_percent: 42,
+                    mem_percent: 73,
+                    disk_percent: 18,
+                    mem_used_mb: 6144,
+                    mem_total_mb: 8192,
+                    disk_free_gb: 120,
+                    disk_total_gb: 512,
+                    net_rx_kbps: 520,
+                    net_tx_kbps: 88,
+                    process_count: 214,
+                    uptime_secs: 3 * 86400 + 5 * 3600,
+                    gpu_percent: Some(35),
+                    cpu_temp_c: Some(58),
+                },
+                &res_order,
+            )
+        },
+    )?;
+
+    // Control center: six tiles after the mute/energy removal, plus the
+    // volume strip whose speaker icon now toggles mute.
+    let cc_tiles = nooksill_core::control::tiles(true, false);
+    let (cc_w, cc_h) = nooksill_gpu::cc_win::logical_size(cc_tiles.len());
+    let cc_toggles = nooksill_gpu::cc_win::Toggles {
+        wifi: Some(nooksill_platform::radio::WifiState {
+            on: true,
+            ssid: Some("NookSill 5G".to_owned()),
+            signal: Some(82),
+        }),
+        bt_on: Some(true),
+        location_on: Some(false),
+    };
+    shot(
+        &gpu,
+        &format!("{dir}/panel_control.bmp"),
+        cc_w,
+        cc_h,
+        ppp,
+        dark,
+        |ui| {
+            nooksill_gpu::cc_win::paint_preview(
+                ui,
+                dark,
+                false,
+                &cc_tiles,
+                60,
+                false,
+                nooksill_platform::audio::Battery::read(),
+                Some(60),
+                &cc_toggles,
+            )
+        },
+    )?;
+
+    // Same panel with no DDC/CI: the brightness row stays and greys out.
+    shot(
+        &gpu,
+        &format!("{dir}/panel_control_no_ddc.bmp"),
+        cc_w,
+        cc_h,
+        ppp,
+        dark,
+        |ui| {
+            nooksill_gpu::cc_win::paint_preview(
+                ui,
+                dark,
+                false,
+                &cc_tiles,
+                60,
+                false,
+                nooksill_platform::audio::Battery::read(),
+                None,
+                &cc_toggles,
+            )
+        },
+    )?;
 
     // Group panel: five kids over two rows, the second hovered so the remove
     // and reorder buttons show. Mixed `ItemKind`s check that the glyph follows
@@ -187,14 +282,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     nooksill_gpu::panel_style::sync_prefs(&Config::default());
 
-    // A material that silently paints the default is the regression this tool
-    // exists to catch: three panels used to draw their own base fill.
+    // `PanelBg` is a compatibility key: all panels now share the one material
+    // published by `BgMode`, so solid and gradient must agree. Frosted must
+    // still change the frame, or the shared backdrop stopped reaching panels.
     let solid = std::fs::read(format!("{dir}/panel_notes_solid.bmp"))?;
     let gradient = std::fs::read(format!("{dir}/panel_notes_gradient.bmp"))?;
     let frost = std::fs::read(format!("{dir}/panel_notes_frost.bmp"))?;
-    assert_ne!(solid, gradient, "gradient material is a no-op");
+    assert_eq!(solid, gradient, "PanelBg must not fork the material");
     assert_ne!(solid, frost, "frost material is a no-op");
-    println!("material pixel check: solid / gradient / frost produce distinct frames");
+    println!("material pixel check: solid / gradient agree, frost differs");
     Ok(())
 }
 

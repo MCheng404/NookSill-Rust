@@ -74,6 +74,16 @@ pub(crate) fn card<R>(
     let frame = card_frame(&card_ui);
     let inner = frame
         .show(&mut card_ui, |ui| {
+            // Keep the card's single fill from reading as flat acrylic. Use
+            // the card's own rect: the frame child's clip rect is the scroll
+            // viewport and would spill the glow over the navigation column.
+            crate::glow::paint(
+                ui,
+                base.translate(off),
+                18.0,
+                ctx.state.glow,
+                ctx.cfg.get_i32(nooksill_core::config::Key::GLOW_STRENGTH),
+            );
             ui.set_min_width(ui.available_width());
             ui.strong(title);
             if !note.is_empty() {

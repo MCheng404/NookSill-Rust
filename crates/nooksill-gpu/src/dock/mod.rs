@@ -268,9 +268,7 @@ impl WidgetStyle {
 pub struct Dock {
     /// Pending widget-card click; cards are hit-tested separately.
     pub widget_click: Option<layout::WidgetKind>,
-    /// CPU sampler; needs two samples to produce a delta.
-    cpu_sampler: nooksill_platform::CpuSampler,
-    /// Last system sample.
+    /// Last system sample from the sampler thread.
     sysinfo: nooksill_platform::SysInfo,
     pub cfg: Config,
     pub items: Vec<DockItem>,

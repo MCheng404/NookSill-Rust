@@ -23,10 +23,7 @@ pub(super) unsafe extern "system" fn wndproc(
 
 impl Drop for CalendarWindow {
     fn drop(&mut self) {
-        unsafe {
-            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
-            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
-        }
+        crate::widgets::framework::destroy_panel(&mut self.renderer, self.hwnd);
     }
 }
 

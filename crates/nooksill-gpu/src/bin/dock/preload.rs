@@ -13,11 +13,10 @@ impl App {
     /// Build every idle panel window once. A failure only loses preloading for
     /// that panel: the lazy path still creates it on the next click.
     pub(super) fn preload_panels(&mut self) {
-        let (dark, energy, hotspot, order, state) = {
+        let (dark, hotspot, order, state) = {
             let cfg = &self.dock.cfg;
             (
                 cfg.dock_is_dark(self.system_dark),
-                cfg.get_i32(Key::CC_ENERGY) != 0,
                 cfg.get_i32(Key::CC_HOTSPOT) != 0,
                 nooksill_core::control::parse_order(&cfg.cc_order),
                 self.tool_state.clone(),
@@ -34,17 +33,14 @@ impl App {
             }
         }
         if self.cc_slot.is_none() {
-            match CcWindow::new(gpu, ppp, dark, energy, hotspot, &order) {
+            match CcWindow::new(gpu, ppp, dark, hotspot, &order) {
                 Ok(w) => self.cc_slot = Some(w),
                 Err(e) => eprintln!("[preload] control center: {e}"),
             }
         }
         if self.resmon_slot.is_none() {
             match ResMonWindow::new(gpu, ppp, dark) {
-                Ok(mut w) => {
-                    w.attach_public();
-                    self.resmon_slot = Some(w);
-                }
+                Ok(w) => self.resmon_slot = Some(w),
                 Err(e) => eprintln!("[preload] resource monitor: {e}"),
             }
         }

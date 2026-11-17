@@ -48,7 +48,9 @@ impl CalendarWindow {
         }
         .map_err(|_| GpuError::Win32("CreateWindowExW (calendar)"))?;
 
+        let lease = crate::widgets::framework::WindowLease::new(hwnd);
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let hwnd = lease.defuse();
         let mut win = Box::pin(Self {
             hwnd,
             renderer,
@@ -94,16 +96,16 @@ impl CalendarWindow {
     /// Re-placed on every open: the bar may have changed edge, size or monitor.
     pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: Edge) {
         let (pw, ph) = physical_size(self.ppp);
-        let (x, y) =
-            framework::place_panel(PanelKind::Calendar, (pw, ph), Some(anchor), edge, self.ppp);
+        let (x, y) = framework::show_panel(
+            &mut self.renderer,
+            self.hwnd,
+            PanelKind::Calendar,
+            (pw, ph),
+            Some(anchor),
+            edge,
+            self.ppp,
+        );
         self.pos = (x, y);
-        unsafe {
-            let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOWNA);
-        }
         self.visible = true;
         self.next_repaint = Instant::now();
     }
@@ -115,10 +117,7 @@ impl CalendarWindow {
             return;
         }
         self.visible = false;
-        framework::release_backdrop(&mut self.renderer, self.hwnd);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
+        framework::hide_panel(&mut self.renderer, self.hwnd);
     }
 
     /// Whether the repaint deadline has passed.

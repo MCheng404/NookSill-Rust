@@ -192,6 +192,8 @@ fn numeric_constants_match_table_rows() {
         (Key::PANEL_BG, "PanelBg"),
         (Key::PRELOAD_PANELS, "PreloadPanels"),
         (Key::GLOW_STRENGTH, "GlowStrength"),
+        (Key::HOST_LINK_ENABLED, "HostLink"),
+        (Key::HOST_LINK_AUTOSCAN, "HostLinkAutoScan"),
     ];
     for &(key, name) in pairs {
         assert_eq!(key.name(), name, "常量与表行错位");

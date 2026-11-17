@@ -70,12 +70,13 @@ pub enum NavItem {
 
 impl NavItem {
     /// Order of the primary column. Group entries replace the pages they own.
-    pub const PRIMARY: [NavItem; 6] = [
+    pub const PRIMARY: [NavItem; 7] = [
         NavItem::Group(NavGroup::Look),
         NavItem::Page(Page::General),
         NavItem::Group(NavGroup::Behaviour),
         NavItem::Group(NavGroup::Content),
         NavItem::Group(NavGroup::System),
+        NavItem::Page(Page::Extensions),
         NavItem::Page(Page::About),
     ];
 
@@ -112,6 +113,24 @@ impl NavItem {
         match self {
             NavItem::Page(p) => p,
             NavItem::Group(g) => g.tabs()[0],
+        }
+    }
+
+    /// Primary entry whose tab strip contains `page`, or the page itself.
+    #[must_use]
+    pub fn for_page(page: Page) -> Self {
+        match NavGroup::containing(page) {
+            Some(g) => NavItem::Group(g),
+            None => NavItem::Page(page),
+        }
+    }
+
+    /// Whether this entry is the highlight for `page`.
+    #[must_use]
+    pub fn owns(self, page: Page) -> bool {
+        match self {
+            NavItem::Page(p) => p == page,
+            NavItem::Group(g) => g.tabs().contains(&page),
         }
     }
 }

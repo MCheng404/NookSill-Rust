@@ -8,6 +8,11 @@ impl App {
             // Build the panel this frame; paint it next frame.
             return Ok(true);
         }
+        // The panel never samples; push the newest snapshot every round.
+        let info = self.dock.sysinfo();
+        if let Some(win) = self.resmon_slot.as_mut() {
+            win.set_info(info);
+        }
         // Read the click exactly once: `take_widget_click` clears the flag, so
         // two panels taking it means the first one eats the click.
         if let Some(kind) = self.dock.take_widget_click() {
@@ -62,8 +67,7 @@ impl App {
                         }
                     } else {
                         if self.resmon_slot.is_none() {
-                            let mut win = ResMonWindow::new(&self.gpu, self.ppp, dark)?;
-                            win.attach_public();
+                            let win = ResMonWindow::new(&self.gpu, self.ppp, dark)?;
                             self.resmon_slot = Some(win);
                         }
                         let anchor = self.dock.widget_screen_rect(
@@ -72,7 +76,9 @@ impl App {
                             self.pos.1,
                         );
                         if let (Some(win), Some(anchor)) = (self.resmon_slot.as_mut(), anchor) {
-                            win.show_at(anchor, self.dock.cfg.edge);
+                            let order =
+                                nooksill_core::resource::parse_order(&self.dock.cfg.res_order);
+                            win.show_at(&self.gpu, anchor, self.dock.cfg.edge, &order)?;
                         }
                     }
                 }
@@ -83,8 +89,6 @@ impl App {
                             w.hide();
                         }
                     } else {
-                        let energy =
-                            self.dock.cfg.get_i32(nooksill_core::config::Key::CC_ENERGY) != 0;
                         let hotspot = self
                             .dock
                             .cfg
@@ -94,8 +98,7 @@ impl App {
                             // Tile order is dragged by the user and stored in `[widgets] Order`.
                             let order =
                                 nooksill_core::control::parse_order(&self.dock.cfg.cc_order);
-                            let win =
-                                CcWindow::new(&self.gpu, self.ppp, dark, energy, hotspot, &order)?;
+                            let win = CcWindow::new(&self.gpu, self.ppp, dark, hotspot, &order)?;
                             self.cc_slot = Some(win);
                         }
                         let anchor = self.dock.widget_screen_rect(
@@ -104,7 +107,7 @@ impl App {
                             self.pos.1,
                         );
                         if let (Some(win), Some(anchor)) = (self.cc_slot.as_mut(), anchor) {
-                            win.show_at(anchor, self.dock.cfg.edge);
+                            win.show_at(&self.gpu, anchor, self.dock.cfg.edge)?;
                         }
                     }
                 }

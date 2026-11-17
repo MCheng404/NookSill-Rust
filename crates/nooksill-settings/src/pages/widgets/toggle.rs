@@ -59,7 +59,7 @@ pub(crate) fn toggle_derived(
 
 /// Fluent pill switch: on is an accent fill with the white knob right, off is
 /// grey with the knob left. The knob follows an egui bool animation (0.12 s).
-fn switch_widget(ui: &mut Ui, label_id: egui::Id, checked: &mut bool) -> Response {
+pub(crate) fn switch_widget(ui: &mut Ui, label_id: egui::Id, checked: &mut bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(SWITCH_W, SWITCH_H),
         Sense::CLICK | Sense::focusable_noninteractive(),

@@ -14,6 +14,8 @@ pub(super) struct Input<'a> {
     pub(super) typed: &'a str,
     /// Pinyin currently being composed.
     pub(super) composing: &'a str,
+    /// The countdown just reached zero; show the badge instead of the count.
+    pub(super) alarm: bool,
 }
 
 /// Paints the panel and returns the frame's hit rects.
@@ -52,6 +54,15 @@ pub(super) fn draw_panel(
         FontId::proportional(16.0),
         tc,
     );
+    if input.alarm {
+        painter.text(
+            egui::pos2(rect.right() - pad, rect.top() + pad),
+            Align2::RIGHT_TOP,
+            nooksill_core::i18n::t("Time's up"),
+            FontId::proportional(12.0),
+            accent,
+        );
+    }
 
     // Mode segments (countdown / stopwatch)
     let sy = rect.top() + pad + 28.0;
@@ -83,7 +94,8 @@ pub(super) fn draw_panel(
         egui::pos2(x0, big_y),
         Align2::LEFT_TOP,
         format_ms(state.display_ms(now_ms), state.mode),
-        FontId::proportional(44.0),
+        // Monospace keeps the digits from shifting as they tick.
+        FontId::monospace(44.0),
         tc,
     );
 
@@ -100,7 +112,13 @@ pub(super) fn draw_panel(
         nooksill_core::i18n::t("− 1 minute"),
         nooksill_core::i18n::t("+ 1 minute"),
     ];
-    for (i, label) in labels.iter().enumerate() {
+    // The stopwatch hides the two minute buttons: they only move a countdown.
+    let action_rows = if state.mode == ToolMode::Countdown {
+        2
+    } else {
+        1
+    };
+    for (i, label) in labels.iter().take(action_rows * 2).enumerate() {
         let col = i % 2;
         let row = i / 2;
         let r = EguiRect::from_min_size(
@@ -127,7 +145,7 @@ pub(super) fn draw_panel(
     }
 
     // Todo list
-    let mut ty = by + 42.0 * 2.0 + 12.0;
+    let mut ty = by + 42.0 * action_rows as f32 + 12.0;
     painter.text(
         egui::pos2(x0, ty),
         Align2::LEFT_TOP,
@@ -235,9 +253,9 @@ pub(super) fn draw_panel(
         );
     }
 
-    // Bottom hint: number of pending items
+    // Bottom hint: number of pending items; the alarm badge takes this corner.
     let pending = state.pending_count();
-    if pending > 0 {
+    if pending > 0 && !input.alarm {
         painter.text(
             egui::pos2(rect.right() - pad, rect.top() + pad),
             Align2::RIGHT_TOP,

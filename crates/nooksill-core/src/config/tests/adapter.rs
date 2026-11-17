@@ -62,6 +62,33 @@ fn cc_order_only_written_when_set() {
     assert!(Config::from_ini(&ini3).cc_order.is_empty());
 }
 
+/// Resource rows: empty means shipped order, and a hand-edited value is
+/// normalized to known codes before it is written back.
+#[test]
+fn res_order_is_cleaned_and_roundtrips() {
+    let c = Config::defaults();
+    let mut ini = Ini::default();
+    c.write_ini(&mut ini);
+    assert!(ini.get("widgets", "ResOrder").is_none());
+
+    let mut c2 = Config::defaults();
+    c2.res_order = " net , cpu, bogus, net ".to_owned();
+    let mut ini2 = Ini::default();
+    c2.write_ini(&mut ini2);
+    assert_eq!(ini2.get("widgets", "ResOrder"), Some("net,cpu"));
+    assert_eq!(
+        Config::from_ini(&ini2).res_order,
+        "net,cpu",
+        "排序与可见性都要原样读回来"
+    );
+
+    let c3 = Config::defaults();
+    let mut ini3 = ini2;
+    c3.write_ini(&mut ini3);
+    assert!(ini3.get("widgets", "ResOrder").is_none());
+    assert!(Config::from_ini(&ini3).res_order.is_empty());
+}
+
 #[test]
 fn adapter_auto_roundtrips_as_empty_string() {
     let c = Config::defaults();

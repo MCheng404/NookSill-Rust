@@ -757,11 +757,11 @@ checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nooksill-core"
-version = "2.0.0"
+version = "2.0.1"
 
 [[package]]
 name = "nooksill-gpu"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -778,16 +778,18 @@ dependencies = [
 
 [[package]]
 name = "nooksill-platform"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "nooksill-core",
  "sha2",
  "windows",
+ "windows-collections",
+ "windows-future",
 ]
 
 [[package]]
 name = "nooksill-settings"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "egui",
  "egui_kittest",

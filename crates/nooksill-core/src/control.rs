@@ -23,12 +23,8 @@ pub enum Tile {
     DarkMode,
     /// Location.
     Location,
-    /// Mute.
-    Mute,
     /// Open Windows Settings.
     Settings,
-    /// Energy saver.
-    Energy,
     /// Mobile hotspot.
     Hotspot,
     /// Wired network (replaces [`Tile::Wifi`] when a wired NIC is present).
@@ -46,9 +42,7 @@ impl Tile {
             Self::Bluetooth => crate::i18n::t("Bluetooth"),
             Self::DarkMode => crate::i18n::t("Dark mode"),
             Self::Location => crate::i18n::t("Location"),
-            Self::Mute => crate::i18n::t("Mute"),
             Self::Settings => crate::i18n::t("Settings"),
-            Self::Energy => crate::i18n::t("Energy saver"),
             Self::Hotspot => crate::i18n::t("Hotspot"),
             Self::Ethernet => crate::i18n::t("Wired network"),
         }
@@ -56,10 +50,11 @@ impl Tile {
 
     /// Stable tile id.
     ///
-    /// The numbers match the upstream `[Cc] Order` ini values (0..=7, wired
-    /// uses 8) so a config migrated from the C build needs no translation.
-    /// They must not follow the enum order; these numbers are what lands in
-    /// the ini.
+    /// The numbers match the upstream `[Cc] Order` ini values so a config
+    /// migrated from the C build needs no translation. 4 (mute) and 6
+    /// (energy saver) are retired: mute moved onto the volume icon and the
+    /// energy tile was removed, so those ids are skipped instead of renumbering
+    /// every remaining tile (which would scramble saved orders).
     #[must_use]
     pub const fn id(self) -> u8 {
         match self {
@@ -67,16 +62,14 @@ impl Tile {
             Self::Bluetooth => 1,
             Self::DarkMode => 2,
             Self::Location => 3,
-            Self::Mute => 4,
             Self::Settings => 5,
-            Self::Energy => 6,
             Self::Hotspot => 7,
             Self::Ethernet => 8,
         }
     }
 
-    /// Look up a tile by id. Unknown ids return `None` (written by an older
-    /// build or hand-edited).
+    /// Look up a tile by id. Retired or unknown ids return `None`; a saved
+    /// order keeps the rest of its sequence.
     #[must_use]
     pub const fn from_id(id: u8) -> Option<Self> {
         match id {
@@ -84,9 +77,7 @@ impl Tile {
             1 => Some(Self::Bluetooth),
             2 => Some(Self::DarkMode),
             3 => Some(Self::Location),
-            4 => Some(Self::Mute),
             5 => Some(Self::Settings),
-            6 => Some(Self::Energy),
             7 => Some(Self::Hotspot),
             8 => Some(Self::Ethernet),
             _ => None,
@@ -105,11 +96,12 @@ impl Tile {
 
     /// Whether the tile is currently on (decides the accent vs. grey plate).
     ///
-    /// Only three tiles have on/off semantics: dark mode, mute, energy. The
-    /// rest jump to a system panel or a settings page and have no state.
+    /// Only dark mode has on/off semantics now; mute lives on the volume icon
+    /// and energy saver was removed. The rest jump to a system panel or a
+    /// settings page and have no state.
     #[must_use]
     pub const fn is_switch(self) -> bool {
-        matches!(self, Self::DarkMode | Self::Mute | Self::Energy)
+        matches!(self, Self::DarkMode)
     }
 }
 
@@ -118,22 +110,18 @@ pub const COLS: usize = 3;
 
 /// Build the default tile order.
 ///
-/// The order is `[wired/wireless] bluetooth dark location mute settings
-/// [energy] [hotspot]`. The last two are optional and disappear when
-/// `CcEnergy` / `CcHotspot` are off.
+/// The order is `[wired/wireless] bluetooth dark location settings
+/// [hotspot]`. Hotspot is optional and disappears when `CcHotspot` is off;
+/// mute and energy saver are no longer tiles.
 #[must_use]
-pub fn tiles(energy: bool, hotspot: bool, wired: bool) -> Vec<Tile> {
+pub fn tiles(hotspot: bool, wired: bool) -> Vec<Tile> {
     let mut v = vec![
         if wired { Tile::Ethernet } else { Tile::Wifi },
         Tile::Bluetooth,
         Tile::DarkMode,
         Tile::Location,
-        Tile::Mute,
         Tile::Settings,
     ];
-    if energy {
-        v.push(Tile::Energy);
-    }
     if hotspot {
         v.push(Tile::Hotspot);
     }
@@ -176,17 +164,16 @@ pub fn order_text(tiles: &[Tile]) -> String {
 ///
 /// Three rules:
 ///
-/// 1. A disabled tile (`CcEnergy` / `CcHotspot`) is dropped but keeps its
-///    slot in `order`, so it returns to the same place when re-enabled.
+/// 1. A disabled tile (`CcHotspot`) is dropped but keeps its slot in `order`,
+///    so it returns to the same place when re-enabled.
 /// 2. The network slot shows wired or wireless per the active NIC, and
 ///    follows the position stored in `order`.
 /// 3. Tiles missing from `order` are appended at the end, which covers both
 ///    newly added tiles and a hand-edited order that lists only some of them.
 #[must_use]
-pub fn tiles_ordered(order: &[Tile], energy: bool, hotspot: bool, wired: bool) -> Vec<Tile> {
+pub fn tiles_ordered(order: &[Tile], hotspot: bool, wired: bool) -> Vec<Tile> {
     let net = if wired { Tile::Ethernet } else { Tile::Wifi };
     let enabled = |t: Tile| match t {
-        Tile::Energy => energy,
         Tile::Hotspot => hotspot,
         _ => true,
     };
@@ -198,7 +185,7 @@ pub fn tiles_ordered(order: &[Tile], energy: bool, hotspot: bool, wired: bool) -
         }
     }
     // Append the tiles `order` never mentioned (including brand new ones).
-    for t in tiles(energy, hotspot, wired) {
+    for t in tiles(hotspot, wired) {
         if !out.contains(&t) {
             out.push(t);
         }
@@ -219,66 +206,59 @@ pub const fn rows(n: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// The default config (energy + hotspot on) has 8 tiles.
     #[test]
-    fn default_tiles_are_eight() {
-        let t = tiles(true, true, false);
-        assert_eq!(t.len(), 8);
-        assert_eq!(t[0], Tile::Wifi);
-        assert_eq!(t[5], Tile::Settings);
-        assert_eq!(t[6], Tile::Energy);
-        assert_eq!(t[7], Tile::Hotspot);
+    fn default_tiles_are_six_with_hotspot() {
+        assert_eq!(
+            tiles(true, false),
+            [
+                Tile::Wifi,
+                Tile::Bluetooth,
+                Tile::DarkMode,
+                Tile::Location,
+                Tile::Settings,
+                Tile::Hotspot,
+            ]
+        );
     }
 
-    /// Turning off both optional tiles leaves 6.
     #[test]
-    fn optional_tiles_can_be_disabled() {
-        let t = tiles(false, false, false);
-        assert_eq!(t.len(), 6);
-        assert!(!t.contains(&Tile::Energy));
+    fn hotspot_can_be_disabled() {
+        let t = tiles(false, false);
+        assert_eq!(t.len(), 5);
         assert!(!t.contains(&Tile::Hotspot));
     }
 
-    /// A wired NIC replaces the first tile.
     #[test]
     fn wired_replaces_the_wifi_tile() {
-        let t = tiles(false, false, true);
+        let t = tiles(false, true);
         assert_eq!(t[0], Tile::Ethernet);
         assert!(!t.contains(&Tile::Wifi));
     }
 
-    /// The row count follows the actual tile count.
     #[test]
     fn rows_follow_the_tile_count() {
+        assert_eq!(rows(5), 2);
         assert_eq!(rows(6), 2);
         assert_eq!(rows(7), 3);
-        assert_eq!(rows(8), 3);
-        assert_eq!(rows(9), 3);
     }
 
-    /// Only three tiles have on/off semantics.
     #[test]
-    fn only_three_tiles_are_switches() {
-        // Compare the kinds, not the labels: labels are translated and the
-        // process-wide language is not test-local.
+    fn only_dark_mode_is_a_switch() {
         let switches: Vec<Tile> = [
             Tile::Wifi,
             Tile::Bluetooth,
             Tile::DarkMode,
             Tile::Location,
-            Tile::Mute,
             Tile::Settings,
-            Tile::Energy,
             Tile::Hotspot,
             Tile::Ethernet,
         ]
         .into_iter()
         .filter(|t| t.is_switch())
         .collect();
-        assert_eq!(switches, [Tile::DarkMode, Tile::Mute, Tile::Energy]);
+        assert_eq!(switches, [Tile::DarkMode]);
     }
 
-    /// Every tile has a label.
     #[test]
     fn every_tile_has_a_label() {
         for t in [
@@ -286,9 +266,7 @@ mod tests {
             Tile::Bluetooth,
             Tile::DarkMode,
             Tile::Location,
-            Tile::Mute,
             Tile::Settings,
-            Tile::Energy,
             Tile::Hotspot,
             Tile::Ethernet,
         ] {
@@ -296,8 +274,6 @@ mod tests {
         }
     }
 
-    /// The id is the number in the ini; it must be unique and decoupled from
-    /// the enum order.
     #[test]
     fn tile_ids_are_unique_and_roundtrip() {
         let all = [
@@ -305,9 +281,7 @@ mod tests {
             Tile::Bluetooth,
             Tile::DarkMode,
             Tile::Location,
-            Tile::Mute,
             Tile::Settings,
-            Tile::Energy,
             Tile::Hotspot,
             Tile::Ethernet,
         ];
@@ -320,91 +294,83 @@ mod tests {
         assert_eq!(Tile::from_id(9), None);
     }
 
-    /// Whitespace, unknown ids and duplicates in a hand-edited order must not
-    /// break the layout.
+    /// Retired ids are skipped, not reused: a saved order keeps the rest of
+    /// its sequence and still loads.
     #[test]
-    fn parse_order_skips_junk() {
-        let got = parse_order(" 1, 9, x, 2,2 ,,5");
+    fn retired_ids_are_skipped_without_renumbering() {
+        assert_eq!(Tile::from_id(4), None, "静音已移到音量图标");
+        assert_eq!(Tile::from_id(6), None, "节能磁贴已移除");
+        assert_eq!(Tile::Settings.id(), 5, "其余 id 保持不变");
+        assert_eq!(Tile::Hotspot.id(), 7);
+        assert_eq!(Tile::from_id(8), Some(Tile::Ethernet));
+    }
+
+    #[test]
+    fn parse_order_skips_junk_and_retired_ids() {
         assert_eq!(
-            got,
+            parse_order(" 1, 9, x, 2,2 ,,5"),
             [Tile::Bluetooth, Tile::DarkMode, Tile::Settings],
             "未知 id / 非数字 / 重复项都跳过"
         );
+        assert!(parse_order("4,6").is_empty());
         assert!(parse_order("").is_empty());
-        assert!(parse_order("   ").is_empty());
-        assert!(parse_order("abc").is_empty());
     }
 
-    /// Saving and reloading must be identical (the ini is hand-edited).
     #[test]
     fn order_text_roundtrips() {
-        let order = [Tile::Settings, Tile::Wifi, Tile::Mute, Tile::Energy];
-        assert_eq!(order_text(&order), "5,0,4,6");
+        let order = [Tile::Settings, Tile::Wifi, Tile::Hotspot];
+        assert_eq!(order_text(&order), "5,0,7");
         assert_eq!(parse_order(&order_text(&order)), order);
     }
 
-    /// The saved order decides the tile positions.
+    /// An order written before the removal still loads: mute and energy vanish
+    /// and the remaining tiles keep their relative positions.
     #[test]
-    fn tiles_ordered_follows_saved_order() {
+    fn old_orders_keep_the_remaining_tiles_in_place() {
         let order = parse_order("5,0,4,1,2,3,6,7");
-        let got = tiles_ordered(&order, true, true, false);
         assert_eq!(
-            got,
+            order,
             [
                 Tile::Settings,
                 Tile::Wifi,
-                Tile::Mute,
                 Tile::Bluetooth,
                 Tile::DarkMode,
                 Tile::Location,
-                Tile::Energy,
                 Tile::Hotspot,
             ]
         );
+        assert_eq!(tiles_ordered(&order, true, false), order);
     }
 
-    /// A disabled tile disappears but keeps its slot, so re-enabling returns
-    /// it to the same place instead of the end.
     #[test]
-    fn disabled_tile_keeps_its_slot() {
-        let order = parse_order("0,6,1,2,3,4,5,7");
-        let off = tiles_ordered(&order, false, false, false);
-        assert!(!off.contains(&Tile::Energy));
+    fn disabled_hotspot_keeps_its_slot() {
+        let order = parse_order("0,7,1,2,3,5");
+        let off = tiles_ordered(&order, false, false);
         assert!(!off.contains(&Tile::Hotspot));
-        let on = tiles_ordered(&order, true, true, false);
-        assert_eq!(on[1], Tile::Energy, "节能回到第 2 格");
-        assert_eq!(on[7], Tile::Hotspot);
+        let on = tiles_ordered(&order, true, false);
+        assert_eq!(on[1], Tile::Hotspot, "热点回到第 2 格");
     }
 
-    /// Wired and wireless share one slot: swapping the NIC changes neither
-    /// the position nor the count.
     #[test]
     fn net_slot_switches_in_place() {
-        let order = parse_order("1,0,2,3,4,5");
-        let wifi = tiles_ordered(&order, false, false, false);
+        let order = parse_order("1,0,2,3,5");
+        let wifi = tiles_ordered(&order, false, false);
         assert_eq!(wifi[1], Tile::Wifi);
-        let wired = tiles_ordered(&order, false, false, true);
+        let wired = tiles_ordered(&order, false, true);
         assert_eq!(wired[1], Tile::Ethernet);
-        assert!(!wired.contains(&Tile::Wifi));
         assert_eq!(wired.len(), wifi.len(), "只是换了一个，不是多一个");
     }
 
-    /// Tiles missing from the order are appended: a new tile, or a hand-edited
-    /// order that lists only some of them.
     #[test]
     fn unlisted_tiles_are_appended() {
-        let got = tiles_ordered(&[Tile::Settings], false, false, false);
+        let got = tiles_ordered(&[Tile::Settings], false, false);
         assert_eq!(got[0], Tile::Settings);
-        assert_eq!(got.len(), 6, "其余五个（含网络）都要补上");
+        assert_eq!(got.len(), 5, "其余四个（含网络）都要补上");
         assert_eq!(got[1], Tile::Wifi, "补上的按默认顺序");
     }
 
-    /// An empty order equals the default order (a user who never dragged).
     #[test]
     fn empty_order_equals_default() {
-        assert_eq!(
-            tiles_ordered(&[], true, true, false),
-            tiles(true, true, false)
-        );
+        assert_eq!(tiles_ordered(&[], true, false), tiles(true, false));
     }
 }

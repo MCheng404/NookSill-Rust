@@ -372,8 +372,10 @@ mod tests {
     /// Uses the same 640x400 capture as the live path: CPU blur vs GPU
     /// compute.
     #[test]
-    #[ignore = "throughput benchmark; run with --ignored"]
     fn blur_throughput_cpu_vs_gpu() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         use std::time::{Duration, Instant};
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let mut blur = GpuBlur::new(&gpu.device, &gpu.queue).expect("pipeline");
@@ -422,8 +424,10 @@ mod tests {
     /// same frame as the CPU ColorImage path, including sampling and
     /// blending.
     #[test]
-    #[ignore = "requires a GPU and a desktop session; run with --ignored"]
     fn gpu_frost_renders_like_cpu_frost() {
+        if !crate::test_env::desktop() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let (w, h) = (64u32, 48u32);
         let src = sample(w as usize, h as usize);
@@ -461,8 +465,10 @@ mod tests {
     /// outside the band must keep the previous frame: the floor for the
     /// dirty-column optimization.
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn partial_blur_matches_full_blur_on_the_dirty_band() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let (w, h) = (64u32, 48u32);
         let radius = 6u32;
@@ -516,8 +522,10 @@ mod tests {
     /// (tolerance 1 for f32 accumulation order). Run on a machine with a
     /// D3D12 adapter.
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_blur_matches_cpu_reference() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let mut blur = GpuBlur::new(&gpu.device, &gpu.queue).expect("pipeline");
         let (w, h) = (64u32, 48u32);

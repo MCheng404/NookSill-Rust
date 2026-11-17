@@ -26,7 +26,7 @@ impl ToolWindow {
             RegisterClassW(&raw const wc);
         }
 
-        let (pw, ph) = physical_size(ppp, panel_h(state.todos.len()));
+        let (pw, ph) = physical_size(ppp, panel_h(state.todos.len(), state.mode));
         let (x, y) = nooksill_platform::display::centered_on_target(pw, ph);
         let title = windows::core::HSTRING::from(nooksill_core::i18n::t("Timer · To-do"));
         let hwnd = unsafe {
@@ -47,7 +47,9 @@ impl ToolWindow {
         }
         .map_err(|_| GpuError::Win32("CreateWindowExW (timer panel)"))?;
 
+        let lease = crate::widgets::framework::WindowLease::new(hwnd);
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let hwnd = lease.defuse();
         let mut win = Box::pin(Self {
             hwnd,
             renderer,
@@ -67,6 +69,7 @@ impl ToolWindow {
             typed: String::new(),
             typing: false,
             ime: Ime::new(),
+            alarm: None,
         });
         win.attach();
         // The todo field accepts Chinese, so the window needs an IME
@@ -100,26 +103,17 @@ impl ToolWindow {
     /// Opens beside `anchor` (or centred, per the published policy).
     pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: Edge) {
         self.placement = Some((anchor, edge));
-        let (pw, ph) = physical_size(self.ppp, panel_h(self.state.todos.len()));
-        let (x, y) =
-            framework::place_panel(PanelKind::Tool, (pw, ph), Some(anchor), edge, self.ppp);
+        let (pw, ph) = physical_size(self.ppp, panel_h(self.state.todos.len(), self.state.mode));
+        let (x, y) = framework::show_panel_active(
+            &mut self.renderer,
+            self.hwnd,
+            PanelKind::Tool,
+            (pw, ph),
+            Some(anchor),
+            edge,
+            self.ppp,
+        );
         self.pos = (x, y);
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
-                self.hwnd,
-                None,
-                x,
-                y,
-                pw,
-                ph,
-                windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
-                    | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
-            );
-        }
-        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOW);
-        }
         self.visible = true;
         self.next_repaint = Instant::now();
     }
@@ -129,10 +123,7 @@ impl ToolWindow {
             return;
         }
         self.visible = false;
-        framework::release_backdrop(&mut self.renderer, self.hwnd);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
+        framework::hide_panel(&mut self.renderer, self.hwnd);
         self.typing = false;
         self.typed.clear();
     }

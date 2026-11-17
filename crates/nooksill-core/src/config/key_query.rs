@@ -190,6 +190,8 @@ impl Key {
         Key::PANEL_BG,
         Key::PRELOAD_PANELS,
         Key::GLOW_STRENGTH,
+        Key::HOST_LINK_ENABLED,
+        Key::HOST_LINK_AUTOSCAN,
     ];
 
     /// Every key that needs reading and writing: the row-order table first,

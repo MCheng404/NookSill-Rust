@@ -218,6 +218,30 @@ impl PanelStyle {
             Stroke::new(1.0, self.border()),
             StrokeKind::Middle,
         );
+        // Curved-glass rim: a soft shadow band plus a thin lit line. Both grow
+        // inward so the panel outline and hit geometry stay unchanged.
+        let shadow = if self.dark {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 70)
+        } else {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 45)
+        };
+        let lit = if self.dark {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 72)
+        } else {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 90)
+        };
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            CornerRadius::same(Self::R_PANEL.saturating_sub(1)),
+            Stroke::new(3.0, shadow),
+            StrokeKind::Inside,
+        );
+        painter.rect_stroke(
+            rect.shrink(3.0),
+            CornerRadius::same(Self::R_PANEL.saturating_sub(3)),
+            Stroke::new(1.0, lit),
+            StrokeKind::Inside,
+        );
     }
 
     /// Base fill for every material.

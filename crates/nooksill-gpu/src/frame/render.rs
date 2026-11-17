@@ -39,6 +39,13 @@ impl FrameRenderer {
         self.glow = Some(field);
     }
 
+    /// Latest field, so UI panels can repeat the soft-light operator on top
+    /// of their own translucent wash.
+    #[must_use]
+    pub const fn glow_field(&self) -> Option<crate::frost::glow::Field> {
+        self.glow
+    }
+
     /// Corner radius of the whole-window sheet, in logical points.
     ///
     /// The texture stays square: the corner is geometry, so it does not inherit

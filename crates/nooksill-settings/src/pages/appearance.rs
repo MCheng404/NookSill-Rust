@@ -158,46 +158,13 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         nooksill_core::i18n::t("Custom colours"),
         "",
         |ctx, ui| {
-            color_row(ctx, ui, Key::BgColor1, nooksill_core::i18n::t("Colour 1"));
+            // One deliberate colour: the old gradient stops, angles and per-stop
+            // opacities are no longer offered (keys stay for old configs).
             color_row(
                 ctx,
                 ui,
-                Key::BgColor2,
-                nooksill_core::i18n::t("Colour 2 (gradient end)"),
-            );
-            color_row(
-                ctx,
-                ui,
-                Key::BG_COLOR3,
-                nooksill_core::i18n::t("Colour 3 (gradient midpoint, optional)"),
-            );
-            slider(
-                ctx,
-                ui,
-                Key::GRAD_A1,
-                nooksill_core::i18n::t("Colour 1 opacity"),
-                " %",
-            );
-            slider(
-                ctx,
-                ui,
-                Key::GRAD_A2,
-                nooksill_core::i18n::t("Colour 2 opacity"),
-                " %",
-            );
-            slider(
-                ctx,
-                ui,
-                Key::GRAD_A3,
-                nooksill_core::i18n::t("Colour 3 opacity"),
-                " %",
-            );
-            slider(
-                ctx,
-                ui,
-                Key::GRAD_ANGLE,
-                nooksill_core::i18n::t("Gradient angle"),
-                "°",
+                Key::BgColor1,
+                nooksill_core::i18n::t("Accent colour"),
             );
         },
     );

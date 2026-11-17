@@ -234,8 +234,10 @@ mod tests {
 
     /// Read-only: does not switch schemes, only checks a plausible GUID comes back.
     #[test]
-    #[ignore = "queries the live power scheme; run with --ignored"]
     fn active_power_scheme_is_readable() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         let g = active_power_scheme().expect("PowerGetActiveScheme failed");
         assert!(g.data1 != 0, "unexpected zero GUID");
         eprintln!(

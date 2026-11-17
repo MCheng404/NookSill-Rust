@@ -445,8 +445,10 @@ mod tests {
     /// Old present path (tight copy + swap) vs direct strided write.
     /// Prints numbers only; the result equality is asserted.
     #[test]
-    #[ignore = "throughput benchmark; run with --ignored"]
     fn strided_present_throughput() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         const W: usize = 1320;
         const H: usize = 1080;
         const REPS: usize = 20;
@@ -512,8 +514,10 @@ mod tests {
     /// vary by machine, so asserting would be flaky. Ignored by default; run with
     /// `--ignored --nocapture`.
     #[test]
-    #[ignore = "吞吐 benchmark，用 --ignored 显式运行"]
     fn swap_rb_throughput() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         const W: usize = 1320;
         const H: usize = 1080;
         const REPS: usize = 20;

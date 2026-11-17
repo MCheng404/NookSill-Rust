@@ -230,8 +230,10 @@ mod tests {
 
     /// Read-only: prints the taskbar edge and autohide state.
     #[test]
-    #[ignore = "queries the live taskbar; run with --ignored"]
     fn taskbar_state_is_readable() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         let t = taskbar().expect("ABM_GETTASKBARPOS failed");
         eprintln!("taskbar: edge={:?} autohide={}", t.edge, t.autohide);
     }

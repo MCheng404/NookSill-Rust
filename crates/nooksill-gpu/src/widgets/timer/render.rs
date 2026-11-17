@@ -11,10 +11,14 @@ impl ToolWindow {
         // A countdown that reached zero stops the timer. Persist that: the
         // ini would otherwise keep the value from before the last run and the
         // next start would resume a finished timer.
-        let was_running = self.state.running;
-        self.state.tick(now_ms);
-        if was_running && !self.state.running {
+        if self.state.tick(now_ms) {
             self.dirty = true;
+            self.alarm = Some(Instant::now());
+            nooksill_platform::audio::chime();
+        }
+        let alarm_on = self.alarm.is_some_and(|at| at.elapsed() < ALARM_HOLD);
+        if !alarm_on {
+            self.alarm = None;
         }
         // The panel height follows the todo count (too much blank space
         // looks bad).
@@ -44,6 +48,7 @@ impl ToolWindow {
                     typing,
                     typed: &typed,
                     composing: &composing,
+                    alarm: alarm_on,
                 },
             );
         })?;
@@ -53,6 +58,9 @@ impl ToolWindow {
         // when stopped nothing schedules a frame.
         self.next_repaint = if self.state.running {
             Instant::now() + TICK
+        } else if alarm_on {
+            // One repaint to clear the badge; there is no timer after that.
+            Instant::now() + Duration::from_millis(200)
         } else {
             Instant::now() + Duration::from_secs(3600)
         };
@@ -65,7 +73,7 @@ impl ToolWindow {
     /// the wgpu pipeline survive, which is what `FrameRenderer::resize`
     /// does.
     pub(super) fn fit_height(&mut self, gpu: &Gpu) -> Result<(), GpuError> {
-        let (pw, ph) = physical_size(self.ppp, panel_h(self.state.todos.len()));
+        let (pw, ph) = physical_size(self.ppp, panel_h(self.state.todos.len(), self.state.mode));
         if (pw, ph) == (self.size.0, self.size.1) {
             return Ok(());
         }

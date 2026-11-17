@@ -1552,3 +1552,542 @@
   以另一种形式回来。
 - WGSL `coverage` 在 `corner = 0` 时恒为 1，仍有几条多余指令，可在下一轮连同
   `apply_round_alpha` 一起删除；本轮保留是为了不破坏 CPU/GPU 逐通道对照。
+
+---
+
+## ADR-098 · 资源监视器改为可配置行集合，补齐网络 / 进程 / 运行时间
+
+**决定**：
+- 新增 `core::resource`：`ResKind` 六种读数、`ResOrder` 字符串的解析 / 清洗 /
+  序列化，以及勾选与上下移动的纯函数；至少保留一行，空值回退内置顺序。
+- `nooksill-platform::sysinfo` 增加 `NetSampler`、`process_count()`、
+  `uptime_secs()`，与 CPU / 内存 / 磁盘共用一次 `sample()` 调用；workspace
+  Cargo.toml 统一增加 `Win32_System_Diagnostics_ToolHelp` feature。
+- `widgets::resource` 按配置顺序生成行几何，打开时按行数 `resize` 离屏目标；
+  占用率三项画进度条，其它项只画数值与说明；**删除标题下的分隔线**。
+- 设置页「组件弹窗 → 资源监视器」提供每行开关与上移 / 下移按钮，写回 `ResOrder`。
+
+**依据（检索 + 本机源码）**：
+- Windows `GetIfTable2` 返回 `MIB_IF_TABLE2`，每行 `InOctets` / `OutOctets` 是自
+  接口启动以来的累计字节数，必须两次采样做差才得到速率；缓冲区由
+  `FreeMibTable` 释放（windows 0.62.2 本地源码签名确认）。
+- `CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS)` + `Process32First/Next` 是枚举
+  进程的官方接口，快照句柄必须关闭；`GetTickCount64` 返回开机毫秒数，单调，
+  不受系统时钟调整影响。
+- 累计计数器回绕、采样间隔非正时差分可能为负；按 0 处理比显示巨大读数安全。
+  既有的 `Dock::refresh_sysinfo` 每秒调用一次，扩展字段不新增唤醒或定时器。
+- 用户要求「均可自由设置和排序」，硬编码三行的面板无法承载；把行集合放进
+  `core` 纯函数可让排序 / 可见性规则无头单测，UI 只负责写回配置。
+
+**代价**：
+- 面板高度随行数变化，打开时多一次 `FrameRenderer::resize` 与 `SetWindowPos`。
+- 网络速率对所有非回环接口求和，VPN / WSL / Hyper-V 虚拟网卡也会计入；读数
+  是整机收发活动，不是单网卡明细。
+- 进程快照与接口表各是一次系统调用，仍在 UI 线程；当前每秒一次可接受，若
+  将来提高采样频率需按 ADR-037 挪到工作线程。
+- 新增一个 windows feature，链接面略增；`ResOrder` 是独立字符串键，不进
+  `NUMERIC_KEYS`，需要在 `CONFIG.md` 单独登记。
+
+---
+
+## ADR-099 · 资源读数改由后台线程采样，CPU/GPU 用 PDH，温度读不到就留空
+
+**决定**：
+- 新增 `worker::SysSampler`：每秒在后台线程调用 `sysinfo::sample_all`，结果经
+  `mpsc` 交给 UI；`Dock::sysinfo` 是唯一快照，面板只 `set_info`，不再自己采样。
+  资源卡片不可见时线程暂停，保持「空闲零帧」。
+- GPU 利用率用 PDH 英文计数器 `\GPU Engine(*)\Utilization Percentage`，取所有
+  实例的**最大值**（最忙引擎），不求和。
+- CPU 温度用 PDH `\Thermal Zone Information(*)\Temperature`，按 Kelvin / 0.1 K /
+  Celsius 归一后只接受 20–110℃；读不到就是 `None`，面板不画温度。
+- GPU 温度不实现。面板删除全部说明性小字，数值旁只保留温度与网络上行这类
+  第二读数；计时器增加归零提示音、`Time's up` 徽标、等宽数字，秒表模式隐藏
+  ±1 分钟按钮并相应缩短面板。
+- 新增 workspace feature `Win32_System_Performance` 与 `Win32_System_Diagnostics_Debug`。
+
+**依据（检索 + 本机源码）**：
+- Microsoft Learn 回答明确：`GPU Engine` 实例由 OS/驱动定义（含 pid 与
+  engtype），不同引擎的百分比**不是同一标度的分片，不能相加当总利用率**。
+  社区与 Task Manager 口径都是按引擎看，取最忙引擎最接近「总览」语义。
+- 英文计数器必须用 `PdhAddEnglishCounterW`：计数器名会随系统语言本地化，
+  按显示名拼路径在中文 Windows 上直接失败。
+- CPU 温度方面，WMI `MSAcpi_ThermalZoneTemperature` 在多数现代机器上返回空、
+  主板温度或固定占位值，且需要管理员权限；`Win32_TemperatureProbe` 的
+  `CurrentReading` 一般不被填充。真实核心温度需要内核驱动（HWiNFO /
+  LibreHardwareMonitor 一类）。因此只做「能读到就显示」的尽力而为，不引入
+  第三方依赖，也不显示假值。
+- GPU 温度没有公开统一 API：Task Manager 的数据来自驱动私有接口，普通进程
+  只能走厂商 SDK（NVML/ADL）或第三方驱动。不做。
+- PDH 数组缓冲按**字节**计并包含实例名字符串；按项数分配会越界（本轮实测
+  `STATUS_HEAP_CORRUPTION`），必须按返回的字节数分配并按 8 字节对齐。
+
+**代价**：
+- 采样线程常驻（暂停时每 500 ms 醒一次做原子检查），换来 UI 线程不再调
+  `GetIfTable2` / Toolhelp / PDH。
+- GPU 利用率是「最忙引擎」，与把所有引擎相加的第三方工具会不一致；多 GPU
+  机器没有按适配器区分，读数来自所有实例的最大值。
+- 温度在不少机器上永远为空；这是数据源缺失，不是 UI 缺陷，文档已写明。
+- PDH 首次 `collect` 只建立基线，启动后第一秒的 GPU 读数可能为空。
+- 秒表模式面板变矮会触发一次 `resize`，与待办数量变化时相同。
+
+---
+
+## ADR-100 · 面板窗口的所有权：租约、单次挂接与统一销毁
+
+**决定**：
+- 新增 `framework::WindowLease`：`CreateWindowExW` 成功后立即接管句柄，
+  `FrameRenderer::new` 失败时由 `Drop` 销毁窗口；成功时 `defuse()` 把句柄交给
+  `Pin<Box<Self>>`。六个面板的 `new` 全部改用该守卫。
+- 删除 `ResMonWindow::attach_public` 与预加载 / 懒加载路径的二次挂接；
+  `GWLP_USERDATA` 只在 `new` 内写入一次。
+- `Drop` 统一调用 `framework::destroy_panel`：先释放抓屏，再清 `GWLP_USERDATA`，
+  最后 `DestroyWindow`。
+
+**依据**：
+- 六个面板都是「先建窗口、后建渲染器」，`FrameRenderer::new` 的 `?` 路径当时没有
+  任何对象持有 HWND，失败一次就泄漏一个隐藏窗口；预加载失败会重试，长时间运行
+  会累积。
+- `DestroyWindow` 同步派发 `WM_DESTROY` / `WM_NCDESTROY`，过程函数会通过
+  `GWLP_USERDATA` 解引用 `self`；必须在销毁前把指针清零，否则访问的是半析构对象。
+- `new` 内已经 `attach`，调用方再 `attach_public` 属于历史遗留：两次写入同一地址
+  虽无害，但让「谁负责挂接」没有唯一答案。
+
+**代价**：
+- `Drop` 现在会释放抓屏并清理霜层；`FrameRenderer` 持有 `wgpu::Device` / `Queue`
+  的 Arc 克隆，因此 `Gpu` 先于面板字段析构也安全，但这条依赖要记住。
+- `destroy_panel` 要求窗口类型都有 `renderer` 字段；新增面板必须遵守。
+- 后台线程仍是 detach 语义（`IconLoader` / `Scanner` / `SysSampler` 不 join），
+  避免网络盘或驱动调用卡住进程退出；进程结束时由系统回收。
+
+---
+
+## ADR-101 · 控制中心亮度走 WMI + DDC/CI，按 50 ms 节流
+
+**决定**：
+- 新增 `platform::brightness`：先查 Windows WMI（`WmiMonitorBrightness` /
+  `WmiMonitorBrightnessMethods`），失败再用 DDC/CI（`GetMonitorBrightness` /
+  `SetMonitorBrightness`，VCP 0x10）；未选中的物理监视器句柄立刻释放，选中的
+  在 `Drop` 释放。
+- 控制中心的亮度行始终存在：探测成功用强调色并写硬件；失败时灰显，不伪造读数，
+  拖动只重试探测（可能刚接上显示器）。面板高度恒定，不随探测结果变化。
+- 拖动写入按 50 ms 节流，松手强制补写最后值；亮度值由窗口缓存，旋钮始终跟手。
+
+**依据（检索 + 本机绑定）**：
+- 外接显示器走 DDC/CI（dxva2.dll），内置笔记本屏走 Windows 自带的 WMI
+  `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods`；两者不通用。
+  本机验证：WMI 读到 `CurrentBrightness = 100`，`WmiSetBrightness(1, 90)` 写入后
+  回读为 90，恢复 100 后回读 100。
+- WMI 脚本接口的 CLSID 是 `76A64158-CB41-11D1-8B02-00600806D9B6`
+  （`SWbemLocator`），不是原生 `WbemLocator` 的 `4590F811-…`；用错会得到
+  `E_NOINTERFACE`。方法参数必须从
+  `Methods_().Item("WmiSetBrightness").InParameters().SpawnInstance_()` 生成，
+  直接对实例 `SpawnInstance_` 会使写入静默失效。
+- DDC/CI 是否可用取决于显示器是否开启、线缆/扩展坞是否透传；失败是常态而非
+  异常，所以界面必须按能力出现。
+- I2C 写入约 10–50 ms；连续拖动时每帧写会把监视器控制器打满，可能造成 OSD
+  卡死或掉帧，因此必须节流。
+- 显示模式切换（分辨率、HDR、独占全屏、休眠唤醒）会让 HMONITOR 与物理句柄
+  失效；因此每次打开重新探测，而不是长期缓存。
+
+**代价**：
+- WMI 走 COM 自动化接口，需要 STA 初始化；每次写入包含数次 COM 调用，比 DDC
+  慢（几十毫秒），因此仍然节流。
+- `ExecMethod_` 在没有 out-object 时返回 `Err(HRESULT(0))`；按 HRESULT 非负判成功，
+  不能只看 `Result::is_ok`。
+- 每次打开重新探测会在不支持 DDC/CI 的机器上重复付一次失败开销。
+- 只控制主显示器；多屏各自的亮度未分行显示。
+
+---
+
+## ADR-102 · 磁贴状态一律读系统，WiFi / 蓝牙可真实开关，定位与热点只读
+
+**决定**：
+- 新增 `platform::radio`：`wifi_state` / `set_wifi`（WLAN API，软件无线电）、
+  `bluetooth_state` / `set_bluetooth`（WinRT `Radio`）、`location_state`（读
+  `ConsentStore\location`）。
+- 控制中心在每次打开时刷新状态；磁贴高亮由真实读数决定，WiFi 磁贴在已连接时
+  显示 SSID。
+- 点击行为：WiFi / 蓝牙切换开关；有线网络打开 `ncpa.cpl`；定位打开隐私设置；
+  热点打开快速设置；设置打开系统设置。
+
+**依据（检索 + 本机绑定）**：
+- `WlanSetInterface(wlan_intf_opcode_radio_state)` 只能改软件无线电状态，硬件
+  开关永远优先；状态与连接信息通过 `WlanQueryInterface` 读取。
+- 蓝牙没有 Win32 电源开关；`bthprops.cpl` 的 `BluetoothEnableDiscovery` 只改
+  可发现性且常需管理员。WinRT `Windows.Devices.Radios` 是官方推荐路径，
+  `RequestAccessAsync` 首次会弹权限。
+- 定位开关没有公开的写入 API；`ConsentStore` 只能读，直接改注册表可能被系统
+  策略覆盖，因此点击仍交给设置页。
+- 移动热点需要 `NetworkOperatorTetheringManager` 与连接配置文件，权限/策略
+  限制多；本轮保持打开快速设置，不做半可用的开关。
+
+**代价**：
+- 蓝牙探测走 WinRT 同步等待（最长 6 s 超时），首次打开可能多等几十毫秒并弹
+  权限框；被策略拒绝时磁贴保持原状态。
+- WiFi / 蓝牙状态只在打开面板与切换后刷新，系统飞行模式在面板打开期间变化
+  需要重新打开面板才反映。
+- 定位磁贴只反映同意存储，企业策略或组策略覆盖时可能显示"开"但实际不可用。
+- 热点磁贴仍无状态高亮。
+
+
+---
+
+## ADR-103 · 通用 Host Link v1 适配层：清单驱动，不认应用名
+
+**决定**：
+- `platform::hostlink` 按协议第 2 节六通道顺序发现 `mc.host-link/v1`：环境变量、
+  `%APPDATA%` 主清单、exe 同目录、开始菜单、注册表指针、`.lnk`。任一通道缺失
+  只跳过；首个 schema 匹配且可解析的清单胜出。
+- 校验 `schema`、`app.id`、`executable.path` 与至少一个指纹；用 `app.id` 作唯一
+  去重键。动作只从 `commands.*` 原样取 exe + args，点击 `activate`，健康检查
+  `probe`。
+- `probe` 先走 stdout，拿不到输出时读清单 `endpoints.files` 指向的
+  `host-probe.json` / `host-last.json`（文件相对清单目录兜底）。
+- 恢复只执行 probe 报告里的 `repair` 步骤；`EXE_CHANGED` / `LINK_STALE` /
+  `EXE_MISSING` 重读清单。`ui.running: false` 视为正常。
+- 探测失败保留缓存条目（未就绪/可重试），不永久移除；launchpad 发现时清单条目
+  排在 `.lnk` 前，点击先问 provider，未命中才 `open_uri`。
+
+**依据**：
+- `docs/HostLink-Protocol.md` 与 `docs/Dock-Integration-Guide.md`（上游仓库与本地
+  副本一致）：`.lnk` 缺失是便携部署常态；GUI 子系统不接控制台但 `Command::output()`
+  管道可写 JSON；私有管道 `external_use: not-supported`，禁止连接。
+- 本机实测：通道 2 命中 `%APPDATA%\modular-clipboard\host-link.json`，解析出 5 个
+  命令；`--host-probe` 经 stdout 返回 `ok: true`，`ui.running: false`。
+- 9 条故障注入测试（`hostlink::tests::acceptance_1..9`）全部通过。
+
+**行为优化**：
+- `repair` 已包含 `activate` 时（如 `DAEMON_NOT_RUNNING`）不再重复执行末尾的
+  activate，避免闪两个窗口或重启两次 daemon。
+- 文件兜底报告超过 300 秒即视为过期，不把崩溃前的旧状态当成当前健康度。
+- `rescan()` 不再重复写入 `discover()` 已插入的清单。
+
+**代价**：
+- 协议固定的 bootstrap 常量（环境变量名、`Software\ModularClipboard`、开始菜单
+  文件名）仍写在代码里，它们是协议的发现入口而非应用识别逻辑；除此以外没有
+  应用名、版本、窗口标题、管道名或安装目录。
+- 没有缓存的清单时拿不到 `commands.doctor` / `publish`，只能报 `LINK_NOT_FOUND`
+  并等待重扫；这是协议允许的降级。
+- launchpad 层仍按名称去重（历史行为），清单条目排在前面保证同名时不被 `.lnk`
+  覆盖；`app.id` 去重只在 provider 内部生效。
+- 全局 provider 用 `Mutex` 保护，UI 线程单线程访问，成本可忽略。
+
+## ADR-104 · 磨砂边缘改用玻璃 3D 弯曲模糊包边
+
+**决定**：
+- 磨砂 sheet、栏体按件磨砂与整窗面板统一由 `frost::round::image` 绘制：在原有
+  内缩实色环与边界透明 AA 环之间加入两层弯曲包边，按轮廓外法线把 UV 向外
+  偏移，迎光侧保持底图、背光侧按 `RIM_DARK_GAIN` 压暗。
+- 面板自身的 `PanelStyle::paint_frame` 再叠一圈内收的暗棱与亮线，使不带独立
+  磨砂纹理的面板也有与整窗一致的厚玻璃观感。
+- 效果参数固定在 `round.rs`（`RIM_WIDTH=9pt`、`RIM_BEND=13pt`、
+  `RIM_DARK_GAIN=0.32`、左上光源 `(-0.6,-0.8)`），与 ModularClipboard 的
+  `glass.wgsl` 同口径；不新增配置键、不改变抓屏与卷积分辨率。
+
+**依据**：
+- 用户要求“磨砂边缘描边增加玻璃 3D 弯曲模糊效果包边”，并明确选择“明显立体”
+  与“主窗口外边缘 + 内部卡片/面板描边都加”。这与 ADR-057 的纯平基调冲突，
+  本 ADR 仅在磨砂轮廓带内例外；其余材质、抓屏与通道逻辑不变。
+- 三层同心环直接复用已降采样、已高斯的磨砂纹理，弯曲来自 UV 位移而非新增
+  pass；屏幕空间几何保证圆角与栏体按件取样都不继承 25% 抓屏分辨率的阶梯。
+- 验证：`cargo test --manifest-path D:/work/MiniDock-rs/Cargo.toml -p nooksill-gpu frost::round`
+  5 passed / 1 ignored；新增方向性与 UV 外弯断言守住两侧镜像。
+
+**代价**：
+- 磨砂包边出现局部方向性明暗，与 ADR-057 的“无渐变/折射/内发光”基线不同；
+  影响范围严格限制在轮廓带内。
+- `round::image` 每个边界点的顶点数由 `1+2n` 增至 `1+4n`；栏体与面板数量有上限，
+  顶点开销可忽略。
+- 包边强度没有用户滑块；要调整必须同步改 Rust 常量与 ModularClipboard 的
+  WGSL/Rust 常量。
+
+
+---
+
+## ADR-104 · 扩展组件与扩展设置：设置层只读快照，宿主执行系统操作
+
+**决定**：
+- 新增一级设置页「扩展」（`Page::Extensions`）：全局开关 `HostLink` /
+  `HostLinkAutoScan`、已发现应用列表与重扫 / 健康检查 / 打开三个按钮。
+- `nooksill-settings` 不依赖 `platform`/`windows`：页面读
+  `SettingsState::extensions`，按钮只发 `Command`。宿主在设置 tick 与打开启动台
+  时同步开关，并用 `hostlink::snapshot()` / `rescan()` / `check()` /
+  `activate_id()` 落地。
+- 页面底部有「已支持的扩展」展示目录（当前列 ModularClipboard 与仓库地址），
+  点击项目名发 `Command::OpenUrl`。该目录不参与发现与校验：provider 对任何
+  `mc.host-link/v1` 清单一视同仁。
+- 「添加到 Dock 栏」写入 path 为 `mc.host-link:<app.id>` 的普通 `Item`，不改
+  `WidgetKind`。`Builtin::from_path` 识别前缀并画程序化剪贴板图标；左键与右键
+  Open 都交给 `worker::hostlink`，因此命令仍只来自清单。
+- 点击不直接调用 provider：后台线程先复制清单再在独立 provider 上执行，全局
+  Mutex 不在 spawn 期间持有；`ProcessRunner` 用 `try_wait` + 2 s 上限并 kill
+  超时进程。早先版本在 UI 线程同步等待 `--host-probe` stdout，首次启动或
+  daemon 未就绪时会让整个 Dock 未响应。
+- scheme 条目的 `Item.target` 必须是清单里的 exe：`running_key` 只读 target 或
+  `.exe` 路径，scheme 本身匹配不到，会让运行扫描再生成一份临时图标，出现
+  「绘制图标 + 运行图标」双份。启动时与每轮 `sync_temps` 都补写 target。
+- 截图与 kittest 均覆盖新页；两个键进入 `EXTRA`（不进上游 118 键顺序），
+  `CONFIG_VERSION` 升到 5。
+
+**依据**：
+- 设置层保持「无 wgpu / 无 Win32」是既有约束，测试才能在无显示器 CI 上跑；
+  扩展管理不能为此引入平台依赖。
+- Host Link v1 只提供 discovery / health.ping / ui.toggle；页面不展示剪贴板内容，
+  也不读取私有 IPC。
+- 宿主与设置窗口共享同一个 `Config` 对象，开关即时生效，写盘仍由 400 ms
+  防抖统一处理。
+
+**代价**：
+- 状态多一跳（provider → SettingsState → 页面），快照不是实时流；健康检查后
+  由宿主刷新快照。
+- 新增一级导航项，所有遍历 `Page::ALL` 的截图 / 测试自动多一页。
+- `CONFIG_VERSION` 变更要求旧 ini 走迁移路径；两个新键为 additive，缺省值即
+  原先行为。
+
+---
+
+## ADR-105 · 内存 NFR 改为可执行三条，弃用绝对上限
+
+**决定**：放弃「<100 MB」类绝对内存目标，改为三条可执行口径——① 无会话
+增长（4 小时 soak，预热后 WS 斜率 ≤ 5 MB/h 且 R² ≤ 0.5，峰值增幅 ≤ 30 MB）；
+② 增量记账（每个 feat 在 CHANGELOG 记同基准盒、同场景、预热后稳态 WS 中位数
+差）；③ 软上限回归捕捉（5 分钟 quick 守护，基线 + 20 MB 告警）。口径沿用
+`mem.rs` 的 PROCESS_MEMORY_COUNTERS_EX 三字段；进程级采样用 Get-Process 的
+WorkingSet64 / PeakWorkingSet64 / PrivateMemorySize64 对应之。
+
+**依据**：
+- BUILD.md 实测表显示 wgpu-DX12 空设备 102–164 MB、调优后 spike 111 MB，
+  绝对目标本就不可达，且随驱动/适配器/分辨率漂移。
+- BUILD.md:233 记录驱动 ±15 MB 抖动，单点绝对数字无法区分噪声与回归。
+- 2026-11-17 实测：release 完整 dock 进程 WS 150 MB / private 278 MB，
+  同机 device 探针仅 80 MB。此前没有任何完整进程的常驻数字，也没有会话增长守护。
+- 现有 `mem.rs` 只被 device 级 `probe.rs` 使用；`bin/dock` 无内存输出；性能页
+  stats 实为帧耗时（`settings_win/render.rs`）；`probe-mem.sh` 是后端矩阵、单点
+  采样。三者都不能回答「完整 dock 是否随会话增长」。
+- 网络调研：Slint #13470 与 Ritmolux ADR-0010 遇到同类问题，后者结论一致——
+  DX12 驱动栈是固定地板，把 NFR 从绝对值改成「无会话增长 + 增量记账」。
+
+**代价**：需要一台固定基准盒与一次 4 小时 soak（self-hosted 交互桌面，GitHub
+托管 runner 无桌面会话）；soak 不能进每次 gate
+（gate 十几秒级，CONTRIBUTING.md:32）。quick 守护在 5 分钟尺度只做软上限与
+极端斜率两判据，不承诺证明无泄漏。RDP / 虚拟机上 GPU 路径变化使绝对值失真，
+故判定一律用趋势与相对差，不做跨机绝对比较。
+
+---
+
+## ADR-106 · 不共享 egui Context：实测收益覆盖不了 TextureId 风险
+
+**决定**：不实施「一个 `egui::Context` + 七个 ViewportId」的省内存方案。
+保留 `crates/nooksill-settings/tests/viewport_atlas.rs` 作为实测证据。
+
+**依据**：
+- egui 0.37 确实在同一 Context 的多个 viewport 间共享字体与 atlas（epaint
+  `text/fonts.rs:27-43,80-88`），探针证实：七个独立 Context 付 1,835,008 字节
+  atlas，单 Context 七 viewport 只付 262,144 字节。
+- 但收益只有 **1.5 MB CPU**（GPU 侧最多同量）：七个面板实际停在 2048×32
+  初始 atlas 档位，早先按 2048×512 估算的 12 MiB 高估约 8 倍。
+- 共享 Context 而保留七个 `Renderer` 会串图：每个 `egui_wgpu::Renderer` 从
+  `TextureId::User(0)` 独立编号（`renderer.rs:894-903`），frost / icon / smoke
+  native texture 在共享 Context 里指向错误纹理。
+- 安全形态是共享单个 Renderer，但 sample count 烧进 pipeline
+  （`renderer.rs:429`），必须统一 MSAA，失去按窗口面积自适应；且十一个
+  构造函数签名要改。
+
+**代价**：放弃约 3 MB 的理论收益（占 release 完整进程 WS 150 MB 的 2%）。
+换来的是保持现有纹理命名空间与逐窗口 MSAA 不变。若未来 CJK atlas 因新增
+大量字形而增长到更高档位，可用探针重测后翻案。
+
+
+---
+
+## ADR-105 · 插件系统采用声明式清单，不加载第三方代码
+
+**决定**：
+- 插件包是含 `plugin.json`（`mc.dock-plugin/v1`）的目录，来自用户目录或 exe
+  同目录的 `plugins/`。清单声明 `contributes.settings`（ini 键名→数字）与
+  `contributes.accent`（RGB）。
+- 启用 id 存 `[plugins] Enabled`；启动时与开关变更时对已启用插件按名称排序
+  叠加到 `Config`，数字键走 `apply_i32` 夹紧，强调色写运行时字段。
+- 首次覆盖某键前把用户值存进 `[plugins] Base`；禁用后不再被任何启用插件覆盖的
+  键自动恢复该值并清掉基线。
+- 设置页「扩展」新增插件列表、开关、重扫与主页按钮，显示可选的
+  `plugin.description`；清单超过 64 KiB 直接跳过，列表最多每 5 秒自动重扫一次，
+  手动重扫仍可立即生效。不提供代码/DLL 入口。
+
+**依据**：
+- 用户目标（主题、设置、风格）都能用数据表达；声明式包不需要 ABI 稳定性、
+  沙箱或运行时，也不会把 Dock 的进程暴露给第三方代码。
+- 现有 `json` 解析器与 `Config::apply_i32` 已提供校验与夹紧，边的成本最低。
+- `Key::from_name` 只覆盖上游键表，插件查找补上 `EXTRA`，因此 Rust 专属键
+  （如 `GlowStrength`）也能被主题引用。
+
+**代价**：
+- 插件不能实现任意逻辑，只能改变已有键；做新行为需要 Dock 本身支持。
+- 插件启用期间用户手改被覆盖的键，下次应用插件时会被插件值盖掉（基线优先）；
+  这是「插件管理设置」的语义，用户应先禁用再调整。
+- 插件清单无签名，任何能写插件目录的人都能覆盖已启用的设置值（值仍被夹紧）。
+
+---
+
+## ADR-107 · 烟雾是最大可配置内存项，但默认值保留
+
+**决定**：不改 `Smoke` 默认值（1）。记录实测：烟雾常驻约 25 MB，是三个
+可配置效果里最大的一项；关闭它需用户显式设 `[effect.smoke] Smoke=0`。
+
+**依据**：
+- `scripts/mem-ab.sh`（隔离 portable 目录，release，预热后 WS 中位数）实测：
+  默认 158.8 MB；`Smoke=0` 133.5 MB（−25.3）；`PreloadPanels=0` 126.8 MB
+  （−32.0）；`BgMode=0` 139.2 MB（−19.6）；全关 119.8 MB（−39.0）。
+- 25 MB 不是 pipeline 开销：加诊断开关跳过 `SmokeFx::with_gpu` 的两条 WGSL
+  pipeline 后 WS 158.5 MB（几乎不变）。真正常驻是运行时分配：14 个 f32 流体
+  场（384×128×14×4 ≈ 2.75 MB）、GPU `fields` 缓冲、输出纹理、puff 纹理与
+  noise 表（192²×3×4 ≈ 0.44 MB）。
+- 预加载与磨砂有重叠：`PreloadPanels=0` 后再关磨砂只多省 3.3 MB，
+  因为面板磨砂本就随面板一起消失。
+
+**代价**：保留默认视觉效果，常驻比"全关"高 39 MB。低内存场景需用户手动
+关三个键，或用 `scripts/mem-ab.sh` 验证自己的配置。
+
+---
+
+## ADR-108 · 线程栈与图标纹理的微优化：收益在噪声内，不做
+
+**决定**：不改工作线程 `stack_size`、不限制 rayon 线程数、不裁剪图标纹理。
+理由不是"没价值"，而是实测收益落在 ±15 MB 驱动抖动以内，改动的验证成本
+高于收益。
+
+**依据**：
+- 线程栈：Windows 上 `thread::Builder::spawn` 只 reserve 虚地址，初始仅
+  commit 1 页 + guard page。空闲阻塞线程的栈 WS 只有几十 KB。把 2 MB 改成
+  512 KB 省的是 VA（64 位下非瓶颈），对任务管理器 WS 约等于 0。减少线程数
+  才有 WS 影响，但每线程也只有 40–100 KB 量级。
+- rayon：本机 `NUMBER_OF_PROCESSORS=32`，全局池默认 32 线程（`icons.rs:39`
+  唯一使用点，批处理上限 `BATCH=8`）。理论上 32→4 可省约 1–3 MB。实测
+  `scripts/mem-ab.sh` 三组（base / 显式 32 / 4）得 137.6 / 132.8 / 137.2 MB——
+  同为 32 线程的两组差 4.8 MB，大于 32→4 的差。短采样分辨不出，收益在噪声内。
+- 图标纹理：Dock 上传 256×256 RGBA8（0.25 MiB/张，源尺寸不缩放，
+  `dock/mod.rs:32-35`）；无 mipmap（`TextureOptions::LINEAR`），去掉 mipmap
+  收益为 0。bbox 裁剪与重复路径共享可省约 0.5–1.5 MB；降到 160×160 可省
+  约 3 MB，但需守住 ≥126 物理 px（zoom 峰值）的视觉底线。
+- 对照 ADR-107 的实测：可配置三项合计可省 39 MB，比上述所有微优化总和
+  大一个数量级，且零代码风险。
+
+**代价**：放弃合计约 2–5 MB 的理论收益。换来的是不引入栈溢出风险
+（Shell/COM/WIC 线程缩栈需真机回归）、不引入图标 UV/共享的回归面。
+若将来驱动抖动降低或出现专门的低内存 SKU，可用本 ADR 的数据重新评估。
+
+---
+
+## ADR-109 · 适配器选择：独显比核显多占 25 MB 进程 WS，但保留用户选择
+
+**决定**：不改默认适配器策略，也不建议用户仅为省内存从独显换核显。
+记录实测：在你这台双显卡机上，钉 NVIDIA 独显比核显多占约 25 MB 进程 WS。
+
+**依据**：
+- `scripts/mem-adapter.sh`（隔离 portable 目录，release，真实配置参数
+  icon_size=56 / blur=14 / Msaa=4 / Smoke=0 / PreloadPanels=1，重复两轮）：
+  AMD 核显 127.3 MB；默认 LowPower（也是核显）130.3–131.3 MB；
+  NVIDIA 独显 154.9–155.5 MB。
+- 与 device 级探针结论相反（探针里独显 87 MB < 核显 164 MB）：探针只建空
+  设备，完整进程要额外算驱动 DLL 与私有堆。NVIDIA D3D12 驱动栈的私有提交
+  计入进程，核显走系统共享内存部分不计入。
+- MSAA 档位在独显上对进程 WS 无可见影响：4x/2x/1x 分别 155/154/164 MB
+  （差异在抖动内）。MSAA 附件走显存，不进本进程 RSS。
+- 首轮测到 `nvidia_msaa4` = 67 MB 是假象（驱动异步提交未稳定）；延长采样
+  并重测后稳定在 155 MB。这印证 BUILD.md 方法学「比较看峰值/稳态，
+  不看单次采样」。
+
+**代价**：保留当前 `[Graphics] Adapter=NVIDIA` 配置（性能/兼容性由用户选）。
+若某台机器纯为常驻内存优化且核显性能足够，改用核显可省约 25 MB——
+但这是机器特定结论，不可作为全局默认。
+
+---
+
+## ADR-110 · 二级导航返回后高亮进入的组，不再落回常规
+
+**决定**：`SettingsState` 增加 `primary: NavItem` 记录一级导航高亮项，与
+`page` 内容页解耦；从二级返回时把 `primary` 设为打开的组，`page` 保持当前
+标签，`sub = None`；删除 `return_page`。`normalize_nav` 改为仅在 `primary`
+与 `page` 不一致时重新派生（外部直接设 `page` 的路径），不再把「一级高亮
+组」误判成「要重开二级」。
+
+**依据**：
+- WinUI NavigationView 不自动导航也不自动恢复选中项，返回按钮只发出
+  `BackRequested`；微软文档明确同一时刻只有一个导航项被选中。AI Dev
+  Gallery 的实现经验指出：从子页返回后必须由应用把当前页映射回对应导航项，
+  否则高亮会停在默认项（`learn.microsoft.com` 的 NavigationView 文档、
+  `svrooij.io/2026/04/07/build-rail-menu-winui`）。本 bug 正是高亮固定落在
+  默认的「常规」。
+- 原 `go_back` 把 `page` 恢复成进入前的页（通常是 General），再由
+  `nav_selected(item, page)` 推导一级高亮，结果必然是常规；而
+  `normalize_nav` 在 `sub = None` 且 `page` 属于组时强制重开二级，使
+  「一级高亮组但二级已关闭」这一状态无法表达。因此必须把高亮项从内容页
+  中拆出来。
+- 一致性检查取代「page 属于组就开二级」：外部直接设置 `page`（headless
+  测试）仍派生出对应组并打开；返回时 `primary` 已拥有当前标签，不会重开。
+  四个组共用同一条路径，新增组无需额外分支。
+
+**代价**：`SettingsState` 多一个字段，`primary` 与 `page` 需保持同步——
+未来直接改 `page` 的代码必须同步 `primary`，否则下一帧会被 `normalize_nav`
+重派生。删除 `return_page` 后，外部读取该字段的代码需改（仓库内仅测试
+断言）。返回后内容区停留在最后浏览的标签而非进入前的页，这是有意的：
+让内容区与高亮的组保持一致。
+
+---
+
+## ADR-111 · 设置页叠加柔光与导航列的方向性揭示
+
+**决定**：把 W3C soft-light 的纯函数与 mesh 从 `nooksill-gpu::frost::glow` 下沉到
+`nooksill-settings::glow`，GPU 层 re-export 保持原路径。`SettingsState::glow` 每帧
+由渲染器填入捕获场的 4×4 亮度；shell 底色、侧栏、卡片三个单层各自再叠一层
+soft-light mesh（圆角用扇形网格），无桌面捕获时用固定低频场，`GlowStrength=0`
+关闭。导航列切换层级时 `NavWipe` 记录方向：进入二级由上往下揭示，返回一级
+由下往上揭示，220 ms；只裁剪绘制，不裁剪控件命中区。
+
+**依据**：
+- epaint 的 `Mesh`/`Vertex`/`WHITE_UV` 是 egui 官方的自定义渐变三角面绘制方式；
+  `Painter::with_clip_rect` 只作用于绘制，不改变布局与命中（docs.rs `egui::Painter`）。
+  因此揭示动画可以用裁剪实现，同时保持 kittest 能找到并点击每一行。
+- 项目已有 `frost::glow` 的 W3C soft-light 实现与 `GlowStrength` 配置键。复用同一
+  公式和强度，比在设置层另写一套混合更省，也避免两套参数解释不一致。
+- 设置窗底色与侧栏/卡片都是单一半透明填充，会把底层磨砂柔光压平；在每层填充
+  上按同一算子再叠一次，才能保住渐变表面的观感。
+- kittest 按 `WidgetInfo` 查找节点，`Harness::run` 会跑到重绘收敛，220 ms 动画
+  状态届时已清空；方向触发改在 sidebar 模块内直接测 `apply`/`go_back`，并对
+  揭示裁剪写纯函数断言。
+- 卡片柔光必须用卡片自身的 rect：`Frame::show` 闭包里的 `ui.clip_rect()` 是
+  ScrollArea 的滚动视口，横向覆盖整个窗口，会把柔光画到侧栏下半部，形成一块
+  可见的矩形。离屏截图前后对照确认改用卡片 rect 后侧栏上下均匀。
+
+**代价**：柔光场每帧做一次 `Copy`（4×4 f32），每层多一个 21/25 顶点的 mesh，
+开销可忽略；无捕获时用固定场，柔光不跟随桌面内容，但仍有层次。动画期间
+命中区保持原位，视觉未揭示的 220 ms 内点到该行也会生效——这是为了让自动化
+测试与键盘操作不被动画挡住，接受短暂的不一致。拆出 `pages/view.rs` 是为了让
+`pages/mod.rs` 回到 600 行门禁以内。
+
+---
+
+## ADR-112 · Dock 自定义颜色收敛为单一纯色，设置项改用自绘控件
+
+**决定**：自定义栏体颜色只用 `color1` 一个 COLORREF：启用后栏体是单一纯色，
+`bar_colors_of` 返回同一个 RGB 两次，绘制走 `rect_filled`；`color2`、`BgColor3`、
+`GradAngle`、`GradA1/A2/A3` 保留在 ini 但不再读取。`accent_tone` 开启时系统强调色
+优先于自定义色。设置页把原生 checkbox + 系统颜色按钮换成项目自绘的胶囊开关 +
+圆角色块，点色块展开 12 色预设板与 HEX 输入；强调色来源也从下拉改成同一套开关。
+
+**依据**：
+- ADR-057 记录了用户明确排斥渐变、折射、内发光；ADR-092 已指出用户偏好纯平、
+  渐变档只剩兼容意义。本轮用户确认选「简化为单一纯色」，不是保留三色渐变。
+- 检索 Windows 11 个性化颜色页：Automatic/Manual 选择 + 预设色板（选中打勾）+
+  View colors 精确输入；强调色是否作用到任务栏是独立开关。映到本项目就是
+  一个开关决定启不启用、一个色块决定颜色，色板负责精确取值。
+- 项目已有自绘元素语言（`switch_widget`、`button`、`slider` 都用 `field_bg` /
+  `hover` / accent 焦点环 + `WidgetInfo`）。用户本轮选择「项目自绘控件」，
+  颜色行不应再混用 egui 原生控件。
+- kittest 会检查每个控件有无可访问名；HEX 输入框必须 `labelled_by` 一个真实
+  标签，否则整条测试失败。色块与预设块都用 `WidgetInfo::labeled`，名字是 HEX。
+
+**代价**：自定义颜色不再有渐变层次；旧配置里的 `color2`/`BgColor3`/`Grad*`
+被忽略，外观会变平——这是有意的。预设板只有 12 色，精确值仍靠 HEX 输入。
+`SettingsState` 多两个 UI 字段（`color_edit`、`color_hex`）。原生颜色对话框
+不再提供，取色范围限定在预设 + HEX。

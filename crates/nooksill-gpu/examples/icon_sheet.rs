@@ -106,14 +106,12 @@ fn sheet(ui: &mut egui::Ui, dark: bool, accent: Color32) {
         fg,
     );
 
-    let tiles: [(Tile, &str); 9] = [
+    let tiles: [(Tile, &str); 7] = [
         (Tile::Wifi, "Wifi"),
         (Tile::Bluetooth, "Bluetooth"),
         (Tile::DarkMode, "DarkMode"),
         (Tile::Location, "Location"),
-        (Tile::Mute, "Mute"),
         (Tile::Settings, "Settings"),
-        (Tile::Energy, "Energy"),
         (Tile::Hotspot, "Hotspot"),
         (Tile::Ethernet, "Ethernet"),
     ];
@@ -159,6 +157,9 @@ fn sheet(ui: &mut egui::Ui, dark: bool, accent: Color32) {
     });
     cell(p, &mut n, "Launchpad", &|p, r| {
         glyph::paint_tile(p, r, Builtin::Launchpad, dock(accent), dark)
+    });
+    cell(p, &mut n, "Extension", &|p, r| {
+        glyph::paint_tile(p, r, Builtin::Extension, dock(accent), dark)
     });
     cell(p, &mut n, "Monogram", &|p, r| {
         glyph::paint_monogram(p, r, 'M', dock(accent), dark)
@@ -232,9 +233,6 @@ fn sheet(ui: &mut egui::Ui, dark: bool, accent: Color32) {
     });
     cell(p, &mut n, "Speaker · lv .5", &|p, r| {
         glyph::speaker(p, r, st(IconState::default().with_level(0.5)))
-    });
-    cell(p, &mut n, "Energy · lv .4", &|p, r| {
-        glyph::control_tile(p, r, Tile::Energy, st(IconState::default().with_level(0.4)))
     });
     cell(p, &mut n, "Launch · lv .55", &|p, r| {
         glyph::paint_tile(

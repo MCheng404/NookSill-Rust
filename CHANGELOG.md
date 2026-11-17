@@ -5,7 +5,369 @@
 
 ---
 
-## 未发布 — 2.0.0 之后（2026-11-08）
+## 2.0.1 — 正式版（2026-11-17）
+
+本节汇总 `2.0.0` 之后的全部改动，以 `2.0.1` 正式版发布。各节内记录的产物名是
+当时本地验证用的名字，正式版产物见下方总验证行。
+
+总验证：`./scripts/build.sh --gate`（775 项通过 / 0 失败）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.1-win64.exe`
+（sha256 `964a96d1…`）校验通过。
+
+### Dock 自定义颜色收敛为单一纯色（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 渲染 | `bar_colors_of` 抽出纯函数；自定义色返回同色并走 `rect_filled`，不再读 `BgColor2/3`、`Grad*`、`GradAngle` | ADR-112；3 项颜色单测 |
+| 设置项 | `color_row` / `accent_row` 改用项目自绘胶囊开关 + 圆角色块；点色块展开 12 色预设板与 HEX 输入 | 2 项 kittest 交互测试 |
+| 外观页 | 删掉 Colour 2/3、渐变角度、三个不透明度行，只留一个颜色行 | 外观页渲染测试 |
+| 文档 | CONFIG 将旧渐变键标注为兼容保留；ADR-112 | 与代码同轮 |
+
+验证：`./scripts/build.sh --gate`（775 项通过 / 0 失败）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `bd2ed787…`）校验通过。
+
+### 设置页叠加柔光与导航列揭示动画（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 柔光 | `frost::glow` 下沉到 `nooksill-settings::glow`，GPU 层 re-export；shell / 侧栏 / 卡片三个单层各叠 soft-light mesh，圆角用扇形网格 | ADR-111；8 项 glow 单测 |
+| 场来源 | `SettingsState::glow` 每帧由渲染器填入；无捕获时用固定低频场，`GlowStrength=0` 关闭 | 柔光场不影响导航点击测试 |
+| 动画 | 进二级由上往下、返回一级由下往上揭示，220 ms；只裁剪绘制，命中区不动 | 3 项裁剪纯函数 + 2 项方向触发单测 |
+| 结构 | `pages/view.rs` 拆出纯视图类型，`pages/mod.rs` 回到 600 行内 | size 门禁通过 |
+| 修复 | 卡片柔光误用 `Frame` 子 UI 的 `clip_rect`（滚动视口，横跨侧栏），在侧栏下半部画出矩形块；改用卡片自身 rect | 离屏截图前后对照，侧栏上下均匀 |
+
+验证：`./scripts/build.sh --gate`（770 项通过 / 0 失败）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `8759ddf3…`）校验通过。
+
+### 修复二级导航返回后高亮固定为常规（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 状态 | `SettingsState` 新增 `primary: NavItem` 记录一级高亮项，删除 `return_page`；高亮与内容页解耦 | ADR-110 |
+| 返回 | `go_back` 把 `primary` 设为打开的组、保留当前标签页并清 `sub`；`normalize_nav` 仅在两者不一致时派生，避免重开二级 | 返回后高亮落在进入的组，不再固定常规 |
+| 测试 | 改 2 处返回断言与 1 处默认字段断言；新增「从任意组返回都高亮该组」覆盖全部 4 组 | settings 58 项通过 |
+
+验证：`./scripts/build.sh --gate`（762 项通过 / 0 失败）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `301ec285…`）校验通过。
+
+### 清除全部 22 个忽略测试（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 守卫 | 移除全部 `#[ignore]`，改为 `test_env::{gpu,desktop}` / `test_env::interactive()` 运行时环境探测：有 GPU/桌面就真跑，headless CI 快速返回 | GPU 与系统查询不再需要人工 `--ignored` |
+| 稳定性 | `scanner_reports_running_apps` 不再要求本机必须有可见窗口，只验证线程启动与 drain 不 panic | 原断言依赖不可控的窗口状态 |
+| 结果 | 门禁测试从 739 通过 + 22 忽略变为 761 通过 / 0 忽略 | `./scripts/build.sh --gate` |
+
+文档：ARCH 测试约定同步。
+验证：`./scripts/build.sh --gate`（761 项通过 / 0 忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `09d52791…`）校验通过。
+
+### 插件禁用自动恢复设置值（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 基线 | `[plugins] Base` 记录插件首次覆盖前的用户值；禁用后自动恢复并清掉基线 | 2 项 `apply_plugins` 测试（含多次应用） |
+| 配置 | 新增 `Config::plugin_base`，`CONFIG_VERSION` 6 → 7 | core 配置往返测试 |
+| 文档 | CONFIG 五之十三、ADR-105、开发文档均已更新 | 禁用不再需要手动重置 |
+
+验证：`./scripts/build.sh --gate`（739 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `b11b57aa…`）校验通过。
+
+### 扩展设置可读性改进（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 错误码 | 12 个 Host Link 健康码翻译为可读文案（`DAEMON_NOT_RUNNING` → 「后台服务未运行」等），原始码保留在 tooltip | `health_codes_have_readable_labels` 测试 |
+| 插件冲突 | 两个启用插件改同一设置键时，插件行列出重叠键名 | `PluginInfo.conflicts` / `PluginRow.conflicts` |
+
+验证：`./scripts/build.sh --gate`（737 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `7d7b16eb…`）校验通过。
+
+### Host Link 逻辑行为优化（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 去重激活 | `repair` 已执行 `activate` 时跳过末尾重复调用（常见于 `DAEMON_NOT_RUNNING`） | 验收 4 断言只调用一次；真机 probe 正是该错误码 |
+| 兜底时效 | `host-probe.json` / `host-last.json` 超过 300 秒视为过期 | 新增 `stale_mirrored_probe_is_ignored` 测试 |
+| 重扫 | `rescan()` 不再重复写入 `discover()` 已插入的清单 | 12 项 hostlink 测试全过 |
+
+验证：`./scripts/build.sh --gate`（736 项通过 / 22 项忽略）、`hostlink_probe` 实测
+仍返回 `DAEMON_NOT_RUNNING` + `repair=activate`、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `a732bd26…`）校验通过。
+
+### 修复扩展 Dock 条目的重复运行图标（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 根因 | scheme 路径 `mc.host-link:<id>` 不是 `.exe`，target 为空时 `running_key` 返回 `None`，运行扫描把同一程序当临时条目再插一份 | `running_key` 实现确认 |
+| 修复 | 添加固定条目时把清单 exe 写入 `Item.target`；启动时与每轮 `sync_temps` 补齐旧配置/晚发布的清单 | `hostlink_widget_uses_target_for_running_match` 测试 |
+| 效果 | 只保留一个程序化剪贴板图标，运行中显示指示点，不再出现第二份 shell 图标 | ARCH/ADR-104 同步 |
+
+验证：`./scripts/build.sh --gate`（735 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `a481d7f8…`）校验通过。
+
+### 插件系统体验完善（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 描述 | 清单可选 `plugin.description`，设置页在插件名下展示 | `plugin_probe` 实测示例清单解析成功 |
+| 自动重扫 | 插件列表最多每 5 秒刷新一次；手动「重新扫描插件」仍立即生效 | 无需重启或手动操作即可发现新包 |
+| 大小上限 | 超过 64 KiB 的 `plugin.json` 直接跳过 | 避免畸形大文件拖慢 UI |
+| 诊断 | 新增 `examples/plugin_probe.rs` | 实测 `example ok: ... settings=3 accent=[110,150,240]` |
+
+验证：`./scripts/build.sh --gate`（734 项通过 / 22 项忽略）、`plugin_probe`、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `abe7772c…`）校验通过。
+
+### 声明式插件包与插件设置（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 插件 | 新增 `platform::plugin`：`mc.dock-plugin/v1` 清单发现、校验、数字键/强调色贡献 | 4 项解析与启用列表测试 |
+| 设置 | 扩展页新增插件列表、启用开关、重扫与主页按钮 | kittest「重新扫描插件」通过 |
+| 配置 | 新增 `[plugins] Enabled`，`CONFIG_VERSION` 5 → 6 | ini 读写与默认值测试 |
+| 文档 | `docs/plugin/Plugin-Development.md` + 完整示例 `docs/plugin/example/plugin.json` | 开发者可直接复制安装 |
+
+边界：插件只提供数据，不加载 DLL/脚本，不能读剪贴板或连私有 IPC。
+验证：`./scripts/build.sh --gate`（734 项通过 / 22 项忽略）、`plugin::` 4 项测试、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `c5e380f5…`）校验通过。
+
+### 内存 NFR 与省内存方案实测（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 完整进程守护 | 新增 `scripts/mem-guard.sh`（quick/soak/measure 三模式，预热后线性回归斜率+R²+首末差+peak 四判据）、`scripts/measure-feat.sh` | release 空闲 75 s 实测 WS 150 MB / private 278 MB / peak 157 MB，斜率 −1.66 MB/h，PASS |
+| NFR 改写 | BUILD.md 第五节改为「历史基线 + 三条可执行口径」，新增 ADR-105 | 绝对上限在驱动栈面前不可达；改为无会话增长 + 增量记账 + 软上限 |
+| 夜间守护 | 新增 `.github/workflows/mem-soak.yml`，手动触发、self-hosted 交互桌面 | GitHub 托管 runner 无桌面会话，分层窗口路径无意义 |
+| Context 共享探针 | 新增 `viewport_atlas.rs`（3 测试），量化 7 Context vs 1 Context+7 viewport 的 atlas 开销 | 1,835,008 B → 262,144 B，仅省 1.5 MB；且 TextureId 会串图，故不实施，见 ADR-106 |
+
+文档：ADR-105、ADR-106、BUILD.md 第五节。
+验证：新增三个测试全过。`--gate` 本轮未通过，失败均为工作区上一轮 extensions
+功能的既有问题（`extensions.rs:135` needless_borrow；dock 的 `Command` 匹配缺
+`PluginRescan` / `PluginToggle` / `OpenDynamicUrl` 三分支），与本轮改动无关。
+
+### 修复扩展点击导致 Dock 未响应（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 点击路径 | Dock 条目、launchpad 条目、设置页按钮都只向 `worker::hostlink` 提交 app.id，返回即结束 | 新增 `submit_never_blocks_the_ui_thread` 回归测试 |
+| 锁范围 | 后台线程先在锁内复制清单，再用独立 provider 执行 spawn，最后短暂写回缓存；UI 的快照/命中查询不再等命令 | `hostlink/manage.rs` 拆分，`hostlink.rs` 444 行 |
+| 超时 | `ProcessRunner` 用 `try_wait` 轮询，2 s 后 kill，超时返回 `None` 触发文件兜底 | `hostlink_probe` 实测 probe 仍返回 `DAEMON_NOT_RUNNING` + repair |
+
+文档：ARCH 不变式 44、ADR-104。
+验证：`./scripts/build.sh --gate`（726 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `235cee32…`）校验通过。首次打包遇到 release exe 瞬时文件锁
+（os error 5），重试成功。
+
+### 扩展小组件与剪贴板图标（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 小组件 | 扩展页「添加到 Dock 栏」写入 `mc.host-link:<app.id>` 条目；左键与右键 Open 都走 provider `activate_id`，不 ShellExecute | 设置页命令测试 + provider scheme roundtrip 测试 |
+| 图标 | 新增 `glyph::Builtin::Extension`：强调色圆角底 + 白色剪贴板（夹子 + 三条横线） | `icon_sheet` 预览，风格与内置图标一致 |
+| 分层 | 不改 `WidgetKind`；`Builtin::from_path` 识别 scheme，图标请求自动跳过 | 最小改动，launchpad 仍用 exe 路径 |
+
+文档：CONFIG 五之十二、ARCH 不变式 43、ADR-104。
+验证：`./scripts/build.sh --gate`（725 项通过 / 22 项忽略）、`icon_sheet` 图标预览、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `23513d4b…`）校验通过。
+
+### 扩展页增加已支持扩展目录（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 目录卡片 | 「已支持的扩展」列出 ModularClipboard 与说明；点击项目名发 `Command::OpenUrl` 打开仓库 | kittest 断言 URL、截图确认排版 |
+| 分层 | 目录仅展示，不参与发现/校验；provider 仍接受任何 `mc.host-link/v1` 清单 | ADR-104 补充说明 |
+
+验证：`./scripts/build.sh --gate`（722 项通过 / 22 项忽略）、`settings_shot` 截图、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `aee53840…`）校验通过。
+
+### 扩展组件与扩展设置页（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 设置页 | 新增一级页「扩展」：两个开关、已发现应用列表、重扫 / 健康检查 / 打开按钮 | `settings_shot` 截图 + kittest 中文标签测试 |
+| 配置 | 新增 `HostLink`（注入启动台）与 `HostLinkAutoScan`（打开时重扫），`CONFIG_VERSION` 4 → 5 | core 配置键测试 52 项通过 |
+| provider | 新增 `snapshot` / `rescan` / `check` / `activate_id` 与全局开关；状态只读缓存，检查才 spawn | 宿主 tick 不产生进程调用 |
+| 分层 | 设置层不依赖 platform/windows：只读 `SettingsState::extensions`，按钮发 `Command` | ADR-104 |
+| 工程 | 把 `ExtensionRow` 移到 `pages/extensions.rs`，保持 `pages/mod.rs` 低于 600 行 | 门禁 size 检查 |
+
+文档：CONFIG 五之十二、ARCH 不变式 42、ADR-104。
+验证：`./scripts/build.sh --gate`（721 项通过 / 22 项忽略）、`settings_shot` 扩展页
+截图、`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `e0dd3479…`）校验通过。
+边界：Host Link v1 只提供 discovery / health.ping / ui.toggle，不读取剪贴板内容。
+
+### 亮度接入 Windows 自带 WMI 接口（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| WMI 后端 | `platform::brightness` 先查 `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods`，失败再走 DDC/CI | 本机 WMI 读到 100，写入 90 回读 90，恢复 100 回读 100 |
+| 参数构造 | in-parameters 从 `Methods_().Item(...).InParameters().SpawnInstance_()` 生成 | 直接对实例 `SpawnInstance_` 会静默失效 |
+| CLSID | 使用 `SWbemLocator` 的 `76A64158-…`（误用 `4590F811-…` 会得到 `E_NOINTERFACE`） | 本机注册表 + ProgID 查询 |
+| 返回码 | `ExecMethod_` 的 `Err(HRESULT(0))` 视为成功 | 实测写入生效但 `Result::is_ok()` 为 false |
+| 诊断 | 新增 `examples/brightness_probe.rs`：改 10 点、回读、恢复 | `write_effective=true` |
+
+文档：ARCH 亮度段落、ADR-101 已更新（原「WMI 未实现」缺口关闭）。
+验证：`./scripts/build.sh --gate`（720 项通过 / 22 项忽略）、`brightness_probe`
+实测（`write_effective=true`，已恢复原亮度）、`./scripts/package.sh --release`
+产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `c6d1ef92…`）校验通过。
+附带修复：`frost::round` 的 UV 弯曲测试原先取边界点 y=0，clamp 后两条 UV 相同
+导致断言必败；改用内部点 y=60。
+
+### 控制中心亮度条始终显示（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 亮度行 | 不再随 DDC/CI 探测隐藏；探测成功用强调色写入硬件，失败灰显且拖动时重试探测 | 用户要求「亮度保持始终出现」 |
+| 布局 | `panel_h` / `physical_size` / `logical_size` 去掉 brightness 开关，高度恒定 | 避免探测结果改变面板高度 |
+| 验收 | 新增 `panel_control_no_ddc.bmp` 对照图 | 有/无 DDC 两态都保留亮度条，无截断 |
+
+### 通用 Host Link v1 适配层（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 发现 | `platform::hostlink` 按协议六通道顺序找清单，单通道缺失只跳过；`app.id` 唯一去重 | 上游协议第 2 节 + 本地文档；`hostlink_probe` 实测通道 2 命中 |
+| 校验 | schema + app.id + executable.path + 至少一个指纹；未知 schema 降级不猜字段 | 9 条故障注入测试全过 |
+| 动作 | 只 spawn `commands.*` 原样 exe/args；点击 `activate`、健康检查 `probe` | 测试 8 验证 `--host-activate` 单独传参 |
+| 兜底 | stdout 不可用时读 `host-probe.json` / `host-last.json`（含 `mc.host-result/v1` 包裹） | 测试 7 + 包裹格式单测 |
+| 恢复 | 只执行 probe 的 `repair`；`EXE_CHANGED` / `LINK_STALE` / `EXE_MISSING` 重读；`ui.running=false` 正常 | 测试 3/4/5/9 |
+| 接入 | launchpad 扫描合并清单条目（排在 `.lnk` 前），点击优先走 provider，未命中回退 `open_uri` | 本机发现 `D:\modular-clipboard\...\modular-clipboard.exe` |
+
+工程：新增 `windows` feature 无关；纯 `std` + 现有 `json` 解析器，无新依赖。
+文档：`ARCHITECTURE.md` 不变式 41、`DECISIONS.md` ADR-103。
+验证：`./scripts/build.sh --gate`（718 项通过 / 22 项忽略）、`hostlink_probe` 实测、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `983c7c1e…`）校验通过。
+
+### 控制中心磁贴接入真实状态与开关（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| WiFi | WLAN API 读软件无线电状态与连接 SSID / 信号；点击切换软件开关；已连接时磁贴显示 SSID | `WlanSetInterface` 只能改软件状态，硬件开关优先；`radio` 两项单测 |
+| 蓝牙 | WinRT `Radio` 读状态并切换；首次可能弹权限 | 检索：Win32 无电源开关，`bthprops` 只改可发现性 |
+| 定位 | 读 `ConsentStore\location`，磁贴高亮反映同意状态；点击仍打开隐私设置 | 无公开写入 API，直接改注册表可能被策略覆盖 |
+| 热点 | 保持打开快速设置，不伪造开关态 | 需要 Tethering 管理器与配置文件，权限限制多 |
+| 显示 | 磁贴高亮改为真实读数；WiFi 磁贴显示 SSID | `panel_control.bmp`：SSID 高亮、蓝牙开、定位灰 |
+
+工程：新增 `windows` feature（`Devices_Radios` / `Foundation` / `Foundation_Collections`
+/ `Win32_NetworkManagement_WiFi` / `Win32_System_WinRT`）与 `windows-future` /
+`windows-collections` 依赖。
+文档：`ARCHITECTURE.md` 控制中心段落、`DECISIONS.md` ADR-102。
+验证：`./scripts/build.sh --gate`（708 项通过 / 22 项忽略）、`panels_shot`、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `6c52491f…`）校验通过。
+
+### 控制中心亮度调节（DDC/CI）（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 亮度条 | 音量条下方新增亮度滑块（太阳图标 + 轨道 + 旋钮）；只在探测成功时出现，失败整条隐藏 | 用户要求；不伪造 0% 或灰条 |
+| 硬件 | 新增 `platform::brightness`：主显示器 → 物理监视器 → `GetMonitorBrightness` / `SetMonitorBrightness`（VCP 0x10），未选中的句柄立刻释放 | 检索：外接屏走 DDC/CI，内置屏需 WMI；DDC 依赖显示器与链路 |
+| 节流 | 拖动写入 50 ms 一次，松手强制补写最后值；旋钮用缓存值跟手 | 检索：I2C 写入 10–50 ms，频繁写可能卡死监视器控制器 |
+| 失效处理 | 每次打开重新探测（模式切换会让监视器句柄失效）；`Drop` 释放物理监视器 | 避免「玩完游戏后亮度条失灵」 |
+| 验收 | `panel_control.bmp` 增加亮度条 | 两条滑块对齐、太阳图标 8 条射线正常 |
+
+文档：`ARCHITECTURE.md` 组件面板段落、`DECISIONS.md` ADR-101。
+验证：`./scripts/build.sh --gate`（706 项通过 / 22 项忽略）、`panels_shot`、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `324e0094…`）校验通过。
+限制：笔记本内置屏（eDP）不支持 DDC/CI；WMI 路径已于同日补上，见下方条目。
+
+### 控制中心精简：静音并入音量图标、移除节能磁贴（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 磁贴 | 删除静音与节能；默认 6 个（网络 / 蓝牙 / 深色 / 定位 / 设置 / 热点），热点仍受 `CcHotspot` 控制 | 用户要求；`control::tiles` 测试改为 6 项 |
+| 静音 | 点击音量条左端扬声器图标切换静音，图标显示静音态；图标区（28 pt）先于拖动判定，不会误触 0% 音量 | 复用现成 `glyph::speaker` 的 `muted` 状态；`toggle_mute` 单入口 |
+| 兼容 | 磁贴 id `4` / `6` 退休但**不重编号**，旧 `[widgets] Order` 仍能加载，其余磁贴位置不变 | core 测试 `old_orders_keep_the_remaining_tiles_in_place` |
+| 清理 | 删除 `energy` / `power` 字段、节能与静音图标分支、`Canvas::box_filled`；`CcEnergy` 保留在 ini 但不再读取 | 编译与 clippy 无死代码告警 |
+| 验收 | 新增 `panel_control.bmp` 离屏截图 | 6 磁贴 + 音量条，无重叠/截断 |
+
+文档：`CONFIG.md` 的 `Order` 与兼容键列表。
+验证：`./scripts/build.sh --gate`（703 项通过 / 22 项忽略）、`panels_shot` 控制中心
+截图、`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `976ae315…`）校验通过。
+
+### 面板窗口生命周期收口（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 泄漏修复 | 新增 `framework::WindowLease`：窗口创建成功后立即接管，`FrameRenderer::new` 失败时由 `Drop` 销毁；六个面板的 `new` 全部改用 | 原先 `?` 失败路径没有 owner，每次失败泄漏一个隐藏 HWND，预加载重试会累积 |
+| 单次挂接 | 删除 `ResMonWindow::attach_public` 与预加载 / 懒加载的二次调用，`GWLP_USERDATA` 只在 `new` 写一次 | `new` 已 attach，调用方再 attach 是历史遗留，责任边界不清 |
+| 统一销毁 | `Drop` 统一走 `framework::destroy_panel`：释放抓屏 → 清 `GWLP_USERDATA` → `DestroyWindow` | 销毁消息会同步进入过程函数，必须先断开指针，否则访问半析构对象 |
+| 测试 | `WindowLease` 的 defuse / 空句柄 Drop 两项单测 | 状态机可无头验证 |
+
+文档：`ARCHITECTURE.md` 不变式 40、`DECISIONS.md` ADR-100。
+验证：`./scripts/build.sh --gate`（702 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `375921ea…`）校验通过。
+
+### 面板开合统一出口与死代码清理（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 开合统一 | 新增 `framework::show_panel` / `show_panel_active` / `hide_panel`；日历 / 控制中心 / 资源 / 计时器 / 速记 / 应用组六处「place → SetWindowPos → 绑背景 → ShowWindow」重复序列收敛到一处 | 漏一步就是定位到旧位置或背景只抓一次；不变式 32 |
+| 焦点 | 资源面板改走不激活路径（`SW_SHOWNA`），只读面板不再抢焦点；带输入框的速记 / 计时器 / 应用组走激活路径 | 与日历 / 控制中心一致；输入框仍要键盘焦点 |
+| 死代码 | 删除无消费者的 `resmon_win::summary` | 全仓 grep 无调用，测试也未引用 |
+| 文档 | 不变式 32 补唯一开合出口；模态编辑框按光标定位列为显式例外 | 编辑器不读 placement policy，文档不能声称绝对唯一 |
+
+验证：`./scripts/build.sh --gate`（700 项通过 / 22 项忽略）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `11cb4345…`）校验通过。
+
+### 采样线程化、CPU/GPU 读数与计时器完善（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 采样重构 | 新增 `worker::SysSampler`：后台线程每秒 `sample_all`，UI 只 `try_recv`；`Dock::sysinfo` 成为唯一快照，面板只 `set_info`；资源卡片不可见时线程暂停 | ADR-037 / ADR-099；`GetIfTable2` + Toolhelp + PDH 不再占 UI 线程，暂停时仍零帧 |
+| GPU 读数 | 新增 `gpu` 行；PDH `\GPU Engine(*)\Utilization Percentage` 取最忙引擎，读不到显示 `—` | 检索：引擎实例不能相加当总量；英文计数器避免本地化失效 |
+| CPU 温度 | 处理器行在主值左侧显示温度；PDH ACPI 热区，Kelvin / 0.1 K / Celsius 归一，只收 20–110℃ | 检索：WMI/ACPI 在多数机器不可靠；读不到不显示假值。GPU 温度无统一 API，不做 |
+| 去描述 | 面板删除「每秒采样一次」「正在运行的进程」等说明行，行高 50/36 → 44/32 | 用户要求；离屏截图 7 行对齐、无截断 |
+| 计时器 | 倒计时归零播放系统提示音并显示 `Time's up` 3 秒；大数字改等宽；秒表模式隐藏 ±1 分钟并缩短面板 42 pt | `ToolState::tick` 返回「刚归零」供一次性提示；新增 4 项测试 |
+| 工程 | workspace 增加 `Win32_System_Performance`、`Win32_System_Diagnostics_Debug`；PDH 缓冲按字节 + 8 字节对齐分配 | 按项数分配实测触发 `STATUS_HEAP_CORRUPTION` |
+
+文档：`CONFIG.md` 五之十一、`ARCHITECTURE.md` 线程表与不变式 39、`DECISIONS.md` ADR-099。
+验证：`./scripts/build.sh --gate`（700 项通过 / 22 项忽略）、`panels_shot` 离屏截图、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`
+（sha256 `9e7cc6b0…`）校验通过。
+
+### 资源监视器：六项读数、自由显隐与排序（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 去线 | 删除标题下分隔线，靠标题区与行间距建立层次 | 用户要求；离屏截图目视确认 |
+| 六项读数 | 新增网络收发速率（KiB/s）、进程数、系统运行时间；CPU / 内存 / 磁盘保持占用率 | `GetIfTable2` 累计字节差分、Toolhelp 快照、`GetTickCount64`；检索与本机 windows 0.62.2 源码确认，ADR-098 |
+| 自由设置 | 新增 `[widgets] ResOrder` 字符串键，六项可勾选显隐与上下排序；面板高度随行数重建 | `core::resource` 5 项纯函数单测 + 配置往返；设置页 kittest 验证开关与上移按钮写回配置 |
+| 面板 | 行几何按配置顺序生成；占用率三项画进度条，其余只有数值与说明；打开时 `resize` 离屏目标 | `panel_resource.bmp` 六行全显、顺序正确、无截断 |
+| 工程 | `NetSampler` + RAII 句柄；workspace 加 `Win32_System_Diagnostics_ToolHelp`；kittest harness 高度 1200→1600，让页尾卡片可点 | 计数器回绕 / 负间隔读 0；两个交互测试此前点不到被裁剪的卡片 |
+
+文档：`CONFIG.md` 五之十一、`ARCHITECTURE.md` 不变式 38、`DECISIONS.md` ADR-098。
+验证：`./scripts/build.sh --gate`（693 项通过 / 22 项忽略）、
+`cargo run -p nooksill-gpu --example panels_shot`、`./scripts/package.sh --release`
+产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `f49b6008…`）校验通过。
+
+### 资源监视器面板布局（2026-11-16）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 行布局 | 面板 340×210 → 360×244；三行改为「标签 + 右对齐百分比 + 详情 + 8 pt 进度条」，行高 / 间距 / 字号全部抽成常量 | 原布局标题与首行偏挤、进度条仅 6 pt 且三行视觉分离弱；与 `calendar/paint.rs` 同样把数值收口到一处 |
+| 数值层级 | 三个指标统一显示百分比主数值（15 pt 主色），详情降到 11 pt 弱色；CPU 详情新增 1 条 i18n 键 | 原先 CPU 显示 `n%`、内存 / 磁盘显示 `used / total`，同一列三种格式，扫读困难 |
+| 纯函数与离屏验收 | 抽出 `row_layouts()`，新增 3 项单测守住不溢出、不重叠、越界百分比夹紧；`panels_shot` 新增资源面板预览 | 布局漂移只能靠像素或纯函数发现；`panel_resource.bmp` 目视确认三行对齐、无截断 |
+| 验收脚本修复 | `panels_shot` 的「渐变必须不同于纯色」断言改为「两者必须相同」 | 上轮统一磨砂后 `PanelBg` 已是兼容键，旧断言让 example 必然 panic |
+
+验证：`./scripts/build.sh --gate`（682 项通过 / 22 项忽略）、`cargo run -p nooksill-gpu --example panels_shot`（含像素断言）、`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.0-win64.exe`（sha256 `4d145fc6…`）校验通过。
 
 ### 组件面板框架、位置可选与完整背景模式（2026-11-15）
 

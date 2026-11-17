@@ -203,8 +203,10 @@ mod tests {
     /// Real COM round-trip. Needs a desktop session and installed apps:
     /// `cargo test -p nooksill-platform --lib shortcut -- --ignored`
     #[test]
-    #[ignore = "依赖本机已安装的应用，需显式 --ignored"]
     fn resolves_a_real_start_menu_shortcut() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         let root = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_owned());
         let dir = std::path::Path::new(&root).join("Microsoft\\Windows\\Start Menu\\Programs");
         let mut tried = 0;

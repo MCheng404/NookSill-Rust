@@ -56,6 +56,8 @@ pub mod popup;
 pub mod present;
 pub mod settings_win;
 pub mod smoke;
+#[cfg(test)]
+mod test_env;
 pub(crate) mod text;
 pub mod widgets;
 pub mod worker;
@@ -85,4 +87,4 @@ pub use menu::{Menu, MenuCmd, MenuEntry};
 pub use offscreen::Offscreen;
 pub use present::LayeredPresenter;
 pub use settings_win::SettingsWindow;
-pub use worker::{DiskWriter, IconLoader, Opener, Scanner};
+pub use worker::{DiskWriter, IconLoader, Opener, Scanner, SysSampler};

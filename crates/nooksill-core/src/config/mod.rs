@@ -10,8 +10,10 @@ use crate::units;
 /// Config format version. Bump it when keys or sections change.
 ///
 /// Version 4 stores length keys as 96 DPI logical pixels; older versions stored
-/// physical pixels, see [`Config::migrate_units`].
-pub const CONFIG_VERSION: i32 = 4;
+/// physical pixels, see [`Config::migrate_units`]. Version 5 adds the HostLink
+/// extension switches; version 6 adds the plugin enable list, version 7 the
+/// pre-plugin value baseline used when a plugin is disabled.
+pub const CONFIG_VERSION: i32 = 7;
 
 /// Section holding metadata such as the version.
 pub const META_SECTION: &str = "meta";
@@ -180,8 +182,16 @@ pub struct Config {
     ///
     /// Empty means never dragged; ids are validated by `control::parse_order`.
     pub cc_order: String,
+    /// Resource monitor rows (`[widgets] ResOrder`, comma-separated codes).
+    ///
+    /// Empty means the shipped order; codes are validated by `resource::parse_order`.
+    pub res_order: String,
     /// UI language tag; empty means follow the OS display language.
     pub language: String,
+    /// Enabled plugin pack ids (`[plugins] Enabled`, comma-separated).
+    pub plugin_enabled: String,
+    /// Values before plugin overrides (`[plugins] Base`, `Key=Value,...`).
+    pub plugin_base: String,
     /// Runtime accent color (RGB 0..=255) resolved from the system accent.
     ///
     /// Not persisted: `None` means the theme default.

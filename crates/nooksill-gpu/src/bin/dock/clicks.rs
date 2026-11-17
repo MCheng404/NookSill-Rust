@@ -9,6 +9,20 @@ impl App {
     /// Open the launchpad; the menu entry and the `nooksill:launchpad` item
     /// share this path.
     pub(super) fn open_launchpad(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Extension switches live in the shared Config; the provider needs
+        // them even when the settings window was never opened.
+        nooksill_platform::hostlink::set_enabled(
+            self.dock
+                .cfg
+                .get_i32(nooksill_core::config::Key::HOST_LINK_ENABLED)
+                != 0,
+        );
+        nooksill_platform::hostlink::set_autoscan(
+            self.dock
+                .cfg
+                .get_i32(nooksill_core::config::Key::HOST_LINK_AUTOSCAN)
+                != 0,
+        );
         // Follow the config theme (`UiTheme` may force light), not the system.
         let dark = self
             .dock
@@ -80,8 +94,14 @@ impl App {
                 // Unreachable: `ItemKind::Note` returned above. Kept as a
                 // guard against future built-in path changes.
                 nooksill_gpu::glyph::Builtin::Notes => self.open_notes(Some(i)),
-                // `from_path` only recognizes the three built-in paths above;
-                // the other `Builtin` variants only pick fallback glyphs.
+                // Extension widgets carry the app id in their path; activating
+                // through the manifest is the only supported click action.
+                nooksill_gpu::glyph::Builtin::Extension => {
+                    if let Some(id) = nooksill_platform::hostlink::id_from_path(&item.path) {
+                        nooksill_gpu::worker::hostlink::submit(id, true, true);
+                    }
+                }
+                // The remaining variants only pick fallback glyphs.
                 _ => {}
             }
             self.dock.start_bounce(i);
@@ -344,6 +364,10 @@ impl App {
                 let Some(item) = hit.and_then(|i| self.item_at(i)) else {
                     return;
                 };
+                if let Some(id) = nooksill_platform::hostlink::id_from_path(&item.path) {
+                    nooksill_gpu::worker::hostlink::submit(id, true, true);
+                    return;
+                }
                 let toggle = self.dock.cfg.get_i32(Key::CLICK_TOGGLE) != 0;
                 self.opener.submit(OpenJob {
                     item: Box::new(item.clone()),

@@ -22,7 +22,9 @@ const MAX_DEPTH: usize = 4;
 /// name and deduplicated.
 #[must_use]
 pub fn scan() -> Vec<AppEntry> {
-    let mut out = Vec::new();
+    // Manifest-discovered apps come first: the stable sort below keeps them
+    // ahead of a same-named .lnk from channel 6.
+    let mut out = crate::hostlink::refresh();
     for dir in start_menu_dirs() {
         walk(&dir, 0, &mut out);
     }
@@ -144,7 +146,16 @@ mod tests {
         // Start Menu).
         for a in &apps {
             assert!(!a.name.is_empty());
-            assert!(a.path.to_lowercase().ends_with(".lnk"), "{}", a.path);
+            let published = crate::hostlink::shared()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .link_for_exe(Path::new(&a.path))
+                .is_some();
+            assert!(
+                a.path.to_lowercase().ends_with(".lnk") || published,
+                "{}",
+                a.path
+            );
         }
     }
 }

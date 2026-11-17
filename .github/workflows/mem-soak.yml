@@ -1,0 +1,49 @@
+name: mem-soak
+
+# Opt-in 4-hour leak guard for the full dock process, separate from build.yml.
+# Manual only: GitHub-hosted runners have no interactive desktop, so the layered
+# window has no meaningful composition path and the numbers are not comparable.
+# Run this on a self-hosted Windows runner attached to a real desktop session.
+# Verdict is trend-based (MB/h + R²); the CSV is kept for week-over-week diffs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'soak seconds'
+        type: string
+        default: '14400'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mem-soak
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: 0
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  soak:
+    name: full-process soak
+    # Self-hosted runner with an interactive desktop; label is set by the owner.
+    runs-on: [self-hosted, windows, desktop]
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: step-security/msvc-dev-cmd@v1.13.1
+      - name: 4h soak
+        shell: bash
+        run: |
+          MODE=soak DURATION=${{ github.event.inputs.duration || '14400' }} \
+            ./scripts/mem-guard.sh
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: mem-soak-csv
+          path: scratch/mem-soak-*.csv
+          retention-days: 30

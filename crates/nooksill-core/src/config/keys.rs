@@ -201,7 +201,8 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("FanDrag", 0, 1, 1, true, false),
     // TrayHide: hide the notification area icons.
     ("TrayHide", 0, 1, 0, true, false),
-    // CtrlCenter: control center widget; CcEnergy / CcHotspot: its tiles.
+    // CtrlCenter: control center widget; CcHotspot: its hotspot tile.
+    // CcEnergy is retired: kept for ini compatibility, no longer read.
     ("CtrlCenter", 0, 1, 1, true, false),
     ("CcEnergy", 0, 1, 1, true, false),
     ("CcHotspot", 0, 1, 1, true, false),
@@ -299,6 +300,10 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("PreloadPanels", 0, 1, 1, true, false),
     // GlowStrength: soft-light overlay strength in percent; 0 disables it.
     ("GlowStrength", 0, 100, 50, false, false),
+    // HostLink: publish discovered Host Link apps into the launchpad.
+    ("HostLink", 0, 1, 1, true, false),
+    // HostLinkAutoScan: re-discover manifests every time the launchpad opens.
+    ("HostLinkAutoScan", 0, 1, 1, true, false),
 ];
 
 impl Key {
@@ -553,6 +558,10 @@ impl Key {
     pub const PRELOAD_PANELS: Key = Key::Numeric(122);
     /// `GlowStrength`: soft-light overlay strength in percent.
     pub const GLOW_STRENGTH: Key = Key::Numeric(123);
+    /// `HostLink`: inject Host Link apps into the launchpad.
+    pub const HOST_LINK_ENABLED: Key = Key::Numeric(124);
+    /// `HostLinkAutoScan`: rescan manifests on every launchpad open.
+    pub const HOST_LINK_AUTOSCAN: Key = Key::Numeric(125);
 
     /// `UiAccentDockIcons`: apply the accent color to dock icons.
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);

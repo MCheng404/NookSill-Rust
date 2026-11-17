@@ -88,6 +88,21 @@ pub fn temp_keys(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hostlink_widget_uses_target_for_running_match() {
+        let mut item = crate::item::Item::new(
+            crate::item::ItemKind::File,
+            "Clipboard".to_owned(),
+            "mc.host-link:com.example.clip".to_owned(),
+        );
+        assert_eq!(super::running_key(&item), None, "scheme alone cannot match");
+        item.target = r"C:\apps\clip.exe".to_owned();
+        assert_eq!(
+            super::running_key(&item).as_deref(),
+            Some(r"c:\apps\clip.exe")
+        );
+    }
+
     use super::*;
 
     fn file_item(name: &str, path: &str) -> Item {

@@ -248,6 +248,20 @@ widgets/{calendar,control,timer,resource,notes,group,editor}   只声明 kind，
 新增一个组件 = `REGISTRY` 加一行 + 面板打开时调一次 `place_panel` /
 `apply_backdrop`，`nooksill_gpu::calendar_win` 等公开路径不变（ADR-088）。
 
+资源监视器是唯一「行集合可变」的面板：`core::resource` 定义六种读数与 ini 顺序，
+`nooksill-platform::sysinfo` 负责采样（累计计数器做差、句柄 RAII），
+`widgets::resource` 按配置顺序生成行几何并在打开时 `resize` 离屏目标。标题下不画
+分隔线；占用率三项有进度条，其余只有数值与说明（ADR-098）。
+
+控制中心的亮度条始终占位：`platform::brightness` 先查 Windows WMI
+（`WmiMonitorBrightness`，内置屏），失败再试 DDC/CI（外接屏）；成功用强调色并写入
+系统，失败灰显（拖动只重试探测）。写入按 50 ms 节流，面板高度不随探测结果变化
+（ADR-101）。
+
+磁贴状态由 `platform::radio` 在面板打开时读取：WiFi 走 WLAN 软件无线电并带回
+SSID / 信号，蓝牙走 WinRT `Radio`，定位读用户同意存储。热点与定位没有公开的写入
+接口，点击仍打开系统页；WiFi / 蓝牙的点击是真开关（ADR-102）。
+
 ## 四、帧调度：空闲不提交
 
 ```rust
@@ -281,6 +295,7 @@ CPU 占用为 0。这条性质是产品承诺（"空闲无定时器"），**不�
 | rayon 池 | 图标像素处理（缩放判定 + 圆角遮罩） | 不碰窗口/device |
 | `IconLoader` | shell/COM 取图标，**串行** | 不碰 UI 状态 |
 | `Scanner` | 运行状态 + 遮挡检测 | 不产生 `wgpu` 对象 |
+| `sampler::SysSampler` | 资源读数（CPU / GPU / 内存 / 磁盘 / 网络 / 进程 / 温度），每秒一次 | 不碰窗口、不碰 `egui` |
 | `DiskWriter` | 写 ini（400 ms 防抖、串行保序） | 不碰窗口 |
 | `Opener` | `ShellExecuteW` / 激活已有窗口 | 不碰窗口 |
 | `nooksill-frost` | GDI 抓屏 + CPU 可分离高斯（面板可见时） | 不碰窗口/device |
@@ -426,11 +441,14 @@ async 运行时带来的调度开销与栈占用都不划算。
     `center_of`，否则副屏锚点会按主屏工作区居中）。底色一律走
     `PanelStyle::paint_base`，抓屏绑定走
     `framework::{apply_backdrop, refresh_backdrop, release_backdrop}`。
-    面板自己不再调 `centered_on_target` / `SetWindowPos` 算位置，也不自己
+    开合一律走 `framework::show_panel` / `show_panel_active` / `hide_panel`：
+    定位 → `SetWindowPos` → 绑背景 → `ShowWindow` 的顺序只有这一份。面板自己
+    不再调 `centered_on_target` / `SetWindowPos` 算位置，也不自己
     `start_live_frost`；窗口尺寸变化后必须 `refresh_backdrop`（旧模糊纹理会被
     拉伸），首次抓屏失败必须 `release_backdrop` 交回截图可见性。静态面板的
     `due()` 必须把 `renderer.frost_pending()` 并进判据，否则抓屏线程产出的
-    新帧不会触发重绘，磨砂会停在第一帧（ADR-080 同一条约束）。
+    新帧不会触发重绘，磨砂会停在第一帧（ADR-080 同一条约束）。模态编辑框是
+    显式例外：按光标定位并在屏幕内钳制，不读 placement policy。
 
 33. **预加载与懒加载共用同一批 slot**：`App::preload_panels()` 只填 `None`
     的六个面板 slot，创建失败的留空、由点击路径补建；预加载的窗口一律隐藏，
@@ -468,6 +486,31 @@ async 运行时带来的调度开销与栈占用都不划算。
     圆角由 `frost::round::{outline, fan, image}` 在屏幕空间裁剪，柔光 mesh 用
     同一轮廓。烘焙进低分辨率纹理的圆角放大后必然阶梯；改圆角只改
     `Spec.corner_pt` 的记录与绘制，不动卷积（ADR-097）。
+
+38. **资源监视器的行只由 `ResOrder` 决定**：面板不得硬编码三项，也不得在绘制时
+    读 ini；采样器与行几何分别留在 `platform` 与 `gpu` 的纯函数里，窗口尺寸随
+    行数重建，标题下不画分隔线（ADR-098）。
+39. **资源读数只有一个生产者**：`worker::SysSampler` 每秒在后台线程采样，UI 与
+    面板只读 `Dock::sysinfo`，不得再调 `GetSystemTimes` / `GetIfTable2` / PDH。
+    资源卡片不可见时线程暂停，空闲帧数仍为零。GPU 利用率取最忙引擎，温度读不到
+    就留空——面板不显示占位数字（ADR-099）。
+40. **窗口句柄在对象存在前也必须有人负责**：`CreateWindowExW` 成功后立刻交给
+    `framework::WindowLease`，`FrameRenderer::new` 失败时由租约销毁；成功则
+    `defuse()` 交给 `Pin<Box<Self>>`。`attach` 只在 `new` 内调用一次，预加载与
+    懒加载路径不得二次挂接。`Drop` 统一走 `framework::destroy_panel`：释放抓屏 →
+    清 `GWLP_USERDATA` → `DestroyWindow`，顺序不能反，否则销毁消息会解引用
+    半析构对象（ADR-100）。
+41. **外部程序只经 Host Link v1 清单接入**：`platform::hostlink` 按协议第 2 节
+    六条通道顺序发现清单，用 `app.id` 唯一去重，只 spawn `commands.*` 里原样给出的
+    exe 与 args。`launchpad::scan()` 把清单条目排在 `.lnk` 前（同名去重时保留清单
+    条目），点击先问 provider，未命中才回退 `open_uri`。探测失败按报告里的
+    `repair` 恢复，`EXE_CHANGED` / `LINK_STALE` / `EXE_MISSING` 重读清单；拿不到
+    stdout 时读 `host-probe.json` / `host-last.json`。禁止连接私有 IPC 管道、
+    硬编码应用名或把一次探测失败当永久移除（ADR-103）。
+42. **磨砂包边只在几何轮廓带内做 3D**：`frost::round::image` 用三层同心环把
+    已高斯的磨砂纹理沿外法线弯曲取样，迎光侧保留、背光侧压暗；面板
+    `PanelStyle::paint_frame` 再叠内收暗棱与亮线。不要新增全屏折射 pass，
+    也不要把包边烘焙进 25% 抓屏纹理（ADR-104）。
 
 ## 八、与 C 版的模块映射
 
@@ -549,3 +592,31 @@ async 运行时带来的调度开销与栈占用都不划算。
 测试文件同样拆：`tests.rs` → `tests/{mod,分组}.rs`，共享辅助函数留在
 `tests/mod.rs`，子模块首行 `use super::*;` 继承父模块的导入。
 已拆：`gpu/dock/tests/`、`core/layout/tests/`、`core/config/tests/`。
+
+42. **扩展设置只展示快照，不碰系统接口**：`nooksill-settings` 刻意不依赖
+    `windows`，扩展页读 `SettingsState::extensions`（宿主用 `hostlink::snapshot()`
+    填充），按钮只发 `Command::HostLink{Rescan,Check,Activate}`；真正的发现、
+    probe 与 spawn 留在 `platform::hostlink`。两个开关来自 Config，宿主在
+    设置 tick 与打开启动台时同步给 provider（ADR-104）。
+
+43. **扩展小组件用 scheme 路径，不新增 WidgetKind**：设置页「添加到 Dock 栏」写入
+    `mc.host-link:<app.id>` 的普通 `Item`；`Builtin::from_path` 识别前缀并画剪贴板
+    图标，点击（含右键 Open）只调 provider 的 `activate_id`，不交给 ShellExecute。
+    launchpad 条目仍用真实 exe 路径取图标，两套入口互不冲突（ADR-104）。
+
+44. **扩展命令不在 UI 线程执行，也不持全局锁**：Dock 条目与 launchpad 点击只把
+    app.id 交给 `worker::hostlink`；后台线程先从 provider 复制清单，再用独立
+    provider spawn `commands.*`，最后短暂写回缓存。`ProcessRunner` 对子进程设
+    2 s 上限，避免首次权限提示或忙碌的 daemon 让 Dock 卡死（ADR-104）。
+
+45. **插件是纯数据清单，不是代码加载**：`platform::plugin` 扫描两处插件目录的
+    `plugin.json`（`mc.dock-plugin/v1`），只接受已声明的数字键与 RGB 强调色，
+    启动时和开关变更时经 `Config::apply_i32` 叠加到配置；没有 DLL、脚本或
+    自定义 IPC。清单上限 64 KiB，列表每 5 秒自动重扫，可选 `description` 在
+    设置页展示。启用列表存 `[plugins] Enabled`。两个启用插件改同一键时，
+    插件行提示重叠键名；Host Link 健康码在 UI 上翻译为可读文案，原始码保留在
+    tooltip（ADR-105）。
+
+46. **真机测试不用 `#[ignore]` 藏起来**：硬件/桌面测试统一用 `test_env` 运行时
+    探测，有设备就执行，headless CI 快速返回；门禁因此报告 0 ignored，
+    测试数真实反映可运行项（761 项）。

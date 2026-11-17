@@ -382,3 +382,35 @@ fn gradient_endpoints_follow_direction() {
 }
 
 // Separator resize.
+
+#[test]
+fn custom_bar_colour_is_flat_and_ignores_gradient_keys() {
+    use nooksill_core::config::{Config, Key};
+
+    let mut cfg = Config::default();
+    cfg.apply_i32(Key::BgColor1, 0x00CC_6633);
+    cfg.apply_i32(Key::BgColor2, 0x0011_2233);
+    cfg.apply_i32(Key::BG_COLOR3, 0x0044_5566);
+    let (a, b) = crate::dock::paint_cards::bar_colors_of(&cfg, false);
+    assert_eq!(a, b, "自定义色必须是纯色，不能再带渐变端点");
+    assert_eq!(a, (51.0, 102.0, 204.0), "COLORREF 是 BGR 字节序");
+}
+
+#[test]
+fn accent_tone_defers_to_the_system_colour() {
+    use nooksill_core::config::{Config, Key};
+
+    let mut cfg = Config::default();
+    cfg.apply_i32(Key::BgColor1, 0x00CC_6633);
+    cfg.apply_i32(Key::AccentTone, 1);
+    cfg.runtime_accent = Some([10, 20, 30]);
+    let (a, b) = crate::dock::paint_cards::bar_colors_of(&cfg, false);
+    assert_ne!(a, b, "强调色洗色仍保留两级色调");
+}
+
+#[test]
+fn default_bar_has_no_custom_flat_colour() {
+    let cfg = nooksill_core::config::Config::default();
+    let (a, b) = crate::dock::paint_cards::bar_colors_of(&cfg, false);
+    assert_ne!(a, b, "默认外观仍走主题两级色");
+}

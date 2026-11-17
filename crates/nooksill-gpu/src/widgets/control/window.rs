@@ -10,7 +10,6 @@ impl CcWindow {
         gpu: &Gpu,
         ppp: f32,
         dark: bool,
-        energy_on: bool,
         hotspot_on: bool,
         order: &[Tile],
     ) -> Result<Pin<Box<Self>>, GpuError> {
@@ -32,7 +31,6 @@ impl CcWindow {
         // default order. The network tile follows the real physical link.
         let tiles = control::tiles_ordered(
             order,
-            energy_on,
             hotspot_on,
             nooksill_platform::adapter::wired_connected(),
         );
@@ -56,7 +54,9 @@ impl CcWindow {
         }
         .map_err(|_| GpuError::Win32("CreateWindowExW (control center)"))?;
 
+        let lease = crate::widgets::framework::WindowLease::new(hwnd);
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let hwnd = lease.defuse();
         let audio = Audio::new();
         let volume = audio.as_ref().and_then(Audio::volume).unwrap_or(50);
         let mute = audio.as_ref().map(Audio::muted).unwrap_or(false);
@@ -74,11 +74,7 @@ impl CcWindow {
             audio,
             volume,
             mute,
-            // `CcEnergy` only says whether to show the tile; the real state
-            // comes from `PowerGetActiveScheme`.
-            energy: sysact::is_power_saver(),
             icon_accent: None,
-            power: sysact::PowerSaver::default(),
             hover: None,
             hits: Vec::new(),
             slider: EguiRect::NOTHING,
@@ -88,6 +84,15 @@ impl CcWindow {
             down: (0.0, 0.0),
             moved: false,
             pending_order: None,
+            toggles: Toggles::default(),
+            // Probing DDC/CI is slow and may block: do it on first open, not
+            // during preload.
+            brightness: None,
+            bright_percent: 50,
+            bright_slider: EguiRect::NOTHING,
+            dragging_bright: false,
+            bright_write: Instant::now() - Duration::from_secs(1),
+            pending_bright: None,
             next_repaint: Instant::now(),
         });
         win.attach();
@@ -117,14 +122,18 @@ impl CcWindow {
     }
 
     /// Opens the panel next to the control centre card.
-    pub fn show_at(&mut self, anchor: (f32, f32, f32, f32), edge: nooksill_core::config::Edge) {
+    pub fn show_at(
+        &mut self,
+        gpu: &Gpu,
+        anchor: (f32, f32, f32, f32),
+        edge: nooksill_core::config::Edge,
+    ) -> Result<(), GpuError> {
         // Re-read the system volume and power plan on every open: they may
         // have changed elsewhere.
         if let Some(a) = &self.audio {
             self.volume = a.volume().unwrap_or(self.volume);
             self.mute = a.muted();
         }
-        self.energy = sysact::is_power_saver();
         // The network tile is re-checked on every open because a cable may
         // have been plugged in or pulled out. Only that tile is replaced, so
         // the user's tile order and the window size survive.
@@ -138,8 +147,22 @@ impl CcWindow {
                 *t = net;
             }
         }
+        // Radios are re-read on every open: the user may have toggled them
+        // from the system flyout.
+        self.refresh_toggles();
+        // DDC/CI is probed on every open: monitor handles die on a mode
+        // change, and the slider row only exists when the probe answers.
+        self.brightness = nooksill_platform::brightness::Brightness::probe();
+        if let Some(b) = &self.brightness {
+            self.bright_percent = b.percent();
+        }
         let (pw, ph) = physical_size(self.ppp, self.tiles.len());
-        let (x, y) = framework::place_panel(
+        if (pw as u32, ph as u32) != self.renderer.size() {
+            self.renderer.resize(gpu, pw as u32, ph as u32)?;
+        }
+        let (x, y) = framework::show_panel(
+            &mut self.renderer,
+            self.hwnd,
             PanelKind::ControlCenter,
             (pw, ph),
             Some(anchor),
@@ -147,15 +170,9 @@ impl CcWindow {
             self.ppp,
         );
         self.pos = (x, y);
-        unsafe {
-            let _ = SetWindowPos(self.hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOWNA);
-        }
         self.visible = true;
         self.next_repaint = Instant::now();
+        Ok(())
     }
 
     /// Hides the panel. Releases the mouse capture.
@@ -164,10 +181,7 @@ impl CcWindow {
             return;
         }
         self.visible = false;
-        framework::release_backdrop(&mut self.renderer, self.hwnd);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
+        framework::hide_panel(&mut self.renderer, self.hwnd);
     }
 
     #[must_use]

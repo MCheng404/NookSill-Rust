@@ -91,8 +91,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_sprite_matches_cpu_reference() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let shader = PuffShader::new(&gpu.device, &gpu.queue);
         let got = shader.build().expect("dispatch");

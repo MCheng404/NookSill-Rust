@@ -99,6 +99,19 @@ impl App {
     /// repeat (compared by `running_key`), and the list is capped at
     /// [`MAX_TEMP`] since the bar shrinks with the item count.
     pub(super) fn sync_temps(&mut self, running: &std::collections::HashSet<String>) -> bool {
+        // A plugin may be published after the Dock started. Fill late targets
+        // before building `pinned`, otherwise the live app gets a second icon.
+        let mut target_changed = false;
+        for item in &mut self.raw {
+            if item.target.is_empty() {
+                if let Some(id) = nooksill_platform::hostlink::id_from_path(&item.path) {
+                    if let Some(link) = nooksill_platform::hostlink::link_by_id(id) {
+                        item.target = link.exe.to_string_lossy().into_owned();
+                        target_changed = true;
+                    }
+                }
+            }
+        }
         let want = if self.dock.cfg.get_i32(Key::ShowRunning) != 0 {
             // Exe paths of pinned items; transient entries must exclude them or
             // the same app shows up twice.
@@ -110,7 +123,7 @@ impl App {
             Vec::new()
         };
         if want == self.temp_keys {
-            return false;
+            return target_changed;
         }
         self.temps = want
             .iter()
@@ -320,25 +333,24 @@ impl App {
     /// second granularity. Idle sessions render almost no frames, so a timer is
     /// the right trigger.
     pub(super) fn step_sysinfo(&mut self) -> bool {
-        // No resource widget in the strip, so skip sampling.
-        if self
+        // No resource widget in the strip, so pause the sampler thread.
+        let wanted = self
             .dock
             .metrics
             .widgets
             .iter()
-            .all(|(k, _)| k != nooksill_core::layout::WidgetKind::Resource)
-        {
+            .any(|(k, _)| k == nooksill_core::layout::WidgetKind::Resource);
+        self.sampler.set_enabled(wanted);
+        if !wanted {
             return false;
         }
-        if self.last_sysinfo.elapsed() < std::time::Duration::from_secs(1) {
+        let Some(info) = self.sampler.try_latest() else {
             return false;
-        }
-        self.last_sysinfo = std::time::Instant::now();
+        };
         let before = self.dock.sysinfo();
-        self.dock.refresh_sysinfo();
-        let after = self.dock.sysinfo();
+        self.dock.set_sysinfo(info);
         // Skip the repaint when the numbers did not change; idle CPU is 0 most
         // of the time.
-        before != after
+        self.dock.sysinfo() != before
     }
 }

@@ -13,12 +13,15 @@ pub(super) fn draw_panel(
     tiles: &[Tile],
     volume: u32,
     mute: bool,
-    energy: bool,
     has_audio: bool,
     battery: Battery,
+    toggles: &Toggles,
+    // Cached brightness level; `bright_ready` is false without DDC/CI.
+    bright: u32,
+    bright_ready: bool,
     hover: Option<Hit>,
     icon_accent: Option<Color32>,
-) -> (Vec<EguiRect>, EguiRect) {
+) -> (Vec<EguiRect>, EguiRect, EguiRect) {
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
 
@@ -55,10 +58,21 @@ pub(super) fn draw_panel(
         hits.push(r);
 
         let on = match tile {
+            Tile::Wifi => toggles.wifi.as_ref().is_some_and(|w| w.on),
+            Tile::Ethernet => true,
+            Tile::Bluetooth => toggles.bt_on.unwrap_or(false),
+            Tile::Location => toggles.location_on.unwrap_or(false),
             Tile::DarkMode => dark,
-            Tile::Mute => mute,
-            Tile::Energy => energy,
-            _ => false,
+            Tile::Settings | Tile::Hotspot => false,
+        };
+        // A connected WiFi tile shows the SSID instead of the generic label.
+        let label = match tile {
+            Tile::Wifi => toggles
+                .wifi
+                .as_ref()
+                .and_then(|w| w.ssid.as_deref())
+                .unwrap_or_else(|| tile.label()),
+            _ => tile.label(),
         };
         let hovered = hover == Some(Hit::Tile(k));
         let fill = if on {
@@ -75,12 +89,6 @@ pub(super) fn draw_panel(
         let fg = if on { Color32::WHITE } else { icon_color };
         let state = IconState {
             active: on,
-            level: if *tile == Tile::Mute {
-                volume as f32 / 100.0
-            } else {
-                1.0
-            },
-            muted: mute,
             ..IconState::default()
         };
         crate::glyph::control_tile(
@@ -92,7 +100,7 @@ pub(super) fn draw_panel(
         painter.text(
             egui::pos2(x + tw * 0.5, y + 52.0),
             Align2::CENTER_CENTER,
-            tile.label(),
+            label,
             FontId::proportional(11.5),
             if on {
                 Color32::from_rgba_unmultiplied(255, 255, 255, 240)
@@ -126,29 +134,86 @@ pub(super) fn draw_panel(
             },
         ),
     );
-    let track = EguiRect::from_min_max(
-        egui::pos2(slider.left() + 30.0, slider.center().y - 3.0),
-        egui::pos2(slider.right() - 4.0, slider.center().y + 3.0),
-    );
     let track_bg = if dark {
         Color32::from_rgba_unmultiplied(255, 255, 255, 70)
     } else {
         Color32::from_rgba_unmultiplied(0, 0, 0, 40)
     };
-    // The volume track is a pill: half the short side, no near-square ends.
-    painter.rect_filled(track, PanelStyle::pill(track.height()), track_bg);
+    paint_track(
+        &painter,
+        slider,
+        if has_audio {
+            volume as f32 / 100.0
+        } else {
+            0.0
+        },
+        if has_audio { accent } else { sub },
+        track_bg,
+    );
 
-    let frac = if has_audio {
-        volume as f32 / 100.0
-    } else {
-        0.0
-    };
-    let filled_w = track.width() * frac;
+    // The brightness row is always drawn. Without DDC/CI it is greyed out;
+    // dragging still moves the cached knob and retries the hardware probe.
+    let bright_slider = EguiRect::from_min_size(
+        egui::pos2(rect.left() + tx0, sy + SLIDER_H + 8.0),
+        egui::vec2(slider.width(), SLIDER_H),
+    );
+    let bright_fg = if bright_ready { icon_color } else { sub };
+    crate::glyph::brightness(
+        &painter,
+        EguiRect::from_center_size(
+            egui::pos2(bright_slider.left() + 11.0, bright_slider.center().y),
+            egui::vec2(20.0, 20.0),
+        ),
+        IconStyle::new(
+            bright_fg,
+            accent,
+            IconState {
+                level: bright as f32 / 100.0,
+                ..IconState::default()
+            },
+        ),
+    );
+    paint_track(
+        &painter,
+        bright_slider,
+        bright as f32 / 100.0,
+        if bright_ready { accent } else { sub },
+        track_bg,
+    );
+
+    // Battery caption sits under the brightness slider.
+    let last = bright_slider;
+    painter.text(
+        egui::pos2(last.left(), last.bottom() + 8.0),
+        Align2::LEFT_TOP,
+        battery.text(),
+        FontId::proportional(11.0),
+        sub,
+    );
+
+    (hits, slider, bright_slider)
+}
+
+/// Paints a slider track, its accent fill and the knob.
+fn paint_track(
+    painter: &egui::Painter,
+    slider: EguiRect,
+    frac: f32,
+    fill: Color32,
+    track_bg: Color32,
+) {
+    let track = EguiRect::from_min_max(
+        egui::pos2(slider.left() + 30.0, slider.center().y - 3.0),
+        egui::pos2(slider.right() - 4.0, slider.center().y + 3.0),
+    );
+    // A pill: half the short side, no near-square ends.
+    painter.rect_filled(track, PanelStyle::pill(track.height()), track_bg);
+    let filled_w = track.width() * frac.clamp(0.0, 1.0);
     if filled_w > 1.0 {
         painter.rect_filled(
             EguiRect::from_min_size(track.min, egui::vec2(filled_w, track.height())),
             PanelStyle::pill(track.height()),
-            if has_audio { accent } else { sub },
+            fill,
         );
     }
     // The knob stays inside the track even at both ends.
@@ -158,15 +223,4 @@ pub(super) fn draw_panel(
         7.0,
         Color32::from_rgba_unmultiplied(255, 255, 255, 255),
     );
-
-    // Battery caption
-    painter.text(
-        egui::pos2(slider.left(), slider.bottom() + 8.0),
-        Align2::LEFT_TOP,
-        battery.text(),
-        FontId::proportional(11.0),
-        sub,
-    );
-
-    (hits, slider)
 }

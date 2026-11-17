@@ -55,7 +55,10 @@ impl Config {
 
             adapter: String::new(),
             cc_order: String::new(),
+            res_order: String::new(),
             language: String::new(),
+            plugin_enabled: String::new(),
+            plugin_base: String::new(),
             runtime_accent: None,
             runtime_icon_accent: None,
         }

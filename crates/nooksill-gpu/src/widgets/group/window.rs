@@ -43,7 +43,9 @@ impl GroupWindow {
         }
         .map_err(|_| GpuError::Win32("CreateWindowExW (group panel)"))?;
 
+        let lease = crate::widgets::framework::WindowLease::new(hwnd);
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let hwnd = lease.defuse();
         let mut win = Box::pin(Self {
             hwnd,
             renderer,
@@ -128,23 +130,16 @@ impl GroupWindow {
         self.renderer.resize(gpu, pw as u32, ph as u32)?;
 
         let card = (al as f32, at as f32, ar as f32, ab as f32);
-        let (x, y) = framework::place_panel(PanelKind::Group, (pw, ph), Some(card), edge, self.ppp);
+        let (x, y) = framework::show_panel_active(
+            &mut self.renderer,
+            self.hwnd,
+            PanelKind::Group,
+            (pw, ph),
+            Some(card),
+            edge,
+            self.ppp,
+        );
         self.pos = (x, y);
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                Some(HWND_TOPMOST),
-                x,
-                y,
-                pw,
-                ph,
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            );
-        }
-        framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOW);
-        }
         self.visible = true;
         self.next_repaint = Some(Instant::now());
         Ok(())
@@ -155,12 +150,9 @@ impl GroupWindow {
             return;
         }
         self.visible = false;
-        framework::release_backdrop(&mut self.renderer, self.hwnd);
+        framework::hide_panel(&mut self.renderer, self.hwnd);
         self.hover = None;
         self.press = None;
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
     }
 
     /// Takes the pending action.

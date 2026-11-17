@@ -129,8 +129,10 @@ mod tests {
     /// Hardware smoke test: only asserts no panic, the result depends on
     /// whether a cable is plugged in.
     #[test]
-    #[ignore = "依赖本机网卡状态，手动运行"]
     fn real_query_does_not_panic() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         let _ = wired_connected();
     }
 }

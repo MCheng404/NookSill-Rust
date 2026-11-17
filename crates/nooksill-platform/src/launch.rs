@@ -201,8 +201,10 @@ mod tests {
     /// Ignored by default because it spawns a real process; run explicitly with
     /// `cargo test -p nooksill-platform --lib launch -- --ignored`.
     #[test]
-    #[ignore = "会真的启动进程，需显式 --ignored"]
     fn launches_a_real_command_and_it_has_an_effect() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         let marker = std::env::temp_dir().join("nooksill_launch_probe.txt");
         let _ = std::fs::remove_file(&marker);
 

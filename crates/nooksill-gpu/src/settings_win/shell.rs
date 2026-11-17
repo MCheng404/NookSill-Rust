@@ -44,6 +44,16 @@ pub fn shell_with_frost(
         Color32::from_rgba_unmultiplied(246, 247, 250, 250)
     };
     ui.painter().rect_filled(rect, CornerRadius::same(20), bg);
+    // The frosted backdrop already carries a soft-light mesh, but the shell
+    // wash sits on top of it and flattens the modelling. Repeat the operator
+    // on the wash so the single layer reads as a graduated surface.
+    nooksill_settings::glow::paint(
+        ui,
+        rect,
+        20.0,
+        state.glow,
+        cfg.get_i32(nooksill_core::config::Key::GLOW_STRENGTH),
+    );
 
     // A second wash over the window surface while a modal is up: the frosted
     // desktop underneath loses one more step of contrast, so the whole

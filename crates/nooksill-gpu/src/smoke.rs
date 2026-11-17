@@ -506,8 +506,10 @@ mod tests {
 
     /// End-to-end GPU path: compute output -> native texture -> rendered frame.
     #[test]
-    #[ignore = "requires a GPU and a desktop session; run with --ignored"]
     fn gpu_smoke_reaches_the_frame() {
+        if !crate::test_env::desktop() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let (w, h) = (256u32, 128u32);
         let mut frame = crate::frame::FrameRenderer::new(&gpu, w, h, 1.0).expect("renderer");

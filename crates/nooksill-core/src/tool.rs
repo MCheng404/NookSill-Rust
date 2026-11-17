@@ -165,15 +165,18 @@ impl ToolState {
         self.mode == ToolMode::Countdown && self.running && self.display_ms(now_ms) == 0
     }
 
-    /// Advance one frame; stop the timer when the countdown hits zero.
+    /// Advance one frame; returns whether the countdown just hit zero.
     ///
     /// Stopping is explicit here rather than a side effect of drawing, so a
-    /// countdown ends even when nothing is painted.
-    pub fn tick(&mut self, now_ms: i64) {
+    /// countdown ends even when nothing is painted. The return value lets the
+    /// caller chime once instead of on every frame past zero.
+    pub fn tick(&mut self, now_ms: i64) -> bool {
         if self.is_finished(now_ms) {
             self.running = false;
             self.remain_ms = 0;
+            return true;
         }
+        false
     }
 
     /// Start or resume.
@@ -442,8 +445,9 @@ mod tests {
         s.start(0);
         assert_eq!(s.display_ms(5_000), 0, "不会变成负数");
         assert!(s.is_finished(5_000));
-        s.tick(5_000);
+        assert!(s.tick(5_000), "第一次归零应报告给调用方");
         assert!(!s.running, "归零后应当停表");
+        assert!(!s.tick(6_000), "之后的帧不能重复报告");
         // Starting again after the end must not restart the timer.
         s.start(6_000);
         assert!(!s.running);

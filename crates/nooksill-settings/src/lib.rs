@@ -3,12 +3,14 @@
 #![deny(missing_debug_implementations)]
 
 pub mod fonts;
+pub mod glow;
 pub mod pages;
 pub mod text_field;
 
+pub use pages::extensions::{ExtensionRow, PluginRow};
 pub use pages::{
-    settings_ui, Command, ItemEdit, LibIcon, Modal, ModalAction, NavGroup, NavItem, Outcome, Page,
-    SettingsState, UpdateView,
+    settings_ui, Command, ItemEdit, LibIcon, Modal, ModalAction, NavGroup, NavItem, NavPill,
+    NavWipe, Outcome, Page, SettingsState, UpdateView,
 };
 
 /// Left navigation width in logical pixels, fixed regardless of label text.

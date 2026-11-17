@@ -4,6 +4,7 @@
 //! control is visible and operable, not that some code path ran.
 
 mod about;
+mod color;
 mod common;
 mod items;
 mod layout;

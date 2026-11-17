@@ -506,8 +506,10 @@ mod tests {
     /// Real HICON must produce visible pixels in the DIB.
     /// Run: `cargo test -p nooksill-platform --lib icon -- --ignored`
     #[test]
-    #[ignore = "需要桌面会话，显式 --ignored 运行"]
     fn dib_fallback_draws_into_the_dib_not_the_screen() {
+        if !crate::test_env::interactive() {
+            return;
+        }
         // Shared system icon; do not call DestroyIcon.
         let hicon = unsafe { LoadIconW(None, IDI_APPLICATION) }.expect("加载系统图标");
         let bmp = draw_into_dib(hicon).expect("DIB 里应当有可见像素");

@@ -164,6 +164,28 @@ pub fn paint_tile(painter: &Painter, rect: EguiRect, kind: Builtin, style: IconS
                 Stroke::new(s * 0.07, Color32::WHITE),
             );
         }
+        // Clipboard: the generic badge for any Host Link extension widget.
+        Builtin::Extension => {
+            painter.rect_filled(t, radius, style.accent);
+            let body = EguiRect::from_center_size(
+                Pos2::new(t.center().x, t.center().y + s * 0.04),
+                egui::vec2(s * 0.56, s * 0.64),
+            );
+            painter.rect_filled(body, CornerRadius::same(pix(s * 0.06)), Color32::WHITE);
+            let clip = EguiRect::from_center_size(
+                Pos2::new(t.center().x, body.top() - s * 0.01),
+                egui::vec2(s * 0.24, s * 0.10),
+            );
+            painter.rect_filled(clip, CornerRadius::same(pix(s * 0.03)), Color32::WHITE);
+            for k in 0..3 {
+                let y = body.top() + s * (0.20 + k as f32 * 0.14);
+                let end = body.right() - s * if k == 2 { 0.20 } else { 0.09 };
+                painter.line_segment(
+                    [Pos2::new(body.left() + s * 0.09, y), Pos2::new(end, y)],
+                    Stroke::new(s * 0.035, style.accent),
+                );
+            }
+        }
     }
 }
 

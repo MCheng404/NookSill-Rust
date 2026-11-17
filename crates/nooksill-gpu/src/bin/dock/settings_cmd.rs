@@ -71,6 +71,50 @@ impl App {
         }
     }
 
+    /// Pushes the provider's snapshot into the settings window.
+    fn refresh_extension_state(&mut self) {
+        let rows: Vec<nooksill_settings::ExtensionRow> = nooksill_platform::hostlink::snapshot()
+            .into_iter()
+            .map(|info| nooksill_settings::ExtensionRow {
+                id: info.id,
+                name: info.name,
+                exe: info.exe,
+                ready: info.ready,
+                detail: info.detail,
+            })
+            .collect();
+        if let Some(sw) = self.settings_slot.as_mut() {
+            if sw.state.extensions != rows {
+                sw.state.extensions = rows;
+                sw.wake();
+            }
+        }
+    }
+
+    /// Pushes the plugin snapshot into the settings window.
+    fn refresh_plugin_state(&mut self) {
+        let rows: Vec<nooksill_settings::PluginRow> =
+            nooksill_platform::plugin::snapshot(&self.dock.cfg.plugin_enabled)
+                .into_iter()
+                .map(|info| nooksill_settings::PluginRow {
+                    id: info.id,
+                    name: info.name,
+                    version: info.version,
+                    author: info.author,
+                    homepage: info.homepage,
+                    description: info.description,
+                    conflicts: info.conflicts,
+                    enabled: info.enabled,
+                })
+                .collect();
+        if let Some(sw) = self.settings_slot.as_mut() {
+            if sw.state.plugins != rows {
+                sw.state.plugins = rows;
+                sw.wake();
+            }
+        }
+    }
+
     pub(super) fn run_settings_cmd(&mut self, cmd: Command) -> bool {
         match cmd {
             // Closing is handled in `tick_settings`; the window must be hidden.
@@ -196,6 +240,50 @@ impl App {
                         sw.state.auto_start = real;
                     }
                 }
+                false
+            }
+            Command::HostLinkRescan => {
+                nooksill_platform::hostlink::rescan();
+                self.refresh_extension_state();
+                false
+            }
+            Command::HostLinkCheck(id) => {
+                nooksill_gpu::worker::hostlink::submit(&id, true, false);
+                false
+            }
+            Command::HostLinkAddToDock { id, name } => {
+                let path = nooksill_platform::hostlink::widget_path(&id);
+                if !self.raw.iter().any(|item| item.path == path) {
+                    let mut item = Item::new(ItemKind::File, name, path);
+                    // `target` is the key the running scanner matches. Without
+                    // it the live app gets a second, temporary Dock icon.
+                    if let Some(link) = nooksill_platform::hostlink::link_by_id(&id) {
+                        item.target = link.exe.to_string_lossy().into_owned();
+                    }
+                    self.raw.push(item);
+                    self.apply_item_change();
+                }
+                false
+            }
+            Command::HostLinkActivate(id) => {
+                nooksill_gpu::worker::hostlink::submit(&id, false, true);
+                false
+            }
+            Command::PluginRescan => {
+                nooksill_platform::plugin::rescan();
+                self.refresh_plugin_state();
+                false
+            }
+            Command::PluginToggle(id, on) => {
+                self.dock.cfg.plugin_enabled =
+                    nooksill_platform::plugin::toggle(&self.dock.cfg.plugin_enabled, &id, on);
+                let enabled = self.dock.cfg.plugin_enabled.clone();
+                nooksill_platform::plugin::apply_all(&mut self.dock.cfg, &enabled);
+                self.refresh_plugin_state();
+                true
+            }
+            Command::OpenDynamicUrl(url) => {
+                nooksill_platform::sysact::open_uri(&url);
                 false
             }
             Command::ResetDefaults => {

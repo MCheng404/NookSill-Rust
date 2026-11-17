@@ -31,7 +31,7 @@ pub(crate) use pickers::{accent_row, color_row};
 pub(crate) use row::{render_tip, row};
 pub(crate) use sidebar::sidebar;
 pub(crate) use slider::slider;
-pub(crate) use toggle::{switch_row, toggle, toggle_derived};
+pub(crate) use toggle::{switch_row, switch_widget, toggle, toggle_derived};
 
 use std::time::Instant;
 

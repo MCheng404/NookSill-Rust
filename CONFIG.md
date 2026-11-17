@@ -44,7 +44,7 @@
 | `[behavior]` | 缩放、指示点、标签、弹跳、时钟、文件夹扇面 |
 | `[behavior.group]` | 应用组与扇面参数（多数功能待实现） |
 | `[theme]` | Dock / 设置界面主题、底盘圆角、指示点样式 |
-| `[widgets]` | 小组件条带：位置、顺序、各卡片开关；`Order` 存控制中心磁贴顺序（Rust 版新增 `PanelDismiss` / `Order`） |
+| `[widgets]` | 小组件条带：位置、顺序、各卡片开关；`Order` 存控制中心磁贴顺序（Rust 版新增 `PanelDismiss` / `Order` / `HostLink` / `HostLinkAutoScan`） |
 | `[widgets.clock]` | 时钟显示与格式 |
 | `[menu]` | 右键菜单项开关 |
 | `[advanced]` | 浏览器路径、全局热键 |
@@ -92,10 +92,10 @@ cargo run -q -p nooksill-core --example config_table
 | `PlateTheme` | 2 | 0–2 | 底盘配色：0 浅 / 1 深 / 2 跟随 Dock 主题 |
 | `PlateOpacity` | 100 | 0–100 | 底盘不透明度（%） |
 | `plate_radius` | 22 | 0–50 | 底盘圆角（%，相对图标边长） |
-| `color1` | -1 | -1 或 0–0xFFFFFF | 自定义颜色 1，`-1` = 未启用；值为 COLORREF |
-| `color2` | -1 | -1 或 0–0xFFFFFF | 渐变终点 |
-| `BgColor3` | -1 | -1 或 0–0xFFFFFF | 渐变中间色（可选） |
-| `accent_tone` | 0 | 0/1 | 跟随系统强调色 |
+| `color1` | -1 | -1 或 0–0xFFFFFF | 唯一的自定义栏体颜色，`-1` = 未启用；值为 COLORREF。启用后为单一纯色 |
+| `color2` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：渐变终点，单一纯色模型下不再读取 |
+| `BgColor3` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：渐变中间色，单一纯色模型下不再读取 |
+| `accent_tone` | 0 | 0/1 | 跟随系统强调色；开启时优先于 `color1` |
 | `reflect` | 0 | 0/1 | 图标倒影（仅底部停靠） |
 | `clock` | 0 | 0/1 | 时间与日期卡片 |
 | `folder_fan` | 1 | 0/1 | 文件夹弧形堆叠 |
@@ -107,10 +107,10 @@ cargo run -q -p nooksill-core --example config_table
 | `BorderWidth` | 1 | 1–6 | 边框粗细（px） |
 | `SepColor` | -1 | -1 或 0–0xFFFFFF | 分割线颜色 |
 | `DotColor` | -1 | -1 或 0–0xFFFFFF | 运行指示点颜色 |
-| `GradAngle` | 90 | 0–360 | 渐变方向（°） |
-| `GradA1` | 100 | 0–100 | 颜色 1 不透明度（%） |
-| `GradA2` | 100 | 0–100 | 颜色 2 不透明度（%） |
-| `GradA3` | 100 | 0–100 | 颜色 3 不透明度（%） |
+| `GradAngle` | 90 | 0–360 | **兼容保留**：渐变方向，自定义纯色下不读取 |
+| `GradA1` | 100 | 0–100 | **兼容保留**：颜色 1 不透明度，自定义纯色下不读取；统一由 `Opacity` 控制 |
+| `GradA2` | 100 | 0–100 | **兼容保留**：渐变终点不透明度，单一纯色模型下不再读取 |
+| `GradA3` | 100 | 0–100 | **兼容保留**：渐变中间色不透明度，单一纯色模型下不再读取 |
 | `ClockShow` | 0 | 0–2 | 0 时间+日期 / 1 仅时间 / 2 仅日期 |
 | `ClockColLight` | -1 | -1 或 0–0xFFFFFF | 浅色模式下时钟字体颜色 |
 | `ClockColDark` | -1 | -1 或 0–0xFFFFFF | 深色模式下时钟字体颜色 |
@@ -141,7 +141,7 @@ cargo run -q -p nooksill-core --example config_table
 | `MnNotes` | 1 | 0/1 | 右键菜单显示速记开关 |
 | `MnAdd` | 1 | 0/1 | 空白处右键显示新建项 |
 | `PanelDismiss` | 1 | 0/1 | 点小组件面板外面任意位置就收起（Rust 版独有） |
-| `Order` | *（空）* | 逗号分隔的 id | 控制中心磁贴顺序，拖动面板上的磁贴即写入；空 = 默认顺序（Rust 版独有） |
+| `Order` | *（空）* | 逗号分隔的 id | 控制中心磁贴顺序，拖动面板上的磁贴即写入；空 = 默认顺序（Rust 版独有）。id `4`（静音）与 `6`（节能）已退休：读取时跳过且**不重编号**，旧顺序里其余磁贴位置不变 |
 | `FrostIllusion` | 0 | 0/1 | 兼容键，不再读取（实验路径已移除，ADR-094） |
 | `UpdChannel` | 0 | 0/1 | 更新通道：0 稳定版 / 1 测试版（Rust 版独有） |
 | `UpdPrompt` | 1 | 0/1 | 检测到更新后，打开设置界面时弹出居中的更新弹窗（默认开，Rust 版独有） |
@@ -199,8 +199,9 @@ Language=zh-CN
 | `[menu] MenuFrost` | 0 | 右键菜单：同上，10 逻辑点圆角 |
 | `[appearance] blur` | 6 | 三者共用的高斯半径（捕获图 texel，实际夹在 1..12） |
 
-三处都用同一套「抓背景 → 可分离高斯 → 圆角 alpha → 半透明 tint」，
-没有折射、色散、内发光 —— 纯平基调不变。捕获失败（最小化 / GDI 出错）
+三处都用同一套「抓背景 → 可分离高斯 → 圆角 alpha → 半透明 tint」；
+轮廓带额外叠一层玻璃 3D 弯曲模糊包边（UV 外弯 + 背光压暗），
+不属于全局折射/色散/内发光（ADR-104）。捕获失败（最小化 / GDI 出错）
 自动退回原来的近实心底色。
 
 背景是**实时**的：面板开着时有一条抓屏线程，桌面在动就按 50 ms 节拍
@@ -604,7 +605,7 @@ B1=改\n这里
 | `GlowStrength` | `[widgets]` | 唯一柔光强度（0..100） |
 
 兼容键（保留在 ini、**不再读取**）：`UiFrost`、`LpFrost`、`MenuFrost`、
-`GroupFrost`、`PanelBg`。`WidgetBlur` 是例外：启动时若 `> 0` 会一次性并入
+`GroupFrost`、`PanelBg`、`CcEnergy`（节能磁贴已移除）。`WidgetBlur` 是例外：启动时若 `> 0` 会一次性并入
 `Blur`，保留用户调过的值。`PanelOpacity` / `PanelOverlay` 仍然有效，只影响
 弹窗底色，不算磨砂开关。
 
@@ -618,6 +619,75 @@ wrapping 运算。CPU 与 GPU 的**最终图像**
 （`frost::round`）；`Blur` 只决定抓屏模糊强度，圆角半径只在屏幕空间绘制，
 两者互不影响。
 
+## 五之十一、资源监视器行（Rust 版独有）
+
+| 键 | 段 | 含义 | 默认 | 范围 |
+|---|---|---|---|---|
+| `ResOrder` | `[widgets]` | 资源监视器显示哪些读数及其顺序 | 空（内置顺序） | 逗号分隔的代码 |
+
+七个代码：`cpu`（处理器）、`gpu`（显卡）、`mem`（内存）、`disk`（磁盘 C:）、
+`net`（网络收发速率）、`proc`（进程数）、`uptime`（系统运行时间）。
+**列表顺序就是面板从上到下的顺序，不在列表里的项隐藏**；空值或全是无效代码时
+回退内置顺序 `cpu,gpu,mem,disk,net,proc,uptime`。至少保留一项，设置页不允许
+关掉最后一项。
+
+四条约定：
+
+1. 这是独立字符串键（与 `Order` 一样不进 `NUMERIC_KEYS`）：读入时经
+   `resource::clean_order` 去掉未知 / 重复代码，只有用户改过才写回 ini；
+   恢复默认会删掉这一行。
+2. CPU / GPU / 内存 / 磁盘是 0..100% 占用率，画进度条；GPU 取所有引擎实例里
+   **最忙的一个**（`\GPU Engine(*)\Utilization Percentage`），不把不同引擎相加；
+   网络是 KiB/s 收发速率（`GetIfTable2` 累计字节两次采样之差，跳过回环口）；
+   进程数来自 Toolhelp 快照；运行时间来自 `GetTickCount64`。非占用率读数不画
+   进度条，面板高度随实际行数变化。
+3. 温度只对 CPU 显示（右值左侧的小字），来源是 PDH
+   `\Thermal Zone Information(*)\Temperature`，按开尔文 / 0.1 K / 摄氏度三种
+   常见单位归一，只接受 20–110℃。**主板不暴露 ACPI 热区时读不到，此时不显示
+   温度**，不会用 0 或占位值冒充。GPU 温度在 Windows 没有统一 API（需要厂商
+   SDK 或第三方内核驱动），不实现。
+4. 采样在 `worker::SysSampler` 后台线程每秒一次，UI 线程只做 `try_recv`；
+   资源卡片不可见时线程暂停采样，维持空闲零帧。`GetIfTable2` 的缓冲区由
+   `FreeMibTable` 释放，进程快照句柄与 PDH 查询都用 RAII 关闭。
+5. 面板标题下没有分隔线，行内也不再有说明性小字；隐藏项后不留空行或空白条带。
+   设置页「组件弹窗 → 资源监视器」提供每行开关与上移 / 下移按钮，改动写回
+   `ResOrder`。
+
+虚拟网卡会与物理网卡一起计入网络速率：这里报的是整机收发活动，不是单网卡明细。
+
+## 五之十二、扩展组件（Host Link v1，Rust 版独有）
+
+| 键 | 默认 | 范围 | 含义 |
+|---|---|---|---|
+| `HostLink` | `1` | 0/1 | 把发现的 Host Link v1 应用加入启动台；关掉后保留清单缓存但不注入 |
+| `HostLinkAutoScan` | `1` | 0/1 | 每次打开启动台时重新发现清单；关掉后用上次扫描结果，设置页「立即重新扫描」仍可手动刷新 |
+
+设置页新增一级页「扩展」：两个开关、已发现应用列表（app.id / 名称 / exe / 健康状态）、
+「立即重新扫描」「健康检查」「打开」「添加到 Dock 栏」按钮，以及「已支持的扩展」
+目录（项目名可点击打开仓库）。目录只是展示，发现逻辑仍完全由清单驱动，不按目录过滤。
+「添加到 Dock 栏」会创建 path 为 `mc.host-link:<app.id>` 的普通条目，点击时由 provider
+按清单执行 `activate`；图标由 `glyph::Builtin::Extension` 程序化绘制（剪贴板）。
+按钮通过 `Command` 交给宿主执行；宿主只调用清单 `commands.*`，不解析显示名、
+不连私有管道。
+`CONFIG_VERSION` 升到 5（新增两个键）。
+
+## 五之十三、插件包（Rust 版独有）
+
+插件是包含 `plugin.json`（schema `mc.dock-plugin/v1`）的目录，可放在
+`%APPDATA%
+ooksill\plugins\*` 或 Dock  exe 同目录的 `plugins\*`。
+清单只声明数字设置键与强调色，不加载任何代码、DLL 或脚本。
+
+| 键 | 默认 | 含义 |
+|---|---|---|
+| `plugins\Enabled` | *（空）* | 启用的插件 id，逗号分隔；顺序不参与应用，按插件名排序叠加 |
+| `plugins\Base` | *（空）* | 插件首次覆盖某键前的用户值（`Key=Value,...`）；禁用插件时据此恢复 |
+
+开发文档与完整示例见 `docs/plugin/Plugin-Development.md` 与
+`docs/plugin/example/plugin.json`。禁用插件时按 `Base` 恢复启用前的值；
+插件启用期间用户手改的值会在下次应用时被插件覆盖，这是插件管理的预期语义。
+`CONFIG_VERSION` 升到 7（新增插件启用段与基线）。
+
 ## 六、兼容性约束（改格式前必读）
 
 - 键名、段名、字段顺序、编号规则**都是对外契约**。
@@ -626,7 +696,7 @@ wrapping 运算。CPU 与 GPU 的**最终图像**
 - 新增键必须同时：① 加到 `Key::ALL` 或 `NUMERIC_KEYS` 表；
   ② 在 `Key::section()` 里给出所属段；③ 给默认值与夹紧范围；
   ④ 在本文档登记。老版本读到未知键会原样保留（`Ini` 不做裁剪）。
-- 独立的字符串键（`Adapter` / `Order` / `Language`）**不进 `Key` 表**：上面四条只约束数字键。字符串键要在 `Config` 加字段、`config/apply.rs` 给默认值与清洗（并挂进 `clamp()`）、`config/ini_io.rs` 手写读写，再在本文档登记。
+- 独立的字符串键（`Adapter` / `Order` / `ResOrder` / `Language`）**不进 `Key` 表**：上面四条只约束数字键。字符串键要在 `Config` 加字段、`config/apply.rs` 给默认值与清洗（并挂进 `clamp()`）、`config/ini_io.rs` 手写读写，再在本文档登记。
 - **保存只写新格式**，并把版本号写成 `[meta] version=<CONFIG_VERSION>`。
   上游格式的段在升级时被删除 —— 保留会让文件里出现两套等价的键。
 - 删除或改名键会让老配置永久丢失该设置，必须同时改 `legacy_name()`

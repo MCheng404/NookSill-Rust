@@ -25,8 +25,7 @@ use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWLP_USERDATA, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
-    SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    GWLP_USERDATA, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED,
     WS_EX_TOPMOST, WS_POPUP,
 };
@@ -132,7 +131,9 @@ impl NoteWindow {
         }
         .map_err(|_| GpuError::Win32("CreateWindowExW (notes panel)"))?;
 
+        let lease = crate::widgets::framework::WindowLease::new(hwnd);
         let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let hwnd = lease.defuse();
         let mut win = Box::pin(Self {
             hwnd,
             renderer,
@@ -187,7 +188,9 @@ impl NoteWindow {
         let ph = (H * self.ppp).round() as i32;
         let (al, at, ar, ab) = anchor;
         let card = (al as f32, at as f32, ar as f32, ab as f32);
-        let (x, y) = crate::widgets::framework::place_panel(
+        let (x, y) = crate::widgets::framework::show_panel_active(
+            &mut self.renderer,
+            self.hwnd,
             crate::widgets::framework::PanelKind::Notes,
             (pw, ph),
             Some(card),
@@ -195,21 +198,6 @@ impl NoteWindow {
             self.ppp,
         );
         self.pos = (x, y);
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                Some(HWND_TOPMOST),
-                x,
-                y,
-                pw,
-                ph,
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            );
-        }
-        crate::widgets::framework::apply_backdrop(&mut self.renderer, self.hwnd, self.ppp);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOW);
-        }
         self.visible = true;
         self.next_repaint = Some(Instant::now());
     }
@@ -247,10 +235,7 @@ impl NoteWindow {
         }
         self.visible = false;
         self.hover = None;
-        crate::widgets::framework::release_backdrop(&mut self.renderer, self.hwnd);
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
+        crate::widgets::framework::hide_panel(&mut self.renderer, self.hwnd);
     }
 
     /// Takes the pending action.
@@ -365,12 +350,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 impl Drop for NoteWindow {
     fn drop(&mut self) {
-        unsafe {
-            // Unlink before destroying: `DestroyWindow` sends messages that
-            // reach the procedure, which must not see a half-dropped window.
-            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
-            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
-        }
+        crate::widgets::framework::destroy_panel(&mut self.renderer, self.hwnd);
     }
 }
 

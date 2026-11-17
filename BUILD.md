@@ -135,13 +135,16 @@ dist/NookSill-1.1.0-66-fe678af-win64-debug.exe.sha256
 首次 `cargo build` 要编译 wgpu（naga、wgpu-hal、DX12 后端），**冷启动 3–6 分钟**属正常；
 之后增量在 10–30 秒。release 首次更久（fat LTO）。
 
-## 五、内存基线（2026-10-27 · AMD Radeon 610M + NVIDIA RTX 5070 Laptop · 2560×1600@150%）
+## 五、内存：历史实测基线与可执行 NFR（实测 2026-10-27 / 2026-11-17 · AMD Radeon 610M + NVIDIA RTX 5070 Laptop · 2560×1600@150%）
 
 体积：`nooksill-spike.exe` release **7.2 MB**（`opt-level=z` + fat LTO + strip），
 debug 43 MB（符号占绝大部分）。
 
 内存：`probe.exe` 只建设备、不建窗口、不跑 egui，由进程内 `mem.rs` 自采样
-（`PROCESS_MEMORY_COUNTERS_EX`，与界面上的 RSS 同一口径）。
+（`PROCESS_MEMORY_COUNTERS_EX` 三口径：WorkingSetSize / PeakWorkingSetSize /
+PrivateUsage）。早期文档写「与界面 RSS 同一口径」已失真：当前性能页「当前占用」
+只显示帧耗时 / fps / Present（`settings_win/render.rs`），资源监视器报的是系统级
+内存（`platform::sysinfo`）。完整 dock 进程的常驻测量改用 `scripts/mem-guard.sh`。
 `PROBE_ALLOC=1` 时再分配与真实应用等量的三块：1320×1080 渲染目标（8.4 MB）
 + 同尺寸回读（5.4 MB）+ 同尺寸 DIB（5.4 MB）。
 
@@ -235,6 +238,47 @@ OpenGL 路径多 ~110 MB），以及一个独立项目把 wgpu-DX12 的空设备
 复现：`scripts/probe-mem.sh`（`PROBE_HOLD=20` 更稳）。单点：
 `PROBE_BACKEND=d3d11 PROBE_ADAPTER=NVIDIA PROBE_ALLOC=1`。探针源码
 `crates/nooksill-gpu/src/bin/probe.rs`，采样逻辑 `src/mem.rs`。
+
+### NFR：弃用绝对上限，改为三条可执行口径（ADR-105）
+
+上表的 111 / 102 MB 是**某台基准盒某时刻的实测值，不是产品承诺**。驱动、
+适配器（核显/独显）、分辨率与 DPI 都让它漂移；"工作集 < 100 MB"这类绝对
+目标既不可达，也无法区分回归与 ±15 MB 驱动抖动。NFR 改为三条：
+
+1. **无会话增长**：4 小时 soak 预热后稳态 WS 线性回归斜率 ≤ 5 MB/h 且
+   R² ≤ 0.5，峰值增幅 ≤ 30 MB。命令
+   `MODE=soak DURATION=14400 ./scripts/mem-guard.sh`，也可由
+   `.github/workflows/mem-soak.yml` 在**带交互桌面的 self-hosted runner** 上手动跑
+   （GitHub 托管 runner 无桌面会话，分层窗口路径无意义），CSV 上传 artifact。
+2. **增量记账**：每个新增常驻资源的 feat 在 CHANGELOG 验证栏记
+   「WS +X.X MB（同基准盒、同场景、预热后稳态中位数）」，
+   用 `scripts/measure-feat.sh` 生成。噪声内写实测值，不写"零增长"。
+3. **软上限回归捕捉**：`MODE=quick DURATION=300`（5 分钟）以基线稳态
+   中位数 + 20 MB 为软上限。它是回归探针，不声称证明无泄漏——5 分钟尺度
+   上 ±15 MB 抖动会淹没慢泄漏，真正的泄漏判定只由第 1 条给出。
+
+**当前基线（2026-11-17，AMD 610M，release，dock 空闲 75 s，预热 45 s）**：
+完整进程 WS **150 MB** / private **278 MB** / peak **157 MB**，斜率 −1.66 MB/h。
+同一台机器 device 级探针只有 80 MB——差额是 7 套 FrameRenderer 的离屏纹理、
+DIB、egui Context / atlas 与 worker 栈，这部分才是业务侧可优化的空间。
+
+阈值依据：驱动抖动 ±15 MB；4 小时允许总增长不超过一个抖动带（≈3.75 MB/h），
+取 5 留一倍余量；R² 门槛排除随机游走。RDP / 虚拟机上 GPU 路径可能落到 WARP，
+绝对值不可比——判定一律用趋势与相对差，不做跨机绝对比较。
+
+**配置 A/B（ADR-107，`scripts/mem-ab.sh`，release，隔离 portable 目录，
+预热后 WS 中位数）**：
+
+| 变体 | WS | 相对默认 |
+|---|---|---|
+| 默认 | 158.8 MB | — |
+| `PreloadPanels=0` | 126.8 MB | −32.0 |
+| `Smoke=0` | 133.5 MB | −25.3 |
+| `BgMode=0` | 139.2 MB | −19.6 |
+| 三者全关 | 119.8 MB | −39.0 |
+
+预加载与磨砂重叠：关预加载后再关磨砂只多省 3.3 MB。烟雾的 25 MB 是运行时
+场缓冲与纹理，不是 pipeline——跳过烟雾 GPU pipeline 后 WS 仅降 0.3 MB。
 
 ## 六、排错
 

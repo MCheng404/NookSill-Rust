@@ -83,6 +83,16 @@ pub(super) fn tick_settings(
     let Some(sw) = slot.as_mut() else {
         return Ok((false, None));
     };
+    nooksill_platform::hostlink::set_enabled(
+        dock.cfg
+            .get_i32(nooksill_core::config::Key::HOST_LINK_ENABLED)
+            != 0,
+    );
+    nooksill_platform::hostlink::set_autoscan(
+        dock.cfg
+            .get_i32(nooksill_core::config::Key::HOST_LINK_AUTOSCAN)
+            != 0,
+    );
     // Adapter hint: the device is created once at startup, so editing the ini
     // at runtime never switches cards. Sync both fields each round and nudge a
     // frame on change so the hint is painted.
@@ -112,6 +122,29 @@ pub(super) fn tick_settings(
         // Push the item list in: the settings UI holds a snapshot while the
         // source of truth stays `raw` here. Without this the items page is empty.
         sw.state.items = items.to_vec();
+        sw.state.extensions = nooksill_platform::hostlink::snapshot()
+            .into_iter()
+            .map(|info| nooksill_settings::ExtensionRow {
+                id: info.id,
+                name: info.name,
+                exe: info.exe,
+                ready: info.ready,
+                detail: info.detail,
+            })
+            .collect();
+        sw.state.plugins = nooksill_platform::plugin::snapshot(&dock.cfg.plugin_enabled)
+            .into_iter()
+            .map(|info| nooksill_settings::PluginRow {
+                id: info.id,
+                name: info.name,
+                version: info.version,
+                author: info.author,
+                homepage: info.homepage,
+                description: info.description,
+                conflicts: info.conflicts,
+                enabled: info.enabled,
+            })
+            .collect();
         // `cfg` is the very object the dock uses; editing it here edits the dock
         // with no IPC, no copy and no save-and-restart.
         sw.render(gpu, &mut dock.cfg)?;

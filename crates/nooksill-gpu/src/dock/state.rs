@@ -204,11 +204,9 @@ impl Dock {
         }
     }
 
-    /// Refresh the system sample.
-    ///
-    /// Not per frame: the OS calls are expensive and CPU load needs a 1 s window.
-    pub fn refresh_sysinfo(&mut self) {
-        self.sysinfo = nooksill_platform::sysinfo::sample(&mut self.cpu_sampler);
+    /// Store a snapshot produced by the sampler thread.
+    pub fn set_sysinfo(&mut self, info: nooksill_platform::SysInfo) {
+        self.sysinfo = info;
     }
 
     /// Last sample.

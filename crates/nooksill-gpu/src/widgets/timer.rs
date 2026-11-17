@@ -21,9 +21,8 @@ use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW,
-    ShowWindow, GWLP_USERDATA, SW_HIDE, SW_SHOW, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST,
-    WS_POPUP,
+    GWLP_USERDATA, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    WM_SETCURSOR, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::frame::FrameRenderer;
@@ -46,8 +45,16 @@ const PANEL_H_BASE: f32 = 330.0;
 const TODO_ROW_H: f32 = 25.0;
 
 /// Panel height: base plus one row per todo, capped at 640 to stay on screen.
-fn panel_h(todos: usize) -> f32 {
-    (PANEL_H_BASE + todos as f32 * TODO_ROW_H).min(640.0)
+///
+/// The stopwatch hides the two plus/minus one minute buttons, so it is one
+/// button row shorter; the caller re-fits the window when the mode changes.
+fn panel_h(todos: usize, mode: ToolMode) -> f32 {
+    let missing_rows = if mode == ToolMode::Countdown {
+        0.0
+    } else {
+        1.0
+    };
+    (PANEL_H_BASE - missing_rows * 42.0 + todos as f32 * TODO_ROW_H).min(640.0)
 }
 
 /// Repaint interval while running.
@@ -178,7 +185,12 @@ pub struct ToolWindow {
     typing: bool,
     /// IME state (todo text may be Chinese).
     ime: Ime,
+    /// When the countdown last reached zero; the badge shows for a few seconds.
+    alarm: Option<Instant>,
 }
+
+/// How long "Time's up" stays on screen after the countdown ends.
+const ALARM_HOLD: Duration = Duration::from_secs(3);
 
 impl std::fmt::Debug for ToolWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -197,3 +209,21 @@ mod win;
 mod window;
 
 pub use self::win::{now_ms, summary};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stopwatch_is_one_button_row_shorter() {
+        let countdown = panel_h(0, ToolMode::Countdown);
+        let stopwatch = panel_h(0, ToolMode::Stopwatch);
+        assert!((countdown - stopwatch - 42.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn height_grows_per_todo_and_stops_at_the_cap() {
+        assert!(panel_h(3, ToolMode::Countdown) > panel_h(1, ToolMode::Countdown));
+        assert_eq!(panel_h(100, ToolMode::Countdown), 640.0);
+    }
+}

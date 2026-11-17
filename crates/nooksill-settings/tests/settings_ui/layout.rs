@@ -2,7 +2,7 @@
 //! control alignment.
 
 use egui_kittest::kittest::Queryable;
-use nooksill_settings::{Command, NavGroup, Page};
+use nooksill_settings::{Command, NavGroup, NavItem, Page};
 
 use super::common::{harness, new_harness};
 
@@ -192,8 +192,51 @@ fn 二级导航的返回按钮回到一级() {
         .click();
     h.run();
     assert!(h.state().ui.sub.is_none(), "返回后应是一级导航");
-    assert_eq!(h.state().ui.page, Page::General, "回到进入前的一级页");
-    h.get_by_role_and_label(egui::Role::Tab, "常规");
+    assert_eq!(
+        h.state().ui.primary,
+        NavItem::Group(NavGroup::Look),
+        "返回后一级高亮应留在进入的组，而不是常规"
+    );
+    assert_eq!(h.state().ui.page, Page::Effect, "内容保持在当前标签");
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感");
+}
+
+/// Back-navigation highlights the group that was open, for every group.
+#[test]
+fn 从任意组返回都高亮该组() {
+    for group in NavGroup::ALL {
+        let mut h = new_harness();
+        h.get_by_role_and_label(egui::Role::Tab, group.label())
+            .click();
+        h.run();
+        assert_eq!(h.state().ui.sub, Some(group));
+
+        h.get_by_role_and_label(egui::Role::Button, "< 返回")
+            .click();
+        h.run();
+        assert!(h.state().ui.sub.is_none());
+        assert_eq!(
+            h.state().ui.primary,
+            NavItem::Group(group),
+            "{group:?} 返回后高亮应留在自身"
+        );
+        assert!(
+            h.state().ui.primary.owns(h.state().ui.page),
+            "高亮项必须拥有当前内容页"
+        );
+    }
+}
+
+/// A soft-light field on the surfaces must not remove or displace any row.
+#[test]
+fn 柔光场不影响导航点击() {
+    let mut h = new_harness();
+    h.state_mut().ui.glow = Some(nooksill_settings::glow::Field::ambient());
+    h.run();
+    h.get_by_role_and_label(egui::Role::Tab, "外观与质感")
+        .click();
+    h.run();
+    assert_eq!(h.state().ui.sub, Some(NavGroup::Look));
 }
 
 /// Switching tabs must start a slide, not jump: the pill's start and target
@@ -235,7 +278,11 @@ fn esc_返回上一级而不是关窗() {
     h.run();
 
     assert!(h.state().ui.sub.is_none(), "Esc 应返回一级");
-    assert_eq!(h.state().ui.page, Page::General, "回到进入前的页面");
+    assert_eq!(
+        h.state().ui.primary,
+        NavItem::Group(NavGroup::Look),
+        "Esc 返回后高亮应留在进入的组"
+    );
 }
 
 /// Every Dock tab renders without a panic, and the live preview stays above

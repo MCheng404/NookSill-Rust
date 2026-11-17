@@ -13,6 +13,18 @@ use std::f32::consts::PI;
 /// Feather width in logical points; tighter than epaint's default 1.0.
 const FEATHER: f32 = 0.75;
 
+/// Width of the curved glass rim in logical points.
+const RIM_WIDTH: f32 = 9.0;
+
+/// UV bend at the outside of the rim, in logical points.
+const RIM_BEND: f32 = 13.0;
+
+/// Dark-side gain of the curved rim.
+const RIM_DARK_GAIN: f32 = 0.32;
+
+/// Light comes from the top-left, matching the target project's glass shader.
+const LIGHT_DIR: [f32; 2] = [-0.6, -0.8];
+
 /// Boundary points of a rounded rect, four arcs starting at the top left.
 ///
 /// Screen y grows downward, so the first arc runs from `PI` to `1.5 * PI`.
@@ -106,6 +118,102 @@ pub(crate) fn fan(
     mesh
 }
 
+/// Vertex colour for the curved rim. The frosted texture is premultiplied, so
+/// vertex colour can darken the shadow side but cannot brighten past white.
+fn rim_shade(outward: [f32; 2]) -> Color32 {
+    let len = outward[0].hypot(outward[1]).max(1e-5);
+    let lam = (outward[0] / len) * LIGHT_DIR[0] + (outward[1] / len) * LIGHT_DIR[1];
+    if lam >= 0.0 {
+        return Color32::WHITE;
+    }
+    let v = (255.0 * (1.0 + RIM_DARK_GAIN * lam))
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(v, v, v)
+}
+
+fn bent_uv(p: Pos2, outward: [f32; 2], amount: f32, win: [f32; 2]) -> Pos2 {
+    Pos2::new(
+        ((p.x + outward[0] * amount) / win[0].max(1.0)).clamp(0.0, 1.0),
+        ((p.y + outward[1] * amount) / win[1].max(1.0)).clamp(0.0, 1.0),
+    )
+}
+
+/// Frost texture plus a curved, normal-driven rim.
+///
+/// The blur texture is already low-frequency; sampling it at a slightly
+/// outward-bent UV across three rings makes the border read as thick glass
+/// without a second GPU pass. The last ring stays transparent for AA.
+fn rim_mesh(rect: Rect, points: &[Pos2], tex: TextureId, win: [f32; 2]) -> Mesh {
+    let uv = |p: Pos2| bent_uv(p, [0.0, 0.0], 0.0, win);
+    let rim_width = RIM_WIDTH.min(rect.width() * 0.25).min(rect.height() * 0.25);
+    if rim_width <= 0.5 {
+        let mut mesh = fan(rect, points, |p| (uv(p), Color32::WHITE));
+        mesh.texture_id = tex;
+        return mesh;
+    }
+
+    let mid = rect.center();
+    let mut mesh = Mesh::default();
+    mesh.vertices.push(Vertex {
+        pos: mid,
+        uv: uv(mid),
+        color: Color32::WHITE,
+    });
+
+    for &p in points {
+        let to_mid = Pos2::new(mid.x - p.x, mid.y - p.y);
+        let len = to_mid.x.hypot(to_mid.y).max(1e-3);
+        let inward = [to_mid.x / len, to_mid.y / len];
+        let outward = [-inward[0], -inward[1]];
+        let inset = |dist: f32| Pos2::new(p.x + inward[0] * dist, p.y + inward[1] * dist);
+        let color = rim_shade(outward);
+
+        mesh.vertices.push(Vertex {
+            pos: inset(FEATHER + rim_width),
+            uv: uv(p),
+            color: Color32::WHITE,
+        });
+        mesh.vertices.push(Vertex {
+            pos: inset(FEATHER + rim_width * 0.5),
+            uv: bent_uv(p, outward, RIM_BEND * 0.5, win),
+            color,
+        });
+        mesh.vertices.push(Vertex {
+            pos: inset(FEATHER),
+            uv: bent_uv(p, outward, RIM_BEND, win),
+            color,
+        });
+        mesh.vertices.push(Vertex {
+            pos: p,
+            uv: uv(p),
+            color: Color32::TRANSPARENT,
+        });
+    }
+
+    let n = points.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let a = 1 + 4 * i;
+        let b = 1 + 4 * j;
+        mesh.indices.extend_from_slice(&[0, a as u32, b as u32]);
+        for ring in 0..3 {
+            let ai = a + ring;
+            let bi = b + ring;
+            mesh.indices.extend_from_slice(&[
+                ai as u32,
+                (ai + 1) as u32,
+                (bi + 1) as u32,
+                ai as u32,
+                (bi + 1) as u32,
+                bi as u32,
+            ]);
+        }
+    }
+    mesh.texture_id = tex;
+    mesh
+}
+
 /// A texture drawn as a rounded rect. `win` is the window size in logical
 /// points, so the UV of a point is its window fraction: every piece samples
 /// the slice of the texture that sits behind itself.
@@ -125,9 +233,7 @@ pub fn image(rect: Rect, radius: f32, tex: TextureId, win: [f32; 2]) -> Shape {
         return Shape::image(tex, rect, quad, Color32::WHITE);
     }
     let points = outline(rect, r);
-    let mut mesh = fan(rect, &points, |p| (uv(p), Color32::WHITE));
-    mesh.texture_id = tex;
-    Shape::mesh(mesh)
+    Shape::mesh(rim_mesh(rect, &points, tex, [win_w, win_h]))
 }
 
 #[cfg(test)]
@@ -150,15 +256,40 @@ mod tests {
             panic!("expected a mesh");
         };
         assert_eq!(mesh.texture_id, tex);
-        assert_eq!(mesh.vertices.len(), 1 + 2 * outline(rect, 18.0).len());
+        assert_eq!(mesh.vertices.len(), 1 + 4 * outline(rect, 18.0).len());
         assert!(mesh.vertices.iter().all(|v| rect.contains(v.pos)));
+    }
+
+    #[test]
+    fn curved_rim_shade_is_directional() {
+        let lit = rim_shade(LIGHT_DIR);
+        let dark = rim_shade([-LIGHT_DIR[0], -LIGHT_DIR[1]]);
+        assert_eq!(lit, Color32::WHITE, "lit normals keep the frosted texture");
+        assert!(dark.r() < 255, "shadow normals darken the texture");
+    }
+
+    #[test]
+    fn curved_rim_bends_uv_outward() {
+        let win = [200.0, 120.0];
+        // Keep the probe inside the texture: at y=0 the clamp pins both UVs
+        // to the same border value and hides the bend entirely.
+        let p = Pos2::new(100.0, 60.0);
+        let straight = bent_uv(p, [0.0, 0.0], 0.0, win);
+        let bent = bent_uv(p, [0.0, -1.0], RIM_BEND, win);
+        assert!((straight.x - 0.5).abs() < 1e-6);
+        assert!(
+            bent.y < straight.y,
+            "top edge must sample above the outline"
+        );
     }
 
     /// End to end: the sheet is clipped by geometry, so the four corners of the
     /// rendered window must be fully transparent while the centre stays filled.
     #[test]
-    #[ignore = "requires a GPU and a desktop session; run with --ignored"]
     fn rounded_sheet_renders_transparent_corners() {
+        if !crate::test_env::desktop() {
+            return;
+        }
         use crate::frame::FrameRenderer;
         use crate::gpu::Gpu;
 

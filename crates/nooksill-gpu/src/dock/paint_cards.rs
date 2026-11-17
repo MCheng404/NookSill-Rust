@@ -2,6 +2,44 @@
 
 use super::*;
 
+/// Resolved bar colours: custom solid wins, then accent wash, then theme.
+///
+/// A custom colour repeats one RGB so callers can draw a single flat fill;
+/// the old gradient keys are deliberately not read when it is active.
+pub(super) fn bar_colors_of(
+    cfg: &nooksill_core::config::Config,
+    dark: bool,
+) -> ((f32, f32, f32), (f32, f32, f32)) {
+    if !cfg.accent_tone && cfg.bg_color1 >= 0 {
+        let rgb = to_rgb(color::from_colorref(cfg.bg_color1 as u32));
+        return (rgb, rgb);
+    }
+    if let Some(a) = cfg.runtime_accent {
+        let t = [a[0] as f32, a[1] as f32, a[2] as f32];
+        let mix = |base: [f32; 3], k: f32| {
+            [
+                base[0] * (1.0 - k) + t[0] * k,
+                base[1] * (1.0 - k) + t[1] * k,
+                base[2] * (1.0 - k) + t[2] * k,
+            ]
+        };
+        return if dark {
+            let c1 = mix([58.0, 60.0, 68.0], 0.30);
+            let c2 = mix([30.0, 31.0, 36.0], 0.22);
+            ((c1[0], c1[1], c1[2]), (c2[0], c2[1], c2[2]))
+        } else {
+            let c1 = mix([255.0, 255.0, 255.0], 0.16);
+            let c2 = mix([232.0, 235.0, 243.0], 0.28);
+            ((c1[0], c1[1], c1[2]), (c2[0], c2[1], c2[2]))
+        };
+    }
+    if dark {
+        ((58.0, 60.0, 68.0), (30.0, 31.0, 36.0))
+    } else {
+        ((255.0, 255.0, 255.0), (232.0, 235.0, 243.0))
+    }
+}
+
 impl Dock {
     /// Clock card: bar, time and date, sized by `clock_w`.
     ///
@@ -394,57 +432,67 @@ impl Dock {
             painter.add(rounded_frost(rect, rad, frost));
         }
         let (c1, c2) = self.bar_colors(dark);
-        // Each stop has its own alpha; `BgColor3 < 0` disables the mid stop.
-        let alpha = |key: Key| -> u8 {
-            let pct = self.cfg.get_i32(key).clamp(0, 100) as f32 / 100.0;
-            (op * 255.0 * pct).round() as u8
-        };
-        let from = Color32::from_rgba_unmultiplied(
-            c1.0 as u8,
-            c1.1 as u8,
-            c1.2 as u8,
-            alpha(Key::GRAD_A1),
-        );
-        let to = Color32::from_rgba_unmultiplied(
-            c2.0 as u8,
-            c2.1 as u8,
-            c2.2 as u8,
-            alpha(Key::GRAD_A2),
-        );
-        let mid_rgb = self.cfg.get_i32(Key::BG_COLOR3);
-        let mid = (mid_rgb >= 0).then(|| {
-            let v = mid_rgb as u32;
-            Color32::from_rgba_unmultiplied(
-                (v >> 16) as u8,
-                ((v >> 8) & 0xff) as u8,
-                (v & 0xff) as u8,
-                alpha(Key::GRAD_A3),
-            )
-        });
-        // Angle defaults to 90; vertical docks keep the old per-edge direction.
-        let raw_angle = self.cfg.get_i32(Key::GRAD_ANGLE);
-        let angle_deg = if raw_angle == 90 {
-            if self.cfg.edge.is_horizontal() {
-                0.0
+        // A deliberate custom colour is flat: none of the old gradient keys
+        // (BgColor2/3, GradAngle, GradA1/2/3) take part in this path.
+        if !self.cfg.accent_tone && self.cfg.bg_color1 >= 0 {
+            let fill = Color32::from_rgba_unmultiplied(
+                c1.0 as u8,
+                c1.1 as u8,
+                c1.2 as u8,
+                (op * 255.0).round() as u8,
+            );
+            painter.rect_filled(rect, CornerRadius::same(r8(rad)), fill);
+        } else {
+            // Each stop has its own alpha; `BgColor3 < 0` disables the mid stop.
+            let alpha = |key: Key| -> u8 {
+                let pct = self.cfg.get_i32(key).clamp(0, 100) as f32 / 100.0;
+                (op * 255.0 * pct).round() as u8
+            };
+            let from = Color32::from_rgba_unmultiplied(
+                c1.0 as u8,
+                c1.1 as u8,
+                c1.2 as u8,
+                alpha(Key::GRAD_A1),
+            );
+            let to = Color32::from_rgba_unmultiplied(
+                c2.0 as u8,
+                c2.1 as u8,
+                c2.2 as u8,
+                alpha(Key::GRAD_A2),
+            );
+            let mid_rgb = self.cfg.get_i32(Key::BG_COLOR3);
+            let mid = (mid_rgb >= 0).then(|| {
+                let v = mid_rgb as u32;
+                Color32::from_rgba_unmultiplied(
+                    (v >> 16) as u8,
+                    ((v >> 8) & 0xff) as u8,
+                    (v & 0xff) as u8,
+                    alpha(Key::GRAD_A3),
+                )
+            });
+            // Angle defaults to 90; vertical docks keep the old per-edge direction.
+            let raw_angle = self.cfg.get_i32(Key::GRAD_ANGLE);
+            let angle_deg = if raw_angle == 90 {
+                if self.cfg.edge.is_horizontal() {
+                    0.0
+                } else {
+                    90.0
+                }
             } else {
-                90.0
+                raw_angle.rem_euclid(360) as f32
+            };
+            let grad = BarGradient {
+                from,
+                mid,
+                to,
+                angle_deg,
+            };
+            // `BgMode::Solid` draws one colour; gradient and frost share this path.
+            if self.cfg.get_i32(Key::BgMode) == 0 {
+                painter.rect_filled(rect, CornerRadius::same(r8(rad)), from);
+            } else {
+                painter.add(rounded_gradient(rect, rad, grad));
             }
-        } else {
-            raw_angle.rem_euclid(360) as f32
-        };
-        let grad = BarGradient {
-            from,
-            mid,
-            to,
-            angle_deg,
-        };
-        // `BgMode::Solid` draws one colour; gradient and frost share this path,
-        // and the frost layer above is what makes the two visibly different.
-        if self.cfg.get_i32(Key::BgMode) == 0 {
-            painter.rect_filled(rect, CornerRadius::same(r8(rad)), from);
-        } else {
-            // `gradient_rect` has only 4 vertices, so the fill would be square.
-            painter.add(rounded_gradient(rect, rad, grad));
         }
         if self.cfg.border {
             let base = if dark { 90.0 } else { 150.0 };
@@ -461,44 +509,9 @@ impl Dock {
         }
     }
 
-    /// Two bar colours: synced accent, then custom background, then default.
-    ///
-    /// The accent is mixed into the base rather than used directly.
+    /// Two bar colours: custom solid, synced accent, then theme default.
     pub(super) fn bar_colors(&self, dark: bool) -> ((f32, f32, f32), (f32, f32, f32)) {
-        if let Some(a) = self.cfg.runtime_accent {
-            let t = [a[0] as f32, a[1] as f32, a[2] as f32];
-            let mix = |base: [f32; 3], k: f32| {
-                [
-                    base[0] * (1.0 - k) + t[0] * k,
-                    base[1] * (1.0 - k) + t[1] * k,
-                    base[2] * (1.0 - k) + t[2] * k,
-                ]
-            };
-            return if dark {
-                let c1 = mix([58.0, 60.0, 68.0], 0.30);
-                let c2 = mix([30.0, 31.0, 36.0], 0.22);
-                ((c1[0], c1[1], c1[2]), (c2[0], c2[1], c2[2]))
-            } else {
-                let c1 = mix([255.0, 255.0, 255.0], 0.16);
-                let c2 = mix([232.0, 235.0, 243.0], 0.28);
-                ((c1[0], c1[1], c1[2]), (c2[0], c2[1], c2[2]))
-            };
-        }
-        if !self.cfg.accent_tone && self.cfg.bg_color1 >= 0 {
-            let c1 = color::from_colorref(self.cfg.bg_color1 as u32);
-            let c2 = if self.cfg.bg_color2 >= 0 {
-                color::from_colorref(self.cfg.bg_color2 as u32)
-            } else {
-                // No end colour: darken the start by 25% to keep a gradient.
-                color::mix(c1, color::rgb(0, 0, 0), 0.25)
-            };
-            return (to_rgb(c1), to_rgb(c2));
-        }
-        if dark {
-            ((58.0, 60.0, 68.0), (30.0, 31.0, 36.0))
-        } else {
-            ((255.0, 255.0, 255.0), (232.0, 235.0, 243.0))
-        }
+        bar_colors_of(&self.cfg, dark)
     }
 
     /// Hover bubble: width is text + 24, height 28, radius 9.

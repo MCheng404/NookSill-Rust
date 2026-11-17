@@ -28,9 +28,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetWindowLongPtrW, RegisterClassW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWLP_USERDATA, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNA,
-    WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GWLP_USERDATA, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT,
+    WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::frame::FrameRenderer;
@@ -44,10 +43,21 @@ const PM: f32 = 8.0;
 const TILE_H: f32 = 74.0;
 const TILE_GAP: f32 = 10.0;
 const SLIDER_H: f32 = 28.0;
+/// Speaker-icon hit width at the slider's left end (mute toggle).
+const VOLUME_ICON_W: f32 = 28.0;
 
-/// Panel height: title, tiles, slider and battery caption.
+/// Panel height: title, tiles, both sliders and the battery caption.
+///
+/// The brightness row is always present: on panels without DDC/CI it renders
+/// greyed out instead of disappearing.
 fn panel_h(tiles: usize) -> f32 {
-    PM * 2.0 + 40.0 + control::rows(tiles) as f32 * (TILE_H + TILE_GAP) + 30.0 + 30.0
+    PM * 2.0
+        + 40.0
+        + control::rows(tiles) as f32 * (TILE_H + TILE_GAP)
+        + 30.0
+        + 30.0
+        + SLIDER_H
+        + 8.0
 }
 
 /// Top-left corner and width of the tile area.
@@ -59,11 +69,21 @@ fn tile_w() -> f32 {
     (PANEL_W - 2.0 * PM - 24.0 - (control::COLS as f32 - 1.0) * TILE_GAP) / control::COLS as f32
 }
 
+/// Live system state behind the tiles; `None` means the probe failed.
+#[derive(Clone, Debug, Default)]
+pub struct Toggles {
+    pub wifi: Option<nooksill_platform::radio::WifiState>,
+    pub bt_on: Option<bool>,
+    pub location_on: Option<bool>,
+}
+
 /// Where a click landed.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Hit {
     Tile(usize),
     Slider,
+    /// Brightness slider, present only when DDC/CI works.
+    Bright,
 }
 
 /// Control centre panel.
@@ -87,12 +107,6 @@ pub struct CcWindow {
     /// Local volume cache, written to the system after the drag.
     volume: u32,
     mute: bool,
-    /// Energy saver on/off, re-read from the system at construction and on
-    /// every open.
-    energy: bool,
-    /// Remembers the pre-energy-saver plan and restores it on exit.
-    power: sysact::PowerSaver,
-
     hover: Option<Hit>,
     hits: Vec<EguiRect>,
     slider: EguiRect,
@@ -108,8 +122,26 @@ pub struct CcWindow {
     moved: bool,
     /// New tile order to hand to the main loop after a drag.
     pending_order: Option<Vec<Tile>>,
+    /// WiFi / Bluetooth / location state, refreshed on open and after a toggle.
+    toggles: Toggles,
+    /// DDC/CI brightness; `None` when the panel exposes no brightness control.
+    brightness: Option<nooksill_platform::brightness::Brightness>,
+    /// Cached 0..100 level, painted even while a hardware write is throttled.
+    bright_percent: u32,
+    bright_slider: EguiRect,
+    /// Brightness slider is being dragged.
+    dragging_bright: bool,
+    /// Last hardware write; DDC/CI writes are throttled to protect the
+    /// monitor controller.
+    bright_write: Instant,
+    /// Newest value not yet written because of the throttle.
+    pending_bright: Option<u32>,
     next_repaint: Instant,
 }
+
+/// Minimum gap between DDC/CI writes; an I2C transaction takes 10-50 ms and
+/// flooding the controller can freeze the monitor's OSD.
+const BRIGHT_THROTTLE: Duration = Duration::from_millis(50);
 
 impl std::fmt::Debug for CcWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -128,6 +160,46 @@ mod window;
 
 pub use self::win::is_cc_window;
 
+/// Logical panel size for the offscreen shots.
+#[must_use]
+pub fn logical_size(tiles: usize) -> (f32, f32) {
+    (PANEL_W, panel_h(tiles))
+}
+
+/// Paints the panel without a window or an audio device; used by
+/// `examples/panels_shot`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the paint entry point so the shot matches the window"
+)]
+pub fn paint_preview(
+    ui: &mut egui::Ui,
+    dark: bool,
+    frosted: bool,
+    tiles: &[Tile],
+    volume: u32,
+    mute: bool,
+    battery: Battery,
+    brightness: Option<u32>,
+    toggles: &Toggles,
+) {
+    paint::draw_panel(
+        ui,
+        dark,
+        frosted,
+        tiles,
+        volume,
+        mute,
+        true,
+        battery,
+        toggles,
+        brightness.unwrap_or(60),
+        brightness.is_some(),
+        None,
+        None,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +211,19 @@ mod tests {
         let three = panel_h(8);
         assert!(three > two);
         assert!((three - two - (TILE_H + TILE_GAP)).abs() < 0.01);
+    }
+
+    /// The brightness row is reserved even when DDC/CI is unavailable.
+    #[test]
+    fn brightness_row_is_always_reserved() {
+        let expected = PM * 2.0
+            + 40.0
+            + control::rows(6) as f32 * (TILE_H + TILE_GAP)
+            + 30.0
+            + 30.0
+            + SLIDER_H
+            + 8.0;
+        assert!((panel_h(6) - expected).abs() < 0.01);
     }
 
     /// Three tiles plus two gaps exactly fill the content width.

@@ -115,18 +115,6 @@ pub fn control_tile(painter: &Painter, rect: EguiRect, tile: Tile, style: IconSt
             c.polyline(&pts);
             c.dot(0.0, -0.12, 0.065);
         }
-        Tile::Mute => speaker(
-            painter,
-            rect,
-            IconStyle::new(
-                style.color,
-                style.accent,
-                IconState {
-                    muted: true,
-                    ..style.state
-                },
-            ),
-        ),
         Tile::Settings => {
             // Gear: outer ring, 8 round teeth and an axle hole. The teeth are
             // kept small so the icon does not read heavier than its peers.
@@ -136,23 +124,6 @@ pub fn control_tile(painter: &Painter, rect: EguiRect, tile: Tile, style: IconSt
             for i in 0..8 {
                 let a = i as f32 * std::f32::consts::TAU / 8.0 + spin;
                 c.circle_filled(0.32 * a.cos(), 0.32 * a.sin(), 0.042, style.color);
-            }
-        }
-        Tile::Energy => {
-            // Battery, bolt and a level bar; the three parts never overlap.
-            c.box_stroke(-0.32, -0.20, 0.58, 0.38);
-            c.circle_filled(0.30, -0.01, 0.045, style.color);
-            c.polyline(&[
-                (0.05, -0.14),
-                (-0.09, 0.00),
-                (0.01, 0.00),
-                (-0.03, 0.10),
-                (0.11, -0.05),
-                (0.02, -0.05),
-                (0.05, -0.14),
-            ]);
-            if level > 0.02 {
-                c.box_filled(-0.27, 0.11, 0.50 * level, 0.045, style.color);
             }
         }
         Tile::Hotspot => {
@@ -167,7 +138,18 @@ pub fn control_tile(painter: &Painter, rect: EguiRect, tile: Tile, style: IconSt
     }
 }
 
-/// Paints the speaker, shared by the volume slider and the mute tile.
+/// Sun icon for the brightness slider: a ring and eight rays.
+pub fn brightness(painter: &Painter, rect: EguiRect, style: IconStyle) {
+    let c = Canvas::from_rect(painter, rect, style);
+    c.circle_stroke(0.0, 0.0, 0.17);
+    for i in 0..8 {
+        let angle = i as f32 * std::f32::consts::TAU / 8.0;
+        let (sin, cos) = angle.sin_cos();
+        c.polyline(&[(0.29 * cos, 0.29 * sin), (0.42 * cos, 0.42 * sin)]);
+    }
+}
+
+/// Paints the speaker, used by the volume slider and its mute toggle.
 ///
 /// The body is one closed polyline with round joins; the waves light up
 /// segment by segment from `level`.

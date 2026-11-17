@@ -124,8 +124,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a desktop session; run with --ignored"]
     fn dwm_interval_is_plausible() {
+        if !crate::test_env::desktop() {
+            return;
+        }
         // SAFETY: no arguments.
         let hwnd = unsafe { GetDesktopWindow() };
         let ms = vsync_interval_ms(hwnd);

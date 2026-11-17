@@ -148,8 +148,10 @@ mod tests {
     ///
     /// The popups keep the sheet, so the switch has to be opt-out, not removed.
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn backdrop_sheet_is_opt_out() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = crate::gpu::Gpu::new("").expect("D3D12 adapter");
         let (w, h) = (64u32, 48u32);
         let image = egui::ColorImage::filled(

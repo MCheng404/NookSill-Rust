@@ -115,6 +115,19 @@ impl Battery {
     }
 }
 
+/// Play the system notification sound once.
+///
+/// Used by the countdown when it reaches zero; failure only means the user
+/// configured no sound scheme, which is not worth reporting.
+pub fn chime() {
+    // SAFETY: `MessageBeep` has no preconditions and no out-parameters.
+    unsafe {
+        let _ = windows::Win32::System::Diagnostics::Debug::MessageBeep(
+            windows::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

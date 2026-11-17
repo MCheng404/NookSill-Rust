@@ -20,6 +20,7 @@ pub mod item;
 pub mod launchpad;
 pub mod layout;
 pub mod note;
+pub mod resource;
 pub mod running;
 pub mod smoke;
 pub mod store;

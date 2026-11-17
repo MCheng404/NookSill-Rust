@@ -21,6 +21,10 @@ impl SettingsWindow {
         let pos = self.pos;
         let hwnd = self.hwnd;
         let frost = self.renderer.frost_on();
+        // The renderer owns the live capture field; copy it into UI state so
+        // the shell, sidebar and cards shade from the same backdrop.
+        let glow = self.renderer.glow_field();
+        self.state.glow = glow;
         let state = &mut self.state;
         let mut outcome = Outcome::default();
         let out = self.renderer.render(gpu, raw, hwnd, pos, |ui| {

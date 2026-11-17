@@ -2,7 +2,7 @@
 
 use egui_kittest::kittest::Queryable;
 use nooksill_core::config::Key;
-use nooksill_settings::{Command, Modal, ModalAction, Page, SettingsState};
+use nooksill_settings::{Command, Modal, ModalAction, NavItem, Page, SettingsState};
 
 use super::common::new_harness;
 
@@ -151,5 +151,5 @@ fn 默认状态字段不写进配置() {
     assert!(state.sub.is_none());
     assert!(state.modal.is_none());
     assert!(!state.update_prompted);
-    assert_eq!(state.return_page, Page::General);
+    assert_eq!(state.primary, NavItem::Page(Page::General));
 }

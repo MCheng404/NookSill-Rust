@@ -23,8 +23,24 @@ impl CcWindow {
             return;
         };
         match tile {
-            // These three have no stable public API; open the system panel.
-            Tile::Wifi | Tile::Bluetooth | Tile::Hotspot => {
+            // WiFi goes through the WLAN software radio; the hardware switch
+            // still wins when it is off.
+            Tile::Wifi => {
+                let on = self.toggles.wifi.as_ref().is_some_and(|w| w.on);
+                if nooksill_platform::radio::set_wifi(!on) {
+                    self.refresh_toggles();
+                }
+            }
+            // Bluetooth has no Win32 switch: the WinRT radio stack may ask
+            // for permission on the first toggle.
+            Tile::Bluetooth => {
+                let on = self.toggles.bt_on.unwrap_or(false);
+                if nooksill_platform::radio::set_bluetooth(!on) {
+                    self.refresh_toggles();
+                }
+            }
+            // Hotspot has no stable public API; open the system panel.
+            Tile::Hotspot => {
                 sysact::open_quick_settings();
                 self.hide();
             }
@@ -48,17 +64,59 @@ impl CcWindow {
                 sysact::open_uri("ms-settings:");
                 self.hide();
             }
-            Tile::Mute => {
-                self.mute = match &self.audio {
-                    Some(a) => a.toggle_mute(),
-                    None => !self.mute,
-                };
-                self.next_repaint = Instant::now();
-            }
-            Tile::Energy => {
-                self.energy = self.power.toggle();
-                self.next_repaint = Instant::now();
-            }
+        }
+    }
+
+    /// Toggles mute from the speaker icon.
+    pub(super) fn toggle_mute(&mut self) {
+        self.mute = match &self.audio {
+            Some(a) => a.toggle_mute(),
+            None => !self.mute,
+        };
+        self.next_repaint = Instant::now();
+    }
+
+    /// Re-reads the radio and location state after a toggle or on open.
+    pub(super) fn refresh_toggles(&mut self) {
+        self.toggles.wifi = nooksill_platform::radio::wifi_state();
+        self.toggles.bt_on = nooksill_platform::radio::bluetooth_state();
+        self.toggles.location_on = nooksill_platform::radio::location_state();
+        self.next_repaint = Instant::now();
+    }
+
+    /// Maps an x position inside the brightness strip to 0..100.
+    fn bright_at(&mut self, x: f32) {
+        let left = self.bright_slider.left() + 30.0;
+        let right = self.bright_slider.right() - 4.0;
+        if right <= left {
+            return;
+        }
+        let f = ((x - left) / (right - left)).clamp(0.0, 1.0);
+        self.set_brightness((f * 100.0).round() as u32);
+    }
+
+    /// Caches the new level and writes it unless the throttle holds it back.
+    fn set_brightness(&mut self, percent: u32) {
+        let percent = percent.min(100);
+        self.bright_percent = percent;
+        self.pending_bright = Some(percent);
+        self.next_repaint = Instant::now();
+        // A monitor may have been connected since the panel was opened; retry
+        // once on interaction instead of leaving the row permanently dead.
+        if self.brightness.is_none() {
+            self.brightness = nooksill_platform::brightness::Brightness::probe();
+        }
+        if self.bright_write.elapsed() >= BRIGHT_THROTTLE {
+            self.flush_brightness();
+        }
+    }
+
+    /// Writes the newest pending level; also called on release so the last
+    /// position is never lost to the throttle.
+    fn flush_brightness(&mut self) {
+        if let (Some(b), Some(percent)) = (self.brightness.as_mut(), self.pending_bright.take()) {
+            b.set(percent);
+            self.bright_write = Instant::now();
         }
     }
 
@@ -72,6 +130,10 @@ impl CcWindow {
             WM_MOUSEMOVE => {
                 let (x, y) = client_pos(lparam, self.ppp);
                 let p = egui::pos2(x, y);
+                if self.dragging_bright {
+                    self.bright_at(x);
+                    return None;
+                }
                 if self.dragging {
                     // Slider tracks the pointer by ratio; 7 px are reserved
                     // at each end for the round knob.
@@ -103,7 +165,9 @@ impl CcWindow {
                         }
                     }
                 }
-                let h = if self.slider.contains(p) {
+                let h = if self.bright_slider.contains(p) {
+                    Some(Hit::Bright)
+                } else if self.slider.contains(p) {
                     Some(Hit::Slider)
                 } else {
                     self.hits.iter().position(|r| r.contains(p)).map(Hit::Tile)
@@ -120,6 +184,25 @@ impl CcWindow {
             WM_LBUTTONDOWN => {
                 let (x, y) = client_pos(lparam, self.ppp);
                 let p = egui::pos2(x, y);
+                // Brightness is checked first: its strip sits below the
+                // volume strip and never overlaps it.
+                if self.bright_slider.contains(p) {
+                    self.dragging_bright = true;
+                    // Same capture rule as the volume drag: without it the
+                    // stream stops as soon as the cursor leaves the panel.
+                    unsafe {
+                        SetCapture(self.hwnd);
+                    }
+                    self.bright_at(x);
+                    self.flush_brightness();
+                    return Some(LRESULT(0));
+                }
+                // The speaker icon sits at the left end of the slider strip;
+                // clicking it mutes instead of starting a drag at ~0%.
+                if self.slider.contains(p) && x < self.slider.left() + VOLUME_ICON_W {
+                    self.toggle_mute();
+                    return Some(LRESULT(0));
+                }
                 if self.slider.contains(p) {
                     self.dragging = true;
                     // The drag takes the capture itself, otherwise moving the
@@ -146,6 +229,15 @@ impl CcWindow {
                 Some(LRESULT(0))
             }
             WM_LBUTTONUP => {
+                if self.dragging_bright {
+                    self.dragging_bright = false;
+                    // The throttle may still hold the last value.
+                    self.flush_brightness();
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                    return Some(LRESULT(0));
+                }
                 if self.dragging {
                     self.dragging = false;
                     unsafe {

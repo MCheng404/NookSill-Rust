@@ -37,7 +37,7 @@ pub(super) fn harness(shell: bool) -> Harness<'static, St> {
     let size = if shell {
         [900.0, 720.0]
     } else {
-        [900.0, 1200.0]
+        [900.0, 1600.0]
     };
     let builder = Harness::builder()
         .with_size(size)

@@ -199,8 +199,10 @@ mod tests {
     /// Checks that the GPU raster + post matches the CPU reference within one
     /// byte.
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_raster_matches_cpu_reference() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let mut shader = SmokeShader::new(&gpu.device, &gpu.queue);
         let noise = Noise::build_sized(32);

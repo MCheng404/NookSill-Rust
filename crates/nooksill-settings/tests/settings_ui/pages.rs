@@ -18,6 +18,40 @@ fn 点击开关会写入配置() {
 }
 
 #[test]
+fn 资源监视器行可勾选与排序() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extras;
+    h.run();
+    assert_eq!(
+        h.state().ui.page,
+        Page::Extras,
+        "page={:?}",
+        h.state().ui.page
+    );
+    assert_eq!(h.state().cfg.res_order, "", "默认走内置顺序，不写 ini");
+
+    h.get_by_role_and_label(egui::Role::Switch, "网络").click();
+    h.run();
+    let hidden = h.state().cfg.res_order.clone();
+    assert!(
+        !hidden.is_empty() && !hidden.split(',').any(|k| k == "net"),
+        "hidden={hidden:?}"
+    );
+
+    // The second up-arrow belongs to the GPU row and swaps it with CPU.
+    let ups: Vec<_> = h.query_all_by_label("↑").collect();
+    assert!(ups.len() >= 2, "可见行都应有上移按钮");
+    ups[1].click();
+    h.run();
+    let order = h.state().cfg.res_order.clone();
+    assert_eq!(
+        order.split(',').next(),
+        Some("gpu"),
+        "排序应写回配置: {order}"
+    );
+}
+
+#[test]
 fn 页面切换后能看到该页控件() {
     let mut h = new_harness();
     // Only the appearance page has this slider, so it proves the switch.
@@ -192,4 +226,78 @@ fn 托盘组件开关写回配置() {
     h.run();
 
     assert_eq!(h.state().cfg.get_i32(Key::TRAY_W), 0, "点击后应当隐藏");
+}
+
+#[test]
+fn 扩展页开关与命令写回() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extensions;
+    h.run();
+
+    assert_eq!(h.state().cfg.get_i32(Key::HOST_LINK_ENABLED), 1, "默认启用");
+    h.get_by_label("启用扩展").click();
+    h.run();
+    assert_eq!(
+        h.state().cfg.get_i32(Key::HOST_LINK_ENABLED),
+        0,
+        "点击后应关闭"
+    );
+
+    h.get_by_label("立即重新扫描").click();
+    h.run();
+    assert_eq!(h.state().commands.last(), Some(&Command::HostLinkRescan));
+}
+
+#[test]
+fn 已支持扩展显示项目链接() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extensions;
+    h.run();
+
+    h.get_by_label("ModularClipboard").click();
+    h.run();
+
+    assert_eq!(
+        h.state().commands.last(),
+        Some(&Command::OpenUrl(
+            "https://github.com/MCheng404/ModularClipboard"
+        ))
+    );
+}
+
+#[test]
+fn 扩展页可添加到工具栏() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extensions;
+    h.state_mut()
+        .ui
+        .extensions
+        .push(nooksill_settings::ExtensionRow {
+            id: "com.example.clip".to_owned(),
+            name: "Clipboard".to_owned(),
+            exe: r"C:\clip.exe".to_owned(),
+            ready: true,
+            detail: "ready".to_owned(),
+        });
+    h.run();
+
+    h.get_by_label("添加到 Dock 栏").click();
+    h.run();
+
+    assert!(matches!(
+        h.state().commands.last(),
+        Some(Command::HostLinkAddToDock { .. })
+    ));
+}
+
+#[test]
+fn 插件列表可重新扫描() {
+    let mut h = new_harness();
+    h.state_mut().ui.page = Page::Extensions;
+    h.run();
+
+    h.get_by_label("重新扫描插件").click();
+    h.run();
+
+    assert_eq!(h.state().commands.last(), Some(&Command::PluginRescan));
 }

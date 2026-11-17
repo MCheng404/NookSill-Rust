@@ -315,7 +315,8 @@ struct App {
     scanner: Scanner,
     /// When the system samples were last refreshed, for the resource monitor
     /// card.
-    last_sysinfo: std::time::Instant,
+    /// One background thread samples every resource the panel can show.
+    sampler: nooksill_gpu::SysSampler,
     /// Resource monitor detail panel; preloaded unless `PreloadPanels` is off.
     resmon_slot: Option<Pin<Box<ResMonWindow>>>,
     /// Timer and todo panel; preloaded unless `PreloadPanels` is off.

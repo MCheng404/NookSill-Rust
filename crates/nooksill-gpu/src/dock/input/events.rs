@@ -11,7 +11,6 @@ impl Dock {
             // the first scan. `set_pinned` fixes the split later.
             pinned: items.len(),
             widget_click: None,
-            cpu_sampler: nooksill_platform::CpuSampler::new(),
             sysinfo: nooksill_platform::SysInfo::default(),
             cfg,
             items,

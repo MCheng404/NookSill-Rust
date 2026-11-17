@@ -121,6 +121,8 @@ pub enum Builtin {
     Trash,
     /// Separator: a single vertical line.
     Separator,
+    /// `mc.host-link:<app id>` - clipboard, for published extension widgets.
+    Extension,
 }
 
 impl Builtin {
@@ -133,6 +135,13 @@ impl Builtin {
             Some(Self::Launchpad)
         } else if path.eq_ignore_ascii_case("nooksill:notes") {
             Some(Self::Notes)
+        } else if path
+            .get(..nooksill_platform::hostlink::PATH_PREFIX.len())
+            .is_some_and(|prefix| {
+                prefix.eq_ignore_ascii_case(nooksill_platform::hostlink::PATH_PREFIX)
+            })
+        {
+            Some(Self::Extension)
         } else {
             None
         }
@@ -160,10 +169,27 @@ mod canvas;
 mod controls;
 
 pub use self::builtin::{paint_kind, paint_monogram, paint_tile};
-pub use self::controls::{control_tile, sliders, speaker};
+pub use self::controls::{brightness, control_tile, sliders, speaker};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hostlink_paths_pick_the_extension_badge() {
+        assert_eq!(
+            super::Builtin::from_path("mc.host-link:com.example.clip"),
+            Some(super::Builtin::Extension)
+        );
+        assert_eq!(
+            super::Builtin::from_path("MC.HOST-LINK:com.example.clip"),
+            Some(super::Builtin::Extension)
+        );
+        assert_eq!(
+            super::Builtin::from_path("nooksill:start"),
+            Some(super::Builtin::Start)
+        );
+        assert_eq!(super::Builtin::from_path("C:pps	ool.exe"), None);
+    }
+
     use super::canvas::stroke_width;
     use super::*;
 

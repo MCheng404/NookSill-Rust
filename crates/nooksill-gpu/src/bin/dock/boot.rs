@@ -73,6 +73,9 @@ impl App {
             }
         }
         let mut cfg = Config::from_ini(&ini);
+        // Enabled plugin packs layer their contribution on top of saved values.
+        let enabled = cfg.plugin_enabled.clone();
+        nooksill_platform::plugin::apply_all(&mut cfg, &enabled);
         // The per-popup blur override is gone; keep a value the user tuned.
         let widget_blur = cfg.get_i32(Key::WIDGET_BLUR);
         if widget_blur > 0 {
@@ -93,6 +96,19 @@ impl App {
         nooksill_core::i18n::configure(&cfg.language, nooksill_platform::locale::ui_language_id());
         // Mutable: drag-reordering edits this list alongside the dock.
         let mut raw: Vec<Item> = store::load_items(&ini);
+        // Host Link widgets stored no target in older configs. Without the
+        // real exe path the running scanner cannot match them, so it adds a
+        // second icon for the live process. Fill it before the first scan.
+        nooksill_platform::hostlink::rescan();
+        for item in &mut raw {
+            if item.target.is_empty() {
+                if let Some(id) = nooksill_platform::hostlink::id_from_path(&item.path) {
+                    if let Some(link) = nooksill_platform::hostlink::link_by_id(id) {
+                        item.target = link.exe.to_string_lossy().into_owned();
+                    }
+                }
+            }
+        }
         // The notes switch appends a real item rather than a virtual one, so
         // `dock.items` and `raw` keep their index correspondence.
         if cfg.notes && !raw.iter().any(|i| i.kind == ItemKind::Note) {
@@ -227,7 +243,7 @@ impl App {
         let waker = Waker::new(hwnd);
         let icons = IconLoader::spawn(waker, Some(&gpu))?;
         let scanner = Scanner::spawn(hwnd.0 as isize, waker)?;
-        let last_sysinfo = std::time::Instant::now();
+        let sampler = nooksill_gpu::SysSampler::spawn(waker);
         let resmon_slot: Option<Pin<Box<ResMonWindow>>> = None;
         let tool_slot: Option<Pin<Box<ToolWindow>>> = None;
         let calendar_slot: Option<Pin<Box<CalendarWindow>>> = None;
@@ -277,7 +293,7 @@ impl App {
             settings_slot: None,
             icons,
             scanner,
-            last_sysinfo,
+            sampler,
             resmon_slot,
             tool_slot,
             calendar_slot,

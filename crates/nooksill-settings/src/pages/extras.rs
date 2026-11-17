@@ -199,4 +199,5 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     );
 
     super::panel_setup::page(ctx, ui);
+    super::resmon_setup::page(ctx, ui);
 }

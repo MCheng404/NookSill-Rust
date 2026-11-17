@@ -89,8 +89,10 @@ mod tests {
     use nooksill_core::icon::{apply_round_mask, BBox};
 
     #[test]
-    #[ignore = "requires a GPU; run with --ignored"]
     fn gpu_mask_matches_cpu_reference() {
+        if !crate::test_env::gpu() {
+            return;
+        }
         let gpu = Gpu::new("").expect("D3D12 adapter");
         let shader = IconShader::new(&gpu.device, &gpu.queue);
         let (w, h) = (48u32, 32u32);

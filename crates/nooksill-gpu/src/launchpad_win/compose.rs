@@ -11,7 +11,12 @@ impl LaunchpadWindow {
             match self.lp.top().get(idx).copied() {
                 Some(Top::App(i)) => {
                     let path = self.lp.apps()[i].path.clone();
-                    nooksill_platform::sysact::open_uri(&path);
+                    let id = nooksill_platform::hostlink::id_for_exe(std::path::Path::new(&path));
+                    if let Some(id) = id {
+                        crate::worker::hostlink::submit(&id, true, true);
+                    } else {
+                        nooksill_platform::sysact::open_uri(&path);
+                    }
                     self.close();
                 }
                 Some(Top::Folder(f)) => {
@@ -23,7 +28,12 @@ impl LaunchpadWindow {
         } else {
             if let Some(&ai) = self.shown().get(idx) {
                 let path = self.lp.apps()[ai].path.clone();
-                nooksill_platform::sysact::open_uri(&path);
+                let id = nooksill_platform::hostlink::id_for_exe(std::path::Path::new(&path));
+                if let Some(id) = id {
+                    crate::worker::hostlink::submit(&id, true, true);
+                } else {
+                    nooksill_platform::sysact::open_uri(&path);
+                }
                 self.close();
             }
         }

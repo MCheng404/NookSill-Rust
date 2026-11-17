@@ -121,14 +121,6 @@ impl<'a> Canvas<'a> {
         CornerRadius::same(pix(self.s * 0.10).max(2))
     }
 
-    pub(super) fn box_filled(&self, x: f32, y: f32, w: f32, h: f32, color: Color32) {
-        self.p.rect_filled(
-            EguiRect::from_min_size(self.pt(x, y), egui::vec2(w * self.s, h * self.s)),
-            self.radius(),
-            color,
-        );
-    }
-
     pub(super) fn box_stroke(&self, x: f32, y: f32, w: f32, h: f32) {
         self.p.rect_stroke(
             EguiRect::from_min_size(self.pt(x, y), egui::vec2(w * self.s, h * self.s)),
