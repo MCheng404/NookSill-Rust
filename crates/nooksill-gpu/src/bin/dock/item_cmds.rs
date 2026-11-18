@@ -4,6 +4,28 @@ use super::menu_win::{frost_spec, show_menu};
 use super::satellite::ensure_settings;
 use super::*;
 
+/// Replace in-memory plugin dock entries; user items keep their position.
+pub(super) fn sync_plugin_items(raw: &mut Vec<Item>) {
+    raw.retain(|item| !item.temp);
+    let contrib = nooksill_platform::plugin::active();
+    for spec in contrib.dock_items {
+        let mut item = Item::new(
+            ItemKind::from_code(spec.kind).unwrap_or(ItemKind::File),
+            spec.name,
+            spec.path,
+        );
+        if let Some((_, file)) = contrib
+            .icon_map
+            .iter()
+            .find(|(key, _)| key == &item.name || key == &item.path)
+        {
+            item.icon_src = file.to_string_lossy().into_owned();
+        }
+        item.temp = true;
+        raw.push(item);
+    }
+}
+
 impl App {
     /// Rename an item and edit its target and arguments. Modal.
     pub(super) fn rename_item(&mut self, index: usize, item: &Item) {
@@ -90,8 +112,9 @@ impl App {
             .dock
             .cfg
             .dock_is_dark(nooksill_platform::theme::is_dark());
+        let gpu = self.gpu().ok()?;
         match nooksill_gpu::edit_win::show_edit(
-            &self.gpu,
+            &gpu,
             &mut self.edit_slot,
             EditRequest {
                 title: title.to_owned(),
@@ -194,6 +217,11 @@ impl App {
     /// The menu reuses the dock's self-drawn modal window instead of
     /// `TrackPopupMenu`, which requires a foreground window.
     pub(super) fn step_tray(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        // The global hotkey only sets a flag: opening a window must happen on
+        // the main loop, not inside the window procedure.
+        if self.dock.take_open_launchpad() {
+            self.open_launchpad()?;
+        }
         if self.dock.take_tray_toggle() {
             let hidden = self.dock.toggle_force_hide();
             self.status(if hidden {
@@ -222,7 +250,7 @@ impl App {
         };
         let menu = Menu::tray(self.dock.force_hide);
         let cmd = show_menu(
-            &self.gpu,
+            &self.gpu()?,
             &mut self.menu_slot,
             menu,
             cursor,
@@ -247,7 +275,7 @@ impl App {
             }
             Some(MenuCmd::Settings) => {
                 let sw = ensure_settings(
-                    &self.gpu,
+                    &self.gpu()?,
                     &mut self.settings_slot,
                     &self.paths,
                     settings_win::effective_ppp(&self.dock.cfg, self.dpi),

@@ -228,6 +228,11 @@ pub(super) unsafe extern "system" fn wndproc(
         WM_HOTKEY => {
             let ptr = dock_ptr(hwnd);
             if !ptr.is_null() {
+                let id = wparam.0 as i32;
+                if id == nooksill_platform::hotkey::HOTKEY_LAUNCHPAD_ID {
+                    unsafe { (*ptr).open_launchpad = true };
+                    return LRESULT(0);
+                }
                 let hidden = unsafe { (*ptr).toggle_force_hide() };
                 eprintln!(
                     "[hotkey] {}",

@@ -10,6 +10,21 @@ use super::{Command, SettingsState};
 
 /// Both update pages use the same option table; combo translates labels.
 const CHANNEL_OPTS: &[(i32, &str)] = &[(0, "Stable"), (1, "Beta")];
+/// 0 = benchmark, 1 = built-in mirrors only, 2 = direct GitHub.
+const MIRROR_OPTS: &[(i32, &str)] = &[
+    (0, "Auto benchmark"),
+    (1, "Mirrors only"),
+    (2, "Direct only"),
+];
+/// 0 = follow system, 1 = custom address, 2 = direct.
+const PROXY_OPTS: &[(i32, &str)] = &[(0, "Follow system"), (1, "Custom proxy"), (2, "Direct")];
+/// 0 = the built-in 24 h default.
+const INTERVAL_OPTS: &[(i32, &str)] = &[
+    (0, "Every day"),
+    (6, "Every 6 hours"),
+    (12, "Every 12 hours"),
+    (72, "Every 3 days"),
+];
 
 /// Channel policy and the manual update actions.
 pub(super) fn policy_page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
@@ -31,10 +46,17 @@ pub(super) fn policy_page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 ctx,
                 ui,
                 Key::UPD_CHK,
-                nooksill_core::i18n::t("Check for updates daily"),
+                nooksill_core::i18n::t("Check for updates automatically"),
                 nooksill_core::i18n::t(
-                    "Runs once a day in the background; manual checks are always available",
+                    "Runs in the background; manual checks are always available",
                 ),
+            );
+            combo(
+                ctx,
+                ui,
+                Key::UPD_INTERVAL,
+                nooksill_core::i18n::t("Check interval"),
+                INTERVAL_OPTS,
             );
             toggle(
                 ctx,
@@ -87,6 +109,35 @@ pub(super) fn network_page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 nooksill_core::i18n::t("Benchmark all mirrors before choosing"),
                 nooksill_core::i18n::t("Off: download as soon as one mirror is fast enough"),
             );
+            combo(
+                ctx,
+                ui,
+                Key::UPD_MIRROR,
+                nooksill_core::i18n::t("Download source"),
+                MIRROR_OPTS,
+            );
+            combo(
+                ctx,
+                ui,
+                Key::NET_PROXY,
+                nooksill_core::i18n::t("Network proxy"),
+                PROXY_OPTS,
+            );
+            if ctx.cfg.get_i32(Key::NET_PROXY) == 1 {
+                let label =
+                    ui.label(RichText::new(nooksill_core::i18n::t("Proxy address")).small());
+                let mut addr = ctx.cfg.proxy.clone();
+                let resp = ui.text_edit_singleline(&mut addr);
+                let changed = resp.changed();
+                resp.labelled_by(label.id);
+                if changed {
+                    let clean = nooksill_core::config::Config::sanitize_proxy(&addr);
+                    if clean != ctx.cfg.proxy {
+                        ctx.cfg.proxy = clean;
+                        ctx.out.changed = true;
+                    }
+                }
+            }
         },
     );
 }

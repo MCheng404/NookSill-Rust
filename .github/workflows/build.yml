@@ -163,15 +163,22 @@ jobs:
             echo "Stable builds: [latest release](https://github.com/$GITHUB_REPOSITORY/releases/latest)."
           } > debug-notes.md
 
-          if ! gh release view "$tag" > /dev/null 2>&1; then
-            gh release create "$tag" --prerelease --title "Development build" --notes-file debug-notes.md
+          # `gh release edit` cannot change published_at, so "released 2 weeks
+          # ago" stays forever on a rolling tag. Delete the release AND the
+          # tag, then recreate on the current commit so GitHub stamps a fresh
+          # date and the notes above match the actual build.
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release delete "$tag" -y
           fi
-          # 资产名带版本号，不清掉旧的会一直堆积。
-          for name in $(gh release view "$tag" --json assets --jq '.assets[].name'); do
-            gh release delete-asset "$tag" "$name" -y
-          done
-          gh release upload "$tag" "$exe" "$sum" --clobber
-          gh release edit "$tag" --prerelease --title "Development build $VERSION" --notes-file debug-notes.md
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null 2>&1; then
+            git push origin --delete "refs/tags/$tag"
+          fi
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Development build $VERSION" \
+            --notes-file debug-notes.md \
+            "$exe" "$sum"
 
   release:
     name: release
@@ -203,6 +210,24 @@ jobs:
         shell: bash
         run: ./scripts/package.sh --release
 
+      # FluentSetup takes a folder, not an exe: stage the bare dock binary in
+      # the path fluentsetup.json expects, then build the Windows 11-style
+      # Setup.exe from the same source the portable release ships.
+      - name: stage installer source
+        shell: bash
+        run: |
+          mkdir -p installer/bin
+          cp "dist/NookSill-${{ steps.ver.outputs.version }}-win64.exe" installer/bin/nooksill-dock.exe
+
+      - name: set up FluentSetup
+        uses: MCheng404/FluentSetup@latest
+
+      - name: build Setup.exe
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: fluentsetup build installer/fluentsetup.json -D "Version=$VERSION"
+
       - name: list artifacts
         shell: bash
         run: ls -l dist
@@ -221,8 +246,8 @@ jobs:
           files: |
             dist/*.exe
             dist/*.sha256
+            dist/setup/*.exe
           body_path: notes.md
-          fail_on_unmatched_files: true
           # 正式版：不是草稿、不是预发布，并抢下 "Latest" 角标。
           draft: false
           prerelease: false

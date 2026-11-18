@@ -82,9 +82,11 @@ pub(super) fn section_of_numeric(name: &str) -> &'static str {
         "UiFrost" | "HPad" | "UiScale" | "UiAccent" | "UiAccentDock" | "UiAccentDockIcons"
         | "UiAccentCcIcons" | "FrostIllusion" => return "appearance",
         // Frame pacing and sync.
-        "FrameCap" | "VSync" | "Msaa" => return "performance",
+        "FrameCap" | "VSync" | "Msaa" | "GpuAccel" => return "performance",
         // Updater.
-        "NetSecureDns" | "NetMirrorAll" => return "update",
+        "NetSecureDns" | "NetMirrorAll" | "UpdInterval" | "UpdMirror" => return "update",
+        // Network proxy: mode plus the address live in the update section.
+        "NetProxy" => return "update",
         // Context menu frost.
         "MenuFrost" => return "menu",
         // Separator drag scaling.
@@ -190,9 +192,9 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     // MultiMode: merge a multi-window app into one icon (0) or one icon per
     // document window (1).
     ("MultiMode", 0, 1, 0, false, false),
-    // UpdChk: check for updates daily; UpdLast: day stamp of the last check.
+    // UpdChk: automatic checks; UpdLast: Unix hours of the last successful check.
     ("UpdChk", 0, 1, 1, true, false),
-    ("UpdLast", 0, 100000, 0, false, false),
+    ("UpdLast", 0, 2_000_000, 0, false, false),
     // LpCols / LpRows: launchpad columns and rows per page. Clamped here
     // rather than at use.
     ("LpCols", 3, 12, 7, false, false),
@@ -304,6 +306,14 @@ pub const NUMERIC_KEYS: &[(&str, i32, i32, i32, bool, bool)] = &[
     ("HostLink", 0, 1, 1, true, false),
     // HostLinkAutoScan: re-discover manifests every time the launchpad opens.
     ("HostLinkAutoScan", 0, 1, 1, true, false),
+    // UpdInterval: hours between automatic checks; 0 = the default 24 h.
+    ("UpdInterval", 0, 720, 0, false, false),
+    // UpdMirror: 0 = benchmark, 1 = built-in mirrors only, 2 = GitHub direct.
+    ("UpdMirror", 0, 2, 0, false, false),
+    // NetProxy: 0 = follow system, 1 = custom address, 2 = direct.
+    ("NetProxy", 0, 2, 0, false, false),
+    // GpuAccel: 0 = CPU raster with one-shot frost and no smoke, 1 = GPU.
+    ("GpuAccel", 0, 1, 0, true, false),
 ];
 
 impl Key {
@@ -562,6 +572,14 @@ impl Key {
     pub const HOST_LINK_ENABLED: Key = Key::Numeric(124);
     /// `HostLinkAutoScan`: rescan manifests on every launchpad open.
     pub const HOST_LINK_AUTOSCAN: Key = Key::Numeric(125);
+    /// `UpdInterval`: automatic check interval in hours; 0 = 24 h.
+    pub const UPD_INTERVAL: Key = Key::Numeric(126);
+    /// `UpdMirror`: 0 = benchmark, 1 = built-in mirrors only, 2 = direct.
+    pub const UPD_MIRROR: Key = Key::Numeric(127);
+    /// `NetProxy`: 0 = follow system, 1 = custom, 2 = direct.
+    pub const NET_PROXY: Key = Key::Numeric(128);
+    /// `GpuAccel`: 0 = CPU raster, one-shot frost, no smoke; 1 = GPU path.
+    pub const GPU_ACCEL: Key = Key::Numeric(129);
 
     /// `UiAccentDockIcons`: apply the accent color to dock icons.
     pub const UI_ACCENT_DOCK_ICONS: Key = Key::Numeric(101);

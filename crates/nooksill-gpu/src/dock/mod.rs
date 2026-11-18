@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use crate::worker::ReadyIcon;
 use nooksill_core::clock::ClockLine;
-use nooksill_core::color;
 use nooksill_core::config::{Config, DockMode, Edge, Key};
 use nooksill_core::icon::BBox;
 use nooksill_core::item::{Item, ItemKind};
@@ -268,6 +267,8 @@ impl WidgetStyle {
 pub struct Dock {
     /// Pending widget-card click; cards are hit-tested separately.
     pub widget_click: Option<layout::WidgetKind>,
+    /// Set by the global Launchpad hotkey, consumed by the main loop.
+    pub open_launchpad: bool,
     /// Last system sample from the sampler thread.
     sysinfo: nooksill_platform::SysInfo,
     pub cfg: Config,
@@ -384,7 +385,7 @@ pub struct Dock {
 mod chrome;
 
 use self::chrome::{
-    argbc, clock_line_size, it_visible, r8, rounded_frost, rounded_gradient, to_rgb, BarGradient,
+    argbc, clock_line_size, it_visible, r8, rounded_frost, rounded_gradient, BarGradient,
 };
 mod input;
 mod items;

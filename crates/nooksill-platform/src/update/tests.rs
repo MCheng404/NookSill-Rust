@@ -326,3 +326,80 @@ fn release_cache_is_written_atomically_and_can_be_cleared() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(tmp);
 }
+
+#[test]
+fn release_tag_redirect_is_parsed_only_in_the_expected_shape() {
+    use super::http::tag_from_location;
+
+    assert_eq!(
+        tag_from_location("https://github.com/MCheng404/NookSill-Rust/releases/tag/v2.0.1"),
+        Some("v2.0.1")
+    );
+    assert_eq!(
+        tag_from_location("/MCheng404/NookSill-Rust/releases/tag/2.0.1/"),
+        Some("2.0.1")
+    );
+    assert_eq!(
+        tag_from_location("https://github.com/login?return_to=/x"),
+        None
+    );
+    assert_eq!(tag_from_location("/releases/tag/"), None);
+    assert_eq!(tag_from_location("/releases/tag/v2.0.1/extra"), None);
+}
+
+#[test]
+fn stable_release_is_built_from_a_tag_without_the_api() {
+    let rel = Release::from_tag("v2.0.1").expect("a versioned tag");
+    assert_eq!(rel.tag, "v2.0.1");
+    assert!(!rel.prerelease);
+    assert_eq!(rel.exe.name, "NookSill-2.0.1-win64.exe");
+    assert!(rel
+        .exe
+        .url
+        .ends_with("/releases/download/v2.0.1/NookSill-2.0.1-win64.exe"));
+    assert_eq!(
+        rel.sha256.as_ref().map(|a| a.name.as_str()),
+        Some("NookSill-2.0.1-win64.exe.sha256")
+    );
+    assert_eq!(rel.exe.digest, None, "the sidecar supplies the digest");
+    assert_eq!(rel.exe.size, 0, "size is unknown until download");
+    assert!(
+        Release::from_tag("dev").is_none(),
+        "a channel tag has no version"
+    );
+}
+
+#[test]
+fn built_in_mirrors_are_the_two_surviving_sources() {
+    assert_eq!(
+        super::MIRRORS,
+        &["https://gh-proxy.com/", "https://ghfast.top/"]
+    );
+}
+
+#[test]
+fn parallel_ranges_cover_the_file_without_gaps_or_overlap() {
+    use super::chunks::{ranges, CHUNK};
+
+    let small = ranges(CHUNK + 10, CHUNK);
+    assert_eq!(small, vec![(0, CHUNK), (CHUNK, CHUNK + 10)]);
+
+    let exact = ranges(CHUNK * 2, CHUNK);
+    assert_eq!(exact, vec![(0, CHUNK), (CHUNK, CHUNK * 2)]);
+
+    assert!(ranges(0, CHUNK).is_empty());
+    assert!(ranges(100, 0).is_empty());
+    let joined: u64 = small.iter().map(|(a, b)| b - a).sum();
+    assert_eq!(joined, CHUNK + 10);
+}
+
+#[test]
+fn a_200_answer_to_a_range_request_is_rejected() {
+    use super::chunks::{accepts_range, worthwhile, MIN_PARALLEL};
+
+    assert!(accepts_range(206));
+    assert!(!accepts_range(200));
+    assert!(!accepts_range(416));
+    assert!(worthwhile(MIN_PARALLEL));
+    assert!(!worthwhile(MIN_PARALLEL - 1));
+}

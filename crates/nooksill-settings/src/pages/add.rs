@@ -42,6 +42,12 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             button(
                 ctx,
                 ui,
+                nooksill_core::i18n::t("Add Launchpad"),
+                Command::AddLaunchpad,
+            );
+            button(
+                ctx,
+                ui,
                 nooksill_core::i18n::t("Add separator"),
                 Command::AddSeparator,
             );

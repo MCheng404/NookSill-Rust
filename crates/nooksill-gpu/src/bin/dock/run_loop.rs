@@ -15,6 +15,9 @@ impl App {
         if want == self.hotkey_applied {
             return;
         }
+        // Keep the Launchpad hotkey alive for the process lifetime; it is
+        // registered once at boot and unregistered on Drop.
+        let _ = &self.launchpad_hotkey;
         self.global_hotkey.rebind(want.0, want.1);
         self.hotkey_applied = want;
     }
@@ -59,7 +62,7 @@ impl App {
             self.frame.set_pixels_per_point(self.ppp);
             // The small panels bake the scale in at creation; recreate them so
             // the next open matches the new monitor.
-            self.reset_panels_for_scale();
+            self.drop_panels_keeping_state();
         }
         self.reserved = reserve_space(
             &mut self.appbar,
@@ -205,6 +208,9 @@ impl App {
             need_frame |= self.step_tray()?;
             // 7. Settings window (non-modal).
             need_frame |= self.step_settings()?;
+            // 7.5 A graphics change cannot be applied live, so it quits the
+            //     loop here and `main` relaunches after App is dropped.
+            self.step_gfx_restart();
             // 8. Worker results: icons, running state, occlusion. All
             //    `try_recv`, never blocking.
             need_frame |= self.step_icons();
@@ -243,6 +249,10 @@ impl App {
             //      per captured frame. A still desktop sends none, so this does
             //      not break the "zero frames while idle" promise.
             need_frame |= self.step_frost();
+            // 13.6 CPU mode: give the device back once nothing has been open
+            //      for a while. Runs after every panel step so nothing in this
+            //      round still holds a dropped window.
+            self.step_gpu_idle();
             // 13.6 Catch-up layout. Steps 6-12 (menu, settings, drops) can
             //      change the item list after this round's layout pass at 2,
             //      leaving `geom` one frame behind the items; painting and hit
@@ -337,7 +347,7 @@ impl App {
         let resized = nw != self.size.0 || nh != self.size.1;
         if resized {
             self.size = (nw, nh);
-            self.frame.resize(&self.gpu, nw as u32, nh as u32)?;
+            self.frame.resize(self.gpu.as_ref(), nw as u32, nh as u32)?;
         }
         // Switching monitor or edge keeps the size on a square bar, so the
         // origin has to be compared as well: a resize-only test would leave the

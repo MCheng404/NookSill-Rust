@@ -216,6 +216,7 @@ impl SettingsWindow {
         }
         self.visible = false;
         self.close_requested = false;
+        self.renderer.release_dib();
         // A hidden window needs no repaints; asking every 16 ms would be
         // pure waste.
         self.next_repaint = None;

@@ -70,20 +70,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             toggle(
                 ctx,
                 ui,
-                Key::CC_ENERGY,
-                nooksill_core::i18n::t("Control Center · power saver tile"),
-                "",
-            );
-            toggle(
-                ctx,
-                ui,
-                Key::CC_HOTSPOT,
-                nooksill_core::i18n::t("Control Center · mobile hotspot tile"),
-                "",
-            );
-            toggle(
-                ctx,
-                ui,
                 Key::RES_MON,
                 nooksill_core::i18n::t("Resource Monitor"),
                 "",

@@ -1,7 +1,7 @@
 //! Release metadata: channel filtering, asset parsing and version discovery.
 
 use super::version::Version;
-use super::UpdateError;
+use super::{UpdateError, REPO};
 use crate::json::Json;
 
 /// Which GitHub releases the install follows.
@@ -53,6 +53,40 @@ pub struct Release {
     /// Optional: a `.sha256` side-car is only used when the API has no digest.
     pub sha256: Option<Asset>,
     pub prerelease: bool,
+}
+
+impl Release {
+    /// Build a stable release from a tag resolved without the REST API.
+    ///
+    /// The CI names assets deterministically, so the two URLs are known once
+    /// the tag is known. `size` stays 0 and the digest comes from the sidecar;
+    /// neither weakens verification, which always hashes the downloaded bytes.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        let version = version_in(tag)?;
+        let triple = format!("{}.{}.{}", version.major, version.minor, version.patch);
+        let exe_name = format!("NookSill-{triple}-win64.exe");
+        let base = format!("https://github.com/{REPO}/releases/download/{tag}");
+        Some(Self {
+            tag: tag.to_owned(),
+            version,
+            notes: String::new(),
+            exe: Asset {
+                name: exe_name.clone(),
+                url: format!("{base}/{exe_name}"),
+                digest: None,
+                size: 0,
+            },
+            sha256: Some(Asset {
+                name: format!("{exe_name}.sha256"),
+                url: format!("{base}/{exe_name}.sha256"),
+                digest: None,
+                size: 0,
+            }),
+            // `/releases/latest` never points at a pre-release.
+            prerelease: false,
+        })
+    }
 }
 
 /// Channel rule: a stable install never receives a pre-release unless it opted

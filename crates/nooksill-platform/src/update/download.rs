@@ -8,10 +8,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::release::{Asset, Release};
-use super::{cache, mirror, stage as staging, UpdateError, TIMEOUT_MS, UA};
+use super::{cache, chunks, mirror, stage as staging, UpdateError, TIMEOUT_MS, UA};
 use crate::net;
 
 const MAX_ATTEMPTS: usize = 3;
+
+/// Side-car for one parallel chunk: `NookSill.update.exe.c0`, `.c1`, ...
+pub(super) fn chunk_path(part: &Path, index: usize) -> PathBuf {
+    let name = part.file_name().and_then(|s| s.to_str()).unwrap_or("part");
+    part.with_file_name(format!("{name}.c{index}"))
+}
 
 /// Download one asset to `part`, resuming from the bytes already on disk.
 ///
@@ -170,6 +176,28 @@ pub fn stage(
             continue;
         };
         let part = staging::part_path(&expected, &release.tag);
+        // A large asset gets four lanes; a source that ignores Range (or a
+        // small asset where handshakes cost more than they save) falls back to
+        // the proven single connection.
+        if release.exe.size == 0 || chunks::worthwhile(release.exe.size) {
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let parallel = chunks::fetch(&candidate, &release.exe, &part, release.exe.size, &done);
+            if let Ok(true) = parallel {
+                on_progress(release.exe.size, release.exe.size);
+                let actual = staging::sha256_file(&part)?;
+                if actual == expected {
+                    staging::write_marker(&expected, release.exe.size)?;
+                    let path = staging::finalize(&part)?;
+                    cache::remember_mirror(&candidate);
+                    return Ok(path);
+                }
+                let _ = std::fs::remove_file(&part);
+                last = format!("checksum mismatch from {candidate}");
+                chunks::discard(&part);
+                continue;
+            }
+            chunks::discard(&part);
+        }
         if let Err(e) = fetch(
             &candidate,
             &release.exe,

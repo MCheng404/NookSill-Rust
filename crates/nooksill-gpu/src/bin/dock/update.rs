@@ -46,22 +46,25 @@ impl App {
         self.spawn_check(None);
     }
 
-    /// One automatic check per calendar day, started during boot.
+    /// One automatic check per configured interval, started during boot.
     ///
-    /// The day stamp is written only after a successful answer: a rate-limited
-    /// or offline check must not consume the whole day's retry budget.
+    /// The stamp is written only after a successful answer: a rate-limited
+    /// or offline check must not consume the whole interval's retry budget.
     pub(super) fn maybe_auto_check(&mut self) {
         if self.dock.cfg.get_i32(Key::UPD_CHK) == 0 {
             return;
         }
-        let day = std::time::SystemTime::now()
+        let raw = self.dock.cfg.get_i32(Key::UPD_INTERVAL);
+        let hours = if raw == 0 { 24 } else { raw.clamp(1, 720) } as i64;
+        let now_h = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.as_secs() / 86_400) as i32)
+            .map(|d| (d.as_secs() / 3600) as i64)
             .unwrap_or(0);
-        if self.dock.cfg.get_i32(Key::UPD_LAST) == day {
+        let last = i64::from(self.dock.cfg.get_i32(Key::UPD_LAST));
+        if last > 0 && now_h.saturating_sub(last) < hours {
             return;
         }
-        self.spawn_check(Some(day));
+        self.spawn_check(Some(now_h.min(i32::MAX as i64) as i32));
     }
 
     fn spawn_check(&mut self, day: Option<i32>) {
@@ -110,6 +113,7 @@ impl App {
         };
         let secure_dns = self.dock.cfg.get_i32(Key::NET_SECURE_DNS) != 0;
         let test_all = self.dock.cfg.get_i32(Key::NET_MIRROR_ALL) != 0;
+        let mirror_mode = self.dock.cfg.get_i32(Key::UPD_MIRROR);
         let (tx, rx) = std::sync::mpsc::channel();
         self.update_rx = Some(rx);
         self.update_started = Some(Instant::now());
@@ -122,7 +126,20 @@ impl App {
             }));
             // The exe asset is the download target; the checksum asset is only
             // a fallback when the API has no digest.
-            let base = update::pick_mirror(&release.exe.url, test_all, allow_direct);
+            let mode = mirror_mode;
+            let (base, _allow_direct) = match mode {
+                // Built-in mirrors only: never touch a possibly poisoned direct path.
+                1 => (
+                    update::pick_mirror(&release.exe.url, test_all, false),
+                    false,
+                ),
+                // GitHub direct only: useful behind a trusted proxy.
+                2 => (Some(String::new()), true),
+                _ => (
+                    update::pick_mirror(&release.exe.url, test_all, allow_direct),
+                    allow_direct,
+                ),
+            };
             let Some(base) = base else {
                 let _ = tx.send(UpdateMsg::Failed(
                     nooksill_core::i18n::t("No usable mirror").to_owned(),

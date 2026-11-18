@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// Next grid size after one density step; `up` makes icons smaller.
+#[must_use]
+pub(super) fn density_step(grid: (usize, usize), up: bool) -> (usize, usize) {
+    let (cols, rows) = grid;
+    let next = |v: usize, lo: usize, hi: usize| {
+        if up {
+            (v + 1).min(hi)
+        } else {
+            v.saturating_sub(1).max(lo)
+        }
+    };
+    (next(cols, 3, 12), next(rows, 2, 8))
+}
+
 impl LaunchpadWindow {
     /// Number of cells per page.
     pub(super) fn per(&self) -> usize {
@@ -29,6 +43,15 @@ impl LaunchpadWindow {
     pub fn set_grid(&mut self, cols: usize, rows: usize) {
         self.grid = (cols.clamp(3, 12), rows.clamp(2, 8));
         self.next_repaint = Instant::now();
+    }
+
+    /// Next grid size for a Ctrl+wheel step; `up` increases density.
+    ///
+    /// Both axes change together so icons stay roughly square; clamping matches
+    /// `set_grid` exactly, so the emitted command never causes a surprise jump.
+    #[must_use]
+    pub fn grid_after_density_step(&self, up: bool) -> (usize, usize) {
+        density_step(self.grid, up)
     }
 
     /// Whether the filtered view is active: a category or a search query.
@@ -157,12 +180,20 @@ pub(super) fn top_index(page: usize, per: usize, cell: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::top_index;
+    use super::{density_step, top_index};
 
     #[test]
     fn cell_index_is_offset_by_the_page() {
         assert_eq!(top_index(0, 28, 3), 3);
         assert_eq!(top_index(1, 28, 0), 28);
         assert_eq!(top_index(2, 28, 27), 83);
+    }
+
+    #[test]
+    fn density_step_changes_both_axes_and_clamps() {
+        assert_eq!(density_step((7, 4), true), (8, 5));
+        assert_eq!(density_step((7, 4), false), (6, 3));
+        assert_eq!(density_step((12, 8), true), (12, 8), "upper clamp");
+        assert_eq!(density_step((3, 2), false), (3, 2), "lower clamp");
     }
 }

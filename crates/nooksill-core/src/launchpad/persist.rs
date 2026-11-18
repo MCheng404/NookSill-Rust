@@ -83,6 +83,22 @@ impl Launchpad {
                         lp.cat_of.push((name.to_owned(), c));
                     }
                 }
+                // Label colour from an official plugin palette: `K\t<name>\t<RRGGBB>`.
+                "K" => {
+                    let (Some(name), Some(hex)) = (it.next(), it.next()) else {
+                        continue;
+                    };
+                    if hex.len() == 6 {
+                        if let Ok(v) = u32::from_str_radix(hex.trim(), 16) {
+                            let rgb = [
+                                ((v >> 16) & 0xff) as u8,
+                                ((v >> 8) & 0xff) as u8,
+                                (v & 0xff) as u8,
+                            ];
+                            lp.set_color(name, Some(rgb));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -124,6 +140,16 @@ impl Launchpad {
         }
         for (name, cat) in &self.cat_of {
             let _ = writeln!(s, "C\t{}\t{cat}", clean_field(name));
+        }
+        for (name, rgb) in &self.color_of {
+            let _ = writeln!(
+                s,
+                "K\t{}\t{:02X}{:02X}{:02X}",
+                clean_field(name),
+                rgb[0],
+                rgb[1],
+                rgb[2]
+            );
         }
         s
     }

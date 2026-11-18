@@ -1,6 +1,6 @@
 //! General page: startup, locking, hotkey and data folder.
 
-use egui::Ui;
+use egui::{RichText, Ui};
 use nooksill_core::config::Key;
 use nooksill_core::hotkey::Hotkey;
 
@@ -86,6 +86,14 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                     nooksill_core::i18n::t("Invalid hotkey; use e.g. Ctrl+Alt+D"),
                 );
             }
+            ui.label(
+                RichText::new(nooksill_core::i18n::fmt(
+                    "Launchpad hotkey: {0} (Win+L is reserved by Windows; falls back to Ctrl+Alt+L)",
+                    &[ctx.cfg.hotkey_launchpad.display().as_str()],
+                ))
+                .small()
+                .weak(),
+            );
             toggle(
                 ctx,
                 ui,

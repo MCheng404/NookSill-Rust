@@ -62,8 +62,15 @@ impl FrostLayer {
 pub struct FrameRenderer {
     ctx: egui::Context,
     renderer: Renderer,
-    offscreen: Offscreen,
-    presenter: LayeredPresenter,
+    /// GPU target and readback buffer; allocated on the first frame so a
+    /// preloaded panel that is never opened costs nothing.
+    offscreen: Option<Offscreen>,
+    /// Layered-window DIB. Plain system memory on every adapter, so it is the
+    /// whole working-set cost of an idle window and is released while hidden.
+    presenter: Option<LayeredPresenter>,
+    /// Recorded even with nothing allocated, so `resize` and frost UVs stay right.
+    size: (u32, u32),
+    samples: u32,
     pixels_per_point: f32,
     device: egui_wgpu::wgpu::Device,
     queue: egui_wgpu::wgpu::Queue,
@@ -94,6 +101,9 @@ pub struct FrameRenderer {
     live: Option<crate::frost::Live>,
     /// Last [`crate::frost::Spec`]; live frames need it for radius and corners.
     frost_spec: Option<crate::frost::Spec>,
+    /// Window behind the one-shot CPU frost, so a radius change can re-capture
+    /// without a polling thread (ADR-119).
+    frost_hwnd: Option<HWND>,
     /// Deadline egui asked for on the last frame; `None` means no repaint.
     next_repaint: Option<Instant>,
 }
@@ -101,7 +111,7 @@ pub struct FrameRenderer {
 impl std::fmt::Debug for FrameRenderer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FrameRenderer")
-            .field("size", &(self.offscreen.width(), self.offscreen.height()))
+            .field("size", &self.size)
             .field("pixels_per_point", &self.pixels_per_point)
             .finish_non_exhaustive()
     }
@@ -126,6 +136,60 @@ mod setup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw(w: u32, h: u32) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(w as f32, h as f32),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn solid(ui: &mut egui::Ui) {
+        ui.painter()
+            .rect_filled(ui.max_rect(), 0.0, egui::Color32::from_rgb(200, 40, 40));
+    }
+
+    /// A real layered window, so the present path (and its DIB) is exercised.
+    fn layered_window(w: i32, h: i32) -> windows::Win32::Foundation::HWND {
+        use windows::core::w;
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        };
+        unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
+        unsafe {
+            let instance = GetModuleHandleW(None).expect("instance");
+            let class = WNDCLASSW {
+                hInstance: instance.into(),
+                lpfnWndProc: Some(proc),
+                lpszClassName: w!("NookSillFrameTest"),
+                ..Default::default()
+            };
+            RegisterClassW(&class);
+            CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("NookSillFrameTest"),
+                w!("frame-test"),
+                WS_POPUP,
+                0,
+                0,
+                w,
+                h,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("layered window")
+        }
+    }
 
     #[test]
     fn repaint_deadline_maps_egui_states() {
@@ -177,5 +241,88 @@ mod tests {
 
         assert_eq!(max_alpha(true), 255, "弹窗要整窗铺底");
         assert_eq!(max_alpha(false), 0, "栏体不该整窗铺底");
+    }
+
+    /// A preloaded panel is never drawn, so it must not hold a GPU target or a
+    /// DIB for its whole lifetime.
+    #[test]
+    fn hidden_renderer_holds_no_pixel_buffers() {
+        if !crate::test_env::gpu() {
+            return;
+        }
+        let gpu = Gpu::new("").expect("D3D12 adapter");
+        let mut f = FrameRenderer::new(&gpu, 64, 48, 1.0).expect("renderer");
+        assert!(f.dib_released(), "新建的隐藏窗口不该先占 DIB");
+        assert!(f.offscreen.is_none(), "没出过帧就不该建 GPU 目标");
+        assert_eq!(f.size(), (64, 48));
+        let samples = f.samples();
+
+        // Offscreen screenshots must not drag a DIB in: they have no window.
+        f.render_rgba(&gpu, raw(64, 48), solid).expect("frame");
+        assert!(f.offscreen.is_some());
+        assert!(f.dib_released(), "离屏出帧不需要 DIB");
+
+        let hwnd = layered_window(64, 48);
+        f.render(&gpu, raw(64, 48), hwnd, (0, 0), solid)
+            .expect("present");
+        assert!(!f.dib_released(), "上屏必须先重建 DIB");
+
+        f.release_dib();
+        assert!(f.dib_released());
+        assert!(f.offscreen.is_some(), "释放 DIB 不该动 GPU 目标");
+        assert_eq!(f.size(), (64, 48), "释放不丢尺寸");
+        assert_eq!(f.samples(), samples, "释放不改变 MSAA 档位");
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+        }
+    }
+
+    /// Releasing is only safe if the rebuilt DIB draws the same image.
+    #[test]
+    fn release_and_restore_reproduces_the_same_pixels() {
+        if !crate::test_env::gpu() {
+            return;
+        }
+        let gpu = Gpu::new("").expect("D3D12 adapter");
+        let mut f = FrameRenderer::new(&gpu, 64, 48, 1.0).expect("renderer");
+        let hwnd = layered_window(64, 48);
+        f.render(&gpu, raw(64, 48), hwnd, (0, 0), solid)
+            .expect("present");
+        let (before, _) = f.render_rgba(&gpu, raw(64, 48), solid).expect("frame");
+        f.release_dib();
+        f.render(&gpu, raw(64, 48), hwnd, (0, 0), solid)
+            .expect("present after release");
+        let (after, _) = f.render_rgba(&gpu, raw(64, 48), solid).expect("frame");
+        assert_eq!(before, after, "释放重建后画面必须逐像素一致");
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+        }
+    }
+
+    /// Menus resize on every open; a released DIB must not be rebuilt by resize.
+    #[test]
+    fn resize_with_released_dib_defers_allocation() {
+        if !crate::test_env::gpu() {
+            return;
+        }
+        let gpu = Gpu::new("").expect("D3D12 adapter");
+        let mut f = FrameRenderer::new(&gpu, 64, 48, 1.0).expect("renderer");
+        let hwnd = layered_window(64, 48);
+        f.render(&gpu, raw(64, 48), hwnd, (0, 0), solid)
+            .expect("present");
+        f.release_dib();
+        f.resize(&gpu, 96, 64).expect("resize");
+        assert!(f.dib_released(), "已释放的 DIB 不该被 resize 重建");
+        assert_eq!(f.size(), (96, 64));
+        assert_eq!(
+            f.offscreen.as_ref().expect("GPU target kept").width(),
+            96,
+            "留存的 GPU 目标要跟着改尺寸"
+        );
+        let (pixels, _) = f.render_rgba(&gpu, raw(96, 64), solid).expect("frame");
+        assert_eq!(pixels.len(), 96 * 64 * 4, "重建用的是新尺寸");
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd);
+        }
     }
 }

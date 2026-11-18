@@ -76,8 +76,19 @@ pub fn probe(target: &str) -> Option<u128> {
 }
 
 /// Pick a download base for `target`. Returns the prefix (`""` = direct).
+///
+/// A sticky mirror was already proven by a verified download, so it skips the
+/// ranged probe; `download::stage` still falls through every base if it has
+/// since gone bad.
 #[must_use]
 pub fn pick(target: &str, test_all: bool, allow_direct: bool) -> Option<String> {
+    if !test_all {
+        if let Some(sticky) = cache::sticky_mirror() {
+            if allow_direct || !sticky.is_empty() {
+                return Some(sticky);
+            }
+        }
+    }
     let mut best: Option<(u128, String)> = None;
     for base in candidates(allow_direct) {
         let Some(ms) = probe(&url(&base, target)) else {

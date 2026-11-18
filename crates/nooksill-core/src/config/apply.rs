@@ -32,6 +32,7 @@ impl Config {
             lock: false,
             hotkey: true,
             hotkey_combo: Hotkey::DEFAULT,
+            hotkey_launchpad: Hotkey::LAUNCHPAD,
             accent_tone: false,
             reflect: false,
             clock: false,
@@ -59,6 +60,7 @@ impl Config {
             language: String::new(),
             plugin_enabled: String::new(),
             plugin_base: String::new(),
+            proxy: String::new(),
             runtime_accent: None,
             runtime_icon_accent: None,
         }

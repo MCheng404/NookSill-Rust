@@ -51,6 +51,21 @@ impl Hotkey {
         vk: b'D' as u32,
     };
 
+    /// The requested Launchpad combination (`Win+L`).
+    ///
+    /// Windows reserves `Win+L` for locking the session, so `RegisterHotKey`
+    /// refuses it. [`Self::LAUNCHPAD_FALLBACK`] is used when registration fails.
+    pub const LAUNCHPAD: Self = Self {
+        modifiers: MOD_WIN,
+        vk: b'L' as u32,
+    };
+
+    /// Working combination used when `Win+L` cannot be registered.
+    pub const LAUNCHPAD_FALLBACK: Self = Self {
+        modifiers: MOD_CONTROL | MOD_ALT,
+        vk: b'L' as u32,
+    };
+
     /// Parse `Ctrl+Alt+D` style text. Requires at least one modifier and a
     /// known key; unknown or malformed input yields `None` instead of a
     /// half-valid hotkey that `RegisterHotKey` would silently refuse.
@@ -180,5 +195,16 @@ mod tests {
         ] {
             assert_eq!(Hotkey::parse(text), None, "should reject: {text:?}");
         }
+    }
+
+    #[test]
+    fn launchpad_hotkeys_are_valid() {
+        assert_eq!(Hotkey::LAUNCHPAD.display(), "Win+L");
+        assert_eq!(Hotkey::LAUNCHPAD_FALLBACK.display(), "Ctrl+Alt+L");
+        assert_eq!(Hotkey::parse("Win+L"), Some(Hotkey::LAUNCHPAD));
+        assert_eq!(
+            Hotkey::parse("Ctrl+Alt+L"),
+            Some(Hotkey::LAUNCHPAD_FALLBACK)
+        );
     }
 }

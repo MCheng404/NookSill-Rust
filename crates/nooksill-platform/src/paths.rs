@@ -2,7 +2,6 @@
 //! Order matters: the portable marker is checked before creating directories.
 //! Defaults to `%APPDATA%\NookSill`; a marker next to the exe switches the root.
 
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,36 +18,15 @@ const CSIDL_APPDATA: i32 = 0x001A;
 /// (which can be longer) goes through `std::env::current_exe`.
 const MAX_PATH: usize = 260;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PathsError {
+    #[error("{}", nooksill_core::i18n::t("Cannot determine the executable path"))]
     ExePath,
+    #[error("{}", nooksill_core::i18n::t("Cannot determine the %APPDATA% path"))]
     AppData,
-    Io(io::Error),
-}
-
-impl fmt::Display for PathsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ExePath => f.write_str(nooksill_core::i18n::t(
-                "Cannot determine the executable path",
-            )),
-            Self::AppData => f.write_str(nooksill_core::i18n::t(
-                "Cannot determine the %APPDATA% path",
-            )),
-            Self::Io(e) => f.write_str(&nooksill_core::i18n::fmt(
-                "File operation failed: {0}",
-                &[e.to_string().as_str()],
-            )),
-        }
-    }
-}
-
-impl std::error::Error for PathsError {}
-
-impl From<io::Error> for PathsError {
-    fn from(e: io::Error) -> Self {
-        Self::Io(e)
-    }
+    // `from` also makes the io error the `source()`, which the old empty impl lost.
+    #[error("{}", nooksill_core::i18n::fmt("File operation failed: {0}", &[.0.to_string().as_str()]))]
+    Io(#[from] io::Error),
 }
 
 /// Resolved runtime paths.

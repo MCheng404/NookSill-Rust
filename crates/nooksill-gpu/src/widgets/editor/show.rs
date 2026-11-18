@@ -157,6 +157,7 @@ pub fn show_edit(
         SetWindowLongPtrW(*hwnd, GWLP_USERDATA, 0);
         let _ = ShowWindow(*hwnd, SW_HIDE);
     }
+    renderer.release_dib();
     rendered?;
     Ok(EditOutcome { accepted, values })
 }

@@ -427,6 +427,13 @@ fn create_card(ctx: &mut Ctx<'_>, ui: &mut Ui) {
             ) {
                 ctx.out.command = Some(Command::AddTrash);
             }
+            if small_button(
+                ui,
+                nooksill_core::i18n::t("Add Launchpad"),
+                nooksill_core::i18n::t("Restore the Launchpad icon on the bar"),
+            ) {
+                ctx.out.command = Some(Command::AddLaunchpad);
+            }
         });
     });
 }

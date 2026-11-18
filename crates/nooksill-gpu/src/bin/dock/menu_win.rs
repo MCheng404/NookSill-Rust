@@ -148,7 +148,7 @@ pub(super) fn register_menu_class() -> Result<(), Box<dyn std::error::Error>> {
 /// The dock's renderer is sized to the bar while the menu is a different size;
 /// `resize` rebuilds only the offscreen target and DIB, keeping the egui
 /// context and wgpu pipelines.
-pub(super) type MenuSlot = Option<(HWND, FrameRenderer)>;
+pub(super) type MenuSlot = Option<(HWND, nooksill_gpu::frame::FrameRenderer)>;
 
 /// Return the frost config for one panel, if enabled.
 /// `frost::blur_rgba` clamps the radius again (1..12).
@@ -194,7 +194,7 @@ pub(super) fn show_menu(
         let hinst = unsafe { GetModuleHandleW(None)? };
         // Renderer first: it is the step that can fail, and building it after
         // the window would leak one hidden HWND per retry.
-        let renderer = FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
+        let renderer = nooksill_gpu::frame::FrameRenderer::new(gpu, pw as u32, ph as u32, ppp)?;
         unsafe {
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -322,6 +322,7 @@ pub(super) fn show_menu(
         SetWindowLongPtrW(*hwnd, GWLP_USERDATA, 0);
         let _ = ShowWindow(*hwnd, SW_HIDE);
     }
+    renderer.release_dib();
     rendered?;
     Ok(state.cmd)
 }

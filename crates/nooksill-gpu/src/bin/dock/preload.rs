@@ -23,7 +23,20 @@ impl App {
             )
         };
         let ppp = self.ppp;
-        let gpu = &self.gpu;
+        // Preloaded panels are GPU windows; building them here would create the
+        // very device the CPU mode exists to avoid, so they stay cold and each
+        // one pulls the device up when first opened (ADR-119).
+        if !nooksill_gpu::gpu::gpu_accel() {
+            return;
+        }
+        let gpu = match self.gpu() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[preload] {e}");
+                return;
+            }
+        };
+        let gpu = &gpu;
 
         if self.calendar_slot.is_none() {
             let today = nooksill_gpu::calendar_win::today();

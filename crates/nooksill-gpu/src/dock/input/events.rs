@@ -11,6 +11,7 @@ impl Dock {
             // the first scan. `set_pinned` fixes the split later.
             pinned: items.len(),
             widget_click: None,
+            open_launchpad: false,
             sysinfo: nooksill_platform::SysInfo::default(),
             cfg,
             items,
@@ -139,6 +140,11 @@ impl Dock {
     /// Take the pending tray right-click.
     pub fn take_tray_menu(&mut self) -> bool {
         std::mem::take(&mut self.tray_menu)
+    }
+
+    /// Take the pending global Launchpad hotkey request.
+    pub fn take_open_launchpad(&mut self) -> bool {
+        std::mem::take(&mut self.open_launchpad)
     }
 
     /// Take the pending tray left-click.

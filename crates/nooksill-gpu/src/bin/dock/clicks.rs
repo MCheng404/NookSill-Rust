@@ -28,20 +28,18 @@ impl App {
             .dock
             .cfg
             .dock_is_dark(nooksill_platform::theme::is_dark());
-        let lw = ensure_launchpad(
-            &self.gpu,
-            &mut self.launchpad_slot,
-            &self.paths,
-            self.ppp,
-            dark,
-        )?;
+        let gpu = self.gpu()?;
+        let lw = ensure_launchpad(&gpu, &mut self.launchpad_slot, &self.paths, self.ppp, dark)?;
         // The window is reused across opens; follow a monitor or DPI change.
-        lw.place_on_target(&self.gpu, self.ppp)?;
+        lw.place_on_target(&gpu, self.ppp)?;
         // Grid size follows the config on every open; settings may have changed.
         lw.set_grid(
             self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
             self.dock.cfg.get_i32(Key::LP_ROWS).max(2) as usize,
         );
+        // Official plugins may contribute automatic label colours by name.
+        let rules = nooksill_platform::plugin::label_rules();
+        lw.apply_color_rules(&rules);
         lw.open(frost_spec(&self.dock.cfg, 0.0));
         Ok(())
     }
@@ -179,7 +177,7 @@ impl App {
             _ => self.dock.cfg.dock_is_dark(theme::is_dark()),
         };
         let cmd = match show_menu(
-            &self.gpu,
+            &self.gpu()?,
             &mut self.menu_slot,
             menu,
             cursor,
@@ -240,7 +238,7 @@ impl App {
                 // so it cannot live in `run_menu_cmd`. Effective scale comes
                 // from the config so a scale change applies on the next open.
                 let sw = ensure_settings(
-                    &self.gpu,
+                    &self.gpu()?,
                     &mut self.settings_slot,
                     &self.paths,
                     settings_win::effective_ppp(&self.dock.cfg, self.dpi),
@@ -268,12 +266,19 @@ impl App {
         // dock edge.
         let before = self.mount_key();
 
-        let (changed, cmd) = tick_settings(
-            &self.gpu,
-            &mut self.settings_slot,
-            &mut self.dock,
-            &self.raw,
-        )?;
+        // Taking the device here would create it on the very first round even
+        // with no settings window: the argument is evaluated before
+        // `tick_settings` can early-return (ADR-119).
+        let (changed, cmd) = if self.settings_slot.is_some() {
+            tick_settings(
+                &self.gpu()?,
+                &mut self.settings_slot,
+                &mut self.dock,
+                &self.raw,
+            )?
+        } else {
+            (false, None)
+        };
         // Drain background update results; the worker also wakes the settings
         // window itself.
         self.pump_update();

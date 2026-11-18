@@ -1,7 +1,17 @@
 # 技术决策记录（ADR）
 
 本文件记录不可逆的技术取舍，格式为决定 / 依据 / 代价。
-编号与标题按历史原样保留（ADR-049 有两条，分别记设置界面与点击链路）。
+编号与标题按历史原样保留。**有四组编号重复**（历史原因，不重编号以免断掉
+既有交叉引用），检索时按标题区分：
+
+| 编号 | 两条分别是什么 |
+|---|---|
+| ADR-049 | 设置界面「左导航 + 右卡片」 / 点击图标没反应（捕获与前台锁） |
+| ADR-104 | 磨砂边缘玻璃 3D 弯曲包边 / 扩展组件与扩展设置 |
+| ADR-105 | 内存 NFR 改为可执行三条 / 插件系统采用声明式清单 |
+| ADR-110 | 二级导航返回后高亮进入的组 / 换后端不省内存（DX12 最省） |
+
+已失效的条目在标题上标注【已否决】或【已作废】，正文保留不删。
 
 ---
 
@@ -358,7 +368,7 @@
 
 ---
 
-## ADR-029 · `.lnk` 解析绕过 windows crate 的 wrapper，直接调 vtable
+## ADR-029 · `.lnk` 解析绕过 windows crate 的 wrapper，直接调 vtable【已作废，见 ADR-063】
 
 **决定**：本条作废，见 ADR-063。手工 vtable 调用已整体删除，改用 `windows` 生成的 wrapper。
 
@@ -1858,7 +1868,7 @@ WorkingSet64 / PeakWorkingSet64 / PrivateMemorySize64 对应之。
 **依据**：
 - BUILD.md 实测表显示 wgpu-DX12 空设备 102–164 MB、调优后 spike 111 MB，
   绝对目标本就不可达，且随驱动/适配器/分辨率漂移。
-- BUILD.md:233 记录驱动 ±15 MB 抖动，单点绝对数字无法区分噪声与回归。
+- BUILD.md §五「方法学」记录驱动 ±15 MB 抖动，单点绝对数字无法区分噪声与回归。
 - 2026-11-17 实测：release 完整 dock 进程 WS 150 MB / private 278 MB，
   同机 device 探针仅 80 MB。此前没有任何完整进程的常驻数字，也没有会话增长守护。
 - 现有 `mem.rs` 只被 device 级 `probe.rs` 使用；`bin/dock` 无内存输出；性能页
@@ -1948,6 +1958,11 @@ WorkingSet64 / PeakWorkingSet64 / PrivateMemorySize64 对应之。
 **代价**：保留默认视觉效果，常驻比"全关"高 39 MB。低内存场景需用户手动
 关三个键，或用 `scripts/mem-ab.sh` 验证自己的配置。
 
+**2026-11-18 更新（ADR-117 之后）**：上表是 ADR-117 **之前**的口径。隐藏窗口
+现在会交回分层 DIB，`PreloadPanels=1` 也能拿回约 13.5 MiB，所以
+`PreloadPanels=0` 的**剩余**收益从 32 MB 降到约 18 MB，"全关 39 MB"同比例缩水。
+结论（烟雾是最大单项、默认保留）不变，但绝对数字要用同脚本重测后才可引用。
+
 ---
 
 ## ADR-108 · 线程栈与图标纹理的微优化：收益在噪声内，不做
@@ -1961,16 +1976,17 @@ WorkingSet64 / PeakWorkingSet64 / PrivateMemorySize64 对应之。
   commit 1 页 + guard page。空闲阻塞线程的栈 WS 只有几十 KB。把 2 MB 改成
   512 KB 省的是 VA（64 位下非瓶颈），对任务管理器 WS 约等于 0。减少线程数
   才有 WS 影响，但每线程也只有 40–100 KB 量级。
-- rayon：本机 `NUMBER_OF_PROCESSORS=32`，全局池默认 32 线程（`icons.rs:39`
-  唯一使用点，批处理上限 `BATCH=8`）。理论上 32→4 可省约 1–3 MB。实测
+- rayon：本机 `NUMBER_OF_PROCESSORS=32`，全局池默认 32 线程
+  （`worker/icons.rs:39` 唯一使用点，批处理上限 `BATCH=8`）。理论上 32→4 可省约 1–3 MB。实测
   `scripts/mem-ab.sh` 三组（base / 显式 32 / 4）得 137.6 / 132.8 / 137.2 MB——
   同为 32 线程的两组差 4.8 MB，大于 32→4 的差。短采样分辨不出，收益在噪声内。
 - 图标纹理：Dock 上传 256×256 RGBA8（0.25 MiB/张，源尺寸不缩放，
-  `dock/mod.rs:32-35`）；无 mipmap（`TextureOptions::LINEAR`），去掉 mipmap
+  `worker/icons.rs:140`）；无 mipmap（`TextureOptions::LINEAR`），去掉 mipmap
   收益为 0。bbox 裁剪与重复路径共享可省约 0.5–1.5 MB；降到 160×160 可省
   约 3 MB，但需守住 ≥126 物理 px（zoom 峰值）的视觉底线。
 - 对照 ADR-107 的实测：可配置三项合计可省 39 MB，比上述所有微优化总和
-  大一个数量级，且零代码风险。
+  大一个数量级，且零代码风险。（该 39 MB 是 ADR-117 之前的口径，见 ADR-107
+  的 2026-11-18 更新；量级对比的结论不受影响。）
 
 **代价**：放弃合计约 2–5 MB 的理论收益。换来的是不引入栈溢出风险
 （Shell/COM/WIC 线程缩栈需真机回归）、不引入图标 UV/共享的回归面。
@@ -1992,7 +2008,10 @@ WorkingSet64 / PeakWorkingSet64 / PrivateMemorySize64 对应之。
   设备，完整进程要额外算驱动 DLL 与私有堆。NVIDIA D3D12 驱动栈的私有提交
   计入进程，核显走系统共享内存部分不计入。
 - MSAA 档位在独显上对进程 WS 无可见影响：4x/2x/1x 分别 155/154/164 MB
-  （差异在抖动内）。MSAA 附件走显存，不进本进程 RSS。
+  （差异在抖动内）。**注意这是完整进程的观测，不是"MSAA 不进 WS"的证明**：
+  ADR-117 的分解探针实测 GPU 目标（含 MSAA）分配时抬 WS +31 MiB，只是完整
+  进程里这点差异被驱动抖动盖住了。原写"MSAA 附件走显存，不进本进程 RSS"
+  是未取证的机制解释，已删。
 - 首轮测到 `nvidia_msaa4` = 67 MB 是假象（驱动异步提交未稳定）；延长采样
   并重测后稳定在 155 MB。这印证 BUILD.md 方法学「比较看峰值/稳态，
   不看单次采样」。
@@ -2091,3 +2110,475 @@ soft-light mesh（圆角用扇形网格），无桌面捕获时用固定低频�
 被忽略，外观会变平——这是有意的。预设板只有 12 色，精确值仍靠 HEX 输入。
 `SettingsState` 多两个 UI 字段（`color_edit`、`color_hex`）。原生颜色对话框
 不再提供，取色范围限定在预设 + HEX。
+
+---
+
+## ADR-113 · 国内更新链路：网页 302 取 tag、镜像收敛、四路 Range 并发
+
+**决定**：稳定版检查先请求 `github.com/<repo>/releases/latest`，从 `302` 的
+`Location` 取 tag，再按 CI 固定命名拼出 exe 与 `.sha256` 直链；`api.github.com`
+保留为 beta 通道与异常回退。内置镜像从五个收敛到实测稳定的两个
+（`gh-proxy.com`、`ghfast.top`），上次验证通过的 sticky 镜像跳过测速直接用。
+大文件用四路 `Range` 并发（8 MiB 分片、`Accept-Encoding: identity`、严格
+`206`），任一路拿到 `200` 就丢弃分片回退单连接。新增 `UpdInterval`（小时）
+与 `UpdMirror`（测速/仅镜像/仅直连）两个键，`UpdLast` 改存 Unix 小时数。
+
+**依据**：
+- 检索与实测一致：`/releases/latest` 的 `302` 走网页域名，不消耗
+  `api.github.com` 的 60 次/小时共享配额；freenet 实测调用前后 `core.used`
+  增量为 0。ida-hcli、ScrcpyGUI、codewf 均采用同一策略。
+- 本仓库 CI 资产名由 `scripts/package.sh` 固定为
+  `NookSill-<ver>-win64.exe` 与 `.sha256`，拿到 tag 即可拼 URL；摘要来自
+  sidecar，校验链不变。
+- 2026-11 三份国内镜像实测：`gh-proxy.com`/`ghfast.top` 全项通过且最快，
+  `ghproxy.net` 大文件不稳、`gh.llkk.cc` 频繁超时，故收敛到两个。
+- 跨境链路上单 TCP 连接吃不满带宽；四路 Range 并发配合分片续传是业界
+  标准做法（IDM/aria2）。`206` 校验与 `identity` 编码是避免字节偏移错乱
+  的必要条件（服务端忽略 Range 会回 `200`，gzip 会缩短分片）。
+
+**代价**：302 路径拿不到 release notes 与资产大小，进度条在下载前显示
+总数为 0；校验仍由 `.sha256` 保证，不影响安全性。Beta 通道继续走 API，
+因为它要的是固定 `dev` 标签的预发布，网页 `latest` 不指向它。四路并发
+会增加代理的连接数，设置项可选「仅直连」规避。`UpdLast` 语义从「天序号」
+改为「Unix 小时」，旧值会被当成很久以前，首次升级后会多查一次——
+这是可接受的迁移代价。
+
+---
+
+## ADR-114 · 网络代理三态与 dev 滚动发布的日期刷新
+
+**决定**：新增 `NetProxy`（0 跟随系统 / 1 自定义 / 2 直连）与 `[update] Proxy`
+字符串地址。`net::request` 在每次 `WinHttpOpen` 时按模式选择
+`AUTOMATIC_PROXY` / `NAMED_PROXY` / `NO_PROXY`，配置由 `sync_prefs` 每帧发布。
+CI 的 dev 发布改为「每次先删 release 与 dev tag，再基于当前 commit 重建」，
+让 `published_at` 与说明里的构建时间一起刷新。
+
+**依据**：
+- WinHTTP 官方支持两种方式设置代理：`WinHttpOpen` 传入 access type 与代理名，
+  或 `WinHttpSetOption(WINHTTP_OPTION_PROXY, WINHTTP_PROXY_INFO)`。前者在每次
+  session 创建时生效，无需管理生命周期，契合现有「每次请求独立 session」的
+  设计；自定义地址为空时退回跟随系统，避免空代理名导致 Win32 错误。
+- GitHub 的 `published_at` 在 release 创建时固定，`gh release edit` 只改标题与
+  说明，不会刷新 Releases 页显示的「released N ago」。滚动 tag 要显示真实
+  发布时间，必须删除 release 与 tag 后重建，并在 `gh release create --target`
+  指向当前 commit。
+- dev tag 不以 `v` 开头，删/建它不会触发 `release` job；`on.push.tags: ["v*"]`
+  只匹配正式版标签。
+
+**代价**：删掉 dev tag 再重建会让旧 dev 链接短暂 404，且 tag 指向的 commit
+每次变化——这是滚动测试通道的预期行为。三态代理是进程级全局，设置页改完
+要等下一帧 `sync_prefs` 才生效（实际 < 16 ms）。自定义代理只支持地址，
+不支持用户名/密码认证；需要认证的用户应在系统代理里配置后选「跟随系统」。
+
+---
+
+## ADR-115 · 四项收尾：去掉 Dock 自定义色，补齐起动台恢复与左侧居中
+
+**决定**：移除 Dock 栏自定义颜色：`color_row`、外观页「Custom colours」卡片、
+`bar_colors_of` 的自定义色分支与 `paint_panel` 的纯色快路径全部删除；
+`color1`/`BgColor2/3`/`Grad*` 保留在 ini 但不再读。新增 `Command::AddLaunchpad`
+与 `Item::launchpad()`，在「添加」页和「条目」页都能把 `nooksill:launchpad`
+图标放回栏体。`Metrics::signed_widget_extra()` 让左侧条带时栏体右移半个占位
+宽度，GPU 布局改用它。设置页移除 `CcEnergy`/`CcHotspot` 两个开关。
+
+**依据**：
+- 自定义颜色与 ADR-057 的纯平基调冲突，且上一轮已验证用户偏好由系统强调色
+  决定栏体色调；删掉后只剩「跟随系统强调色」一条路径，状态更少。
+- 起动台是 `nooksill:launchpad` 的普通 File 项，删除后没有任何入口可恢复；
+  它和回收站一样属于内置项，理应和 `AddTrash` 并列提供「重新添加」。
+- `base_centers` / `place_slots_insert` 无条件把栏体左移 `widget_extra/2`。
+  左侧条带时占位在栏体左边，符号必须翻转，否则窗口重算后栏体仍在屏幕中心，
+  与条带重叠或错位。`signed_widget_extra()` 把符号收敛到一处。
+- `CcEnergy` 早已无消费者，`CcHotspot` 的实际显示由磁贴顺序决定，独立开关
+  不产生可见效果；两者从设置页移除，配置键保留兼容。
+
+**代价**：旧配置里的 `color1` 不再生效，栏体回到强调色/主题色。左侧条带的
+居中位置会相对上一版右移半个条带宽度——这是修复而非回归。热点磁贴开关
+消失后只能通过磁贴顺序调整，配置项仍留在 ini 不丢数据。
+
+---
+
+## ADR-110 · 换后端不省内存：完整进程实测 DX12 最省
+
+**决定**：保持 DX12。评估过 Vulkan / GL 后发现它们**更吃内存**，
+ADR-011 留的"内存成硬指标时可换 OpenGL 翻案"选项已被数据关闭。
+
+**依据**：
+- `scripts/mem-backend.sh`（隔离 portable、真实配置参数、重复多轮、
+  预热后稳态 WS 中位数）实测：
+  - AMD 核显：DX12 131–136 MB；Vulkan 183–194 MB（多 ~50 MB）
+  - NVIDIA 独显：DX12 182 MB；Vulkan 200 MB；GL 246 MB
+- 与 device 级探针结论相反：探针上空设备 Vulkan 比 DX12 省
+  （AMD 103 vs 164、NVIDIA 79 vs 87），但完整进程要算驱动 DLL 与私有堆，
+  Vulkan 驱动栈在进程内更贵。这是本项目第二次被"空设备探针 ≠ 完整进程"
+  误导（第一次见 ADR-109 独显/核显）。
+- `NOOKSILL_BACKEND=vulkan|gl` 是现成开关（`gpu.rs::requested_backends`），无需改代码
+  即可 A/B；`ADR-072` 已实测 DX12/Vulkan 出图逐像素一致，故结果纯是内存差，
+  不涉及渲染正确性。
+- 换 `egui_glow`（ADR-011 原始提案）成本更高：自写 FBO 回读约 250 行 +
+  RDP/VM 的 GL 1.1 回退，而 wgpu-GL 已经实测是最差的一档（246 MB）。
+
+**代价**：放弃"换后端省内存"这条路。注意测量本身波动大（同为 DX12+NVIDIA
+在两轮里 155 vs 182 MB，差 27 MB），结论靠的是**多轮趋势**而非单次绝对值；
+若未来驱动大版本更新，用同一脚本重测即可。
+
+---
+
+## ADR-116 · 插件接口扩展到全部声明式行为
+
+**决定**：在保持"不加载代码"的前提下扩展 `mc.dock-plugin/v1` 的 `contributes`：
+新增 `text`（白名单字符串字段）、`dockItems`（临时 Dock 项）、`iconPack`
+（图标覆盖）、`hotkeys`（Toggle/Launchpad 组合）；`labelColors` 增加调色板
+与名称规则。数值 `settings`、`accent` 保持原样。`plugin.rs` 拆为
+`plugin/{mod,parse,apply,tests}.rs`，公开路径不变。
+
+**依据**：
+- 用户要求"允许更多修改行为"，但仍要求纯声明式安全模型。所有新字段都走
+  白名单、长度上限与现有 sanitizer；图标文件名拒绝路径分隔符；Dock 项以
+  `temp = true` 只存在内存，禁用即移除，不污染用户 ini。
+- 字符串/热键覆盖在启用时快照原值，禁用时还原；覆盖不写回 ini，因此重启后
+  插件关闭即回到用户配置。数值键沿用已有 `plugin_base` 机制。
+- `plugin.rs` 生产代码超过 600 行门禁阈值，按项目约定拆目录；`lib.rs` 的
+  `pub mod plugin` 与全部 `pub fn` 保持不变。
+- Wiki 两处维护：`docs/wiki/` 为仓库内源，GitHub Wiki 由同一批 Markdown 推送。
+
+**代价**：新增字段都需各自的还原路径，静态 base 只在本进程有效——若插件在
+应用关闭期间被禁用，重启后 ini 本来就是用户值，故无数据丢失。图标包不支持
+嵌套目录，文件名需唯一。Wiki 需手动保持两处同步，没有 CI 自动镜像。
+
+## ADR-117 · 隐藏窗口只释放分层 DIB，GPU 目标与 Context 全部保留
+
+**决定**：`FrameRenderer` 把 `offscreen` 与 `presenter` 拆成两个独立可空槽位。
+`new()` 不再分配任何像素缓冲，首帧才建；窗口隐藏时只 drop `LayeredPresenter`
+（`DeleteObject` 释放 DIB），GPU 目标保留；出帧前按需重建。`render_rgba` 只
+保证 offscreen，不再为没有窗口的离屏截图建 DIB。接入点为
+`framework::hide_panel`、设置窗 `hide`、起动台 `close`、右键菜单与编辑窗关闭。
+
+**依据**：
+- 新增同进程 A/B 探针 `examples/mem_targets.rs`：真实分层窗口 + 真实 `render`
+  上屏路径，7 个窗口（6 个预热面板 + 设置窗），ppp 1.5 / Msaa 4。NVIDIA 与
+  AMD 两卡稳态完全一致：**省 13.49 MiB WS / 13.5 MiB private**，第 2 轮起逐位
+  稳定，restored 与 live 漂移 **0.00**。这 7 个窗口的 DIB 解析字节合计
+  13.47 MiB，与收益吻合——收益来自 DIB，与适配器无关。
+  （单位口径：`MemStats` 与探针都除 1024×1024，所以本文一律写 **MiB**；
+  早先版本误标成 MB，已改。）
+- 先实现过"连 GPU 目标一起释放"的版本：WS 收益同样是 13.49 MiB，但**私有提交
+  稳态抬高约 48 MiB**（283 → 331），6 轮确认收敛而非泄漏。只释放 DIB 后漂移
+  归零，故取后者。**这 48 MiB 的归属未定位**，不要当成已知机制：同一组数据里
+  restored 395.4 → 下一轮 live 331.2，光是等待就掉 64 MiB，说明采样时 wgpu 的
+  延迟销毁还没追上，"永久高水位"这个说法本身也偏强。
+- 新增分解探针 `examples/mem_surface.rs` 单独隔离两类缓冲。**关键是分配与
+  释放并不对称**，只测一个方向会得出相反结论（GPU 目标解析总量 81.17 MiB）：
+  | 方向 | NVIDIA WS | NVIDIA private | AMD WS | AMD private |
+  |---|---|---|---|---|
+  | 分配 GPU 目标 | **+31.36** | +143.11 | **+16.92** | +120.11 |
+  | 释放（3 轮） | 0.00 | 0.00 | 0.00 | 0.00 |
+  | 再分配（2 轮） | **0.00** | 0.00 | **0.00** | 0.00 |
+  | 释放 DIB | **14.46** | 18.24 | **14.14** | 13.52 |
+  **GPU 目标确实计入进程 WS**（分配时 +31 / +17 MiB），但**释放一点不还，
+  再分配还不要钱**——内存被分配器池化留着，没交回系统。DIB 则两个方向都
+  如实进出。这才是"只释放 DIB"的真正理由，不是"GPU 内存不算进 WS"。
+  首轮偶有几 MiB 的释放收益是采样时机造成的：多等一个采样周期就归零。
+- 这条同时**调和了 BUILD.md 结论二与本 ADR**：老 spike 测的是"分配 19 MB
+  缓冲 → WS +64 MB"（获取方向），本 ADR 测的是"释放 → WS −0"（回收方向），
+  两者都成立，不矛盾。老数字还是 ADR-013 调优**之前**的，不能当现值引用。
+- 离屏路径不写 DIB，未触碰的 DIB 页不会常驻：用 `render_rgba` 做探针只能测出
+  0.5 MB，必须走 `render` 才是真值。这条写进探针注释以免后人重踩。
+- Qt 官方 `QVulkanWindowRenderer` 把 `initResources`（设备级、昂贵、保留）与
+  `initSwapChainResources`（窗口尺寸级、可释放）分开，正是本改动的形状。
+- DIB 是 GDI 系统内存，`DeleteObject` 立即回收，不经图形分配器。GPU 侧另有一套
+  驻留记账：Microsoft Learn《Residency》说明 GPU 可访问内存在 API 对象创建时
+  驻留、销毁时逐出，按显存预算管理，UMA 适配器只有一个内存段（系统内存）。
+  **但"另有一套记账"不等于"进程 WS 看不见"**——上表实测分配时 WS 确实涨。
+  初稿把这两件事混为一谈，是错的。
+  <https://learn.microsoft.com/zh-cn/windows/win32/direct3d12/residency>
+- **勘误**：本 ADR 初稿写"placed resource 归还 `gpu-allocator` 后堆不回收"，
+  读源码后证伪。`gpu-allocator-0.28.0/src/d3d12/mod.rs:474-502` 的 `free` 在
+  子分配器空时会 `memory_blocks[idx].take()` 并注释 "block will be destroyed on
+  drop here"，**空块确实销毁**；唯一例外是保留最后一个通用块（源码注释：
+  ensuring there's always at least one block/allocator readily available），
+  dedicated 块空了一定释放。故不可把观测到的私有提交抬高归因于"堆不回收"。
+- 缓冲落在哪类内存也读源码确认：`wgpu-hal-30.0.1/src/dx12/suballocation.rs`
+  的 `create_texture` 恒为 `GpuOnly`；`create_buffer` 按 usage 分流，回读缓冲
+  （仅 `MAP_READ`）是 `GpuToCpu`，且每帧被 CPU 映射读取——所以"回读页一定不
+  驻留"是想当然，实测才作数（见上表）。
+
+**代价**：重新打开窗口多一次 `CreateDIBSection`。实测（`mem_surface`，最大窗口
+1340×1080，200 次）**p50 0.010–0.011 ms、p95 0.011–0.013 ms、max 0.06–0.18 ms**，
+比 ADR-089 测到的建窗 + 装 CJK 字体 + 编译管线小三个数量级，预热收益不受影响。
+`CreateDIBSection` 失败（GDI 资源耗尽）从构造期推迟到首帧，仍沿 `render` 的
+`Result` 上抛，只是报错点后移一帧。Dock 栏本体不释放：实测其窗口 1927×233
+（默认配置、12 项、dpi 144）对应 DIB **1.71 MiB**，而自动隐藏时会频繁重现，
+不值得用揭示延迟换这点内存。
+本改动与 `PreloadPanels=0` 互斥受益——关掉预热就没有这些窗口可释放；保留
+预热则既保住首开延迟，又拿回约 13.5 MiB。
+
+## ADR-118 · 错误类型改用 thiserror derive，按值分流的两个保留手写
+
+**决定**：`GpuError`、`GroupError`、`ParseError`、`MutexError`、`PathsError`、
+`TrayError`、`NetError` 七个类型改用 `#[derive(thiserror::Error)]`。
+`LaunchError` 与 `UpdateError` **保留手写 `Display`**，前者补上
+`impl std::error::Error`。`nooksill-core` 破例引入一个依赖。
+
+**依据**：
+- **零新增 crate**：`cargo tree -i thiserror` 显示 thiserror 2.0.21 早已在
+  `Cargo.lock` 里，由 egui-wgpu 0.37 / wgpu 30 / naga 30 / gpu-allocator 0.28 /
+  glass-backdrop 带入并参与编译。显式声明只是把既有事实写进 manifest。
+- **与体积优先 profile 不冲突**：thiserror 是 proc-macro，编译期展开，没有
+  运行时产物，不进二进制；`opt-level="z"` + `lto="fat"` + `strip` +
+  `panic="abort"` 全部照旧。
+- **体积实测（不是"零成本"想当然）**：`package.sh --release` 前后
+  **8328704 → 8329216 字节，+512 字节**（+0.006%），恰好一个 PE 文件对齐单位。
+  增量来自新写的 `source()` 与 `Error` impl，不是 thiserror 本身。
+  after SHA256 `66ED841619CF3791CD916A8DECA1CAAB33686C4C5538c373b3c585a907b41640`。
+- **运行时 i18n 不受影响**：文案走 `i18n::t` / `i18n::fmt` 查表，
+  `#[error("{}", 表达式)]` 接受任意表达式，仍在 `Display` 调用时求值。
+  键注册检查 `i18n/tests.rs::every_call_site_key_is_registered` 是去注释后
+  **纯文本扫源码**，写在 attribute 里的键照样扫得到（门禁 core 326 项通过）。
+- **两个类型无法 derive**：`LaunchError::Shell` 按 **值**分流
+  （0/2/3/5 各有文案），`UpdateError::Net` 按**嵌套变体**分流
+  （`Net(NetError::Status(403|429))` 单独给限流文案）。per-variant derive
+  表达不了这两种分派，强行改会丢文案，故保留手写。
+- **diesel 不引入**：它是 ORM + 编译期校验的查询构造器，需要 `table!` schema、
+  migrations、diesel_cli 与原生 libsqlite3。本项目持久化是 INI 键值 + 手写
+  JSON parser（`platform/json.rs`，连 serde 都没直接依赖），无表无 join 无查询。
+  <https://docs.rs/diesel/latest/diesel/> · <https://docs.rs/thiserror/latest/thiserror/>
+
+**代价**：
+- **`nooksill-core` 的 `[dependencies]` 原本刻意为空**，注释要求"任何宿主可
+  编译、任何 Win32 依赖属于越界"。thiserror 是跨平台纯 proc-macro，不违反本意，
+  故把注释改述为精确口径：**只允许与宿主无关的 crate**。这是本 ADR 唯一放宽的
+  架构约束，后续新增 core 依赖须照此判定。
+- `PathsError::Io` 用 `#[from]` 替代手写 `From`，**副作用是新增了 `source()`**
+  （原空 impl 没有）。其 `Display` 已打印 io 消息，`source()` 又返回同一个
+  error，将来若引入错误链打印会重复一次。已确认当前仓库无任何链式打印
+  （无 anyhow/eyre、无 `.source()` 遍历），故暂不改文案。
+- **测试必须串行化语言切换**：`i18n::set_language` 是进程全局 `AtomicU8`，
+  并行测试会互相改语言。`tests/error_display.rs` 用 `static LANG: Mutex<()>`
+  加锁；重复加锁会死锁（std Mutex 不可重入），批量改写时踩过一次。
+
+## ADR-119 · 双渲染路径：默认 CPU 软件光栅，GPU 加速改为可选开关
+
+**决定**：新增「GPU 加速」设置，**默认关闭**。关闭时 Dock 栏走自研 CPU
+光栅器 `nooksill_gpu::soft`，进程内**不创建 wgpu 设备**；打开时走现有
+egui-wgpu 路径。**设置窗始终走 GPU**。本条推翻 ADR-001 / ADR-011 / ADR-110
+的**「全进程只有一个渲染后端」这一前提**，但**不推翻它们的测量数据**——
+在「必须用 GPU」的前提下，DX12 确实最省，那些数字仍然成立。
+
+**特效策略（用户拍板）**：CPU 模式下**毛玻璃只抓一帧**、**烟雾直接关闭**。
+落地方式不是新写机械——`frost::Spec::apply()` 本来就是「抓一帧 → 试 GPU →
+失败回退 CPU compose」，持续刷新是独立的 `frost::Live` 线程。所以「一帧式」
+= 走 compose 分支 + 不启动 Live；`frost/paint.rs::blur_rgba` 是现成的 CPU
+高斯模糊。烟雾开关放在 **dock 层**而非 core：`Tuning` 定义在 nooksill-core，
+core 必须与宿主无关。
+
+**依据**：
+- **奖金实测**（`examples/mem_nogpu.rs`，ppp 1.5，本机）：进程内完全不建
+  GPU 设备时，空基线 WS 10.25 / 私有 1.83 MiB；加一个真实分层 Dock 窗口
+  （1669×233，DIB 1.48 MiB，1028 三角形，含 CJK 字体的 egui Context 与真实
+  tessellate）后 **WS 23.78 / 私有 13.84 MiB**；再加 7 个面板 WS 53.99 /
+  私有 43.84 MiB。对照用户真实 GPU Dock 的 **WS 207 / 私有 381.6 MiB**。
+  驱动与着色器地板是可以整块移除的，不是微优化能碰到的量级。
+- **该探针只量缓冲，不量帧耗时**：光栅那一步用 memset 代替，因为扫描线
+  光栅器写的是同一块分配。帧耗时由 `examples/soft_bench.rs` 单独回答，见下。
+- **CPU 帧耗时实测**（`soft_bench`，ppp 1.5，12 个带纹理图标，120 帧取中位
+  数，Dock 1993×233 = 0.46 Mpx）。**下面这组是坐标空间修正前的旧值，已作废**
+  （当时整栏只画了 1/ppp 尺寸，覆盖像素与参与光栅的三角形都偏少）：
+  静止 17.98 ms / 55.6 fps、最大放大 21.55 ms / 46.4 fps、设置窗 36.54 ms /
+  27.4 fps。**修正后的真实值见下表。**
+- **修正坐标空间后的帧耗时（当前有效）**：
+
+  | 场景 | 旧值（错缩放） | 修正后 |
+  |---|---|---|
+  | 完整场景 静止（每图标带圆角底衬，1424 三角形） | 17.95 ms / 55.7 fps | **60.77 ms / 16.5 fps** |
+  | 完整场景 最大放大（1904 三角形） | 21.51 ms / 46.5 fps | **66.45 ms / 15.0 fps** |
+  | 设置窗 1340×1080 = 1.45 Mpx | 36.77 ms / 27.2 fps | **112.70 ms / 8.9 fps** |
+  | SoftFrame 生产相位（无每图标底衬） | 15.65 ms / 63.9 fps | **18.84 ms / 53.1 fps** |
+
+  常驻 WS 24.71 / 私有 15.34 MiB（基本不变，缓冲尺寸一直是对的）。
+  完整场景与 SoftFrame 相位差 3.2×，是因为前者每图标多一个圆角底衬，
+  三角形数差约 1400 个；**真实 Dock 画底衬，故应以完整场景的 16.5 fps 为准**。
+  「设置窗走 GPU」的依据比原先更强（8.9 fps）。
+- **三步优化把光栅从 43.04 ms 降到 17.72 ms（2.43×），且全部位精确**：
+  ①1×1 纹理直接返回texel（egui 让所有无纹理图形走白像素，这是最热的采样）；
+  ②顶点色三顶点相同时跳过四通道插值；③白色调制直接透传；
+  ④**按行解析求跨度**取代逐像素包围盒测试——egui 把圆角矩形拆成中心扇形，
+  每个三角形的 bbox 远大于实际覆盖区，这一项单独就把 34.92 ms 降到 18.85 ms。
+  跨度只作保守裁剪（放宽 1 像素），最终仍由原精确内点测试判定，故 13 项
+  像素测试逐字节不变。
+- **现成 crate 不可用**：`dream-soft-render` 2.0.0 文档明确
+  「every blended pixel is written with alpha 255」——**输出不透明**，
+  而 Dock 是分层窗口、圆角要透出壁纸（ADR-008），不透明缓冲喂不了
+  `UpdateLayeredWindow`。另有 `MAX_SURFACE_PIXELS` = 1280×720（设置窗
+  1340×1080 超限）、`MAX_TEXTURE_BYTES` = 8 MiB、nearest 采样三条限制。
+  `uzor-render-tiny-skia` / `truce-cpu` 都不是 egui 后端。
+- **参考 wind-ui-rust**（huanfeng/wind-ui-rust）：tiny-skia + Win32/GDI DIB +
+  DirectWrite，最小窗口私有内存 2.7 MiB。它证明这条路走得通，但本项目
+  **已有** Win32 分层 DIB 呈现层（`present.rs`），缺的只是「把 egui 输出用
+  CPU 画出来」，故不换框架、保留 egui 的控件/布局/kittest。
+- **「克隆活着设备就活着」已实测**，这是空闲释放必须连面板一起丢的依据：
+  建一个 `Gpu` 并 `clone()`，丢掉原始句柄后 WS 只变 **−2.23 MiB**（采样噪声
+  量级），丢掉最后一个克隆才掉 **−40.83 MiB**。故隐藏面板持有的克隆足以
+  撑住全部驱动分配，只把 `App.gpu` 置 `None` 是无效的。
+- **坐标空间取证（曾把整条栏画错位置）**：egui 的 `ClippedPrimitive`
+  **顶点位置与 `clip_rect` 都是逻辑点**，不是物理像素。两处证据：
+  ①`epaint::Tessellator::tessellate_clipped_shape` 把 `clip_rect` 原样传出，
+  顶点也不乘 ppp（实测 ppp=2 时 32 点的矩形顶点仍是 `0.2 / 32.2`）；
+  ②`egui-wgpu` 的 `UniformBuffer.screen_size_in_points` 喂给
+  `egui.wgsl` 的 `position_from_screen`，物理分辨率由 viewport
+  （`size_in_pixels`）提供，裁剪则由 `ScissorRect::new` 单独乘 ppp。
+  软件光栅没有 viewport，**两者都必须在 `paint` 里乘 ppp**。
+  原实现两者都没乘，ppp=1 时恰好重合（16 项像素测试全过、看不出问题），
+  ppp=1.5 时整条栏按 2/3 尺寸画在左上角并被裁掉——这就是 CPU 模式的
+  「Dock 栏 DPI 位置问题」。已修为 `paint(prims, pixels_per_point)`
+  同时缩放顶点与裁剪，回归测试 `clip_rect_is_scaled_by_pixels_per_point`
+  用 ppp=2 断言远角仍被填充。
+- **因此此前的 CPU 帧耗时数字偏乐观**：那些实测是在「只画了 1/ppp 尺寸」的
+  栏上量的，覆盖像素数少了约 (1−1/ppp²)。修正后已重测，见下方帧耗时表。
+- **像素对齐取证**：`Gpu::COLOR_FORMAT` 是 `Rgba8UnormSrgb`，egui-wgpu 0.37
+  的 `fs_main_linear_framebuffer` 顺序为「gamma 空间采样 → 乘顶点色 →
+  RGB 转线性（alpha 不转）→ 硬件线性混合 → 存回时编码 sRGB」。纹理是
+  `Rgba8Unorm`（非 sRGB），`ColorImage` 与顶点色都是**预乘 gamma**。
+  `soft::color` 严格按此顺序实现，开关切换不应改变画面。
+- **实测抓到一个真 bug**：双线性在 uv=0 处若钳制**坐标**而非**每个采样点
+  索引**，会把相邻透明像素按 0.5 权重混进来，使 egui 用于所有无纹理图形的
+  白像素被稀释——整个 UI 掉到约 25% 不透明度（实测中心像素 [10,20,40,64]，
+  应为 [40,80,160,255]）。已修为钳制索引，并固化为回归测试
+  `edge_texel_is_not_diluted_by_its_neighbour`。
+- **一帧式毛玻璃有个必须补的失效判定**：`capture_behind_pct` 抓的是窗口
+  **当前屏幕矩形**背后的桌面。GPU 侧靠 `frost::Live` 每 tick 重读矩形，移动
+  或改尺寸会自愈；CPU 侧没有线程，若不显式判定就会把旧位置的桌面切片永久
+  拉伸在新位置上。故 `SoftFrame` 记录 `CaptureKey{rect,size,ppp,spec}`，
+  `refresh_frost` 只在键变化时重抓，并且**必须在调用方读 `frost_backdrop()`
+  之前**跑（`render.rs`）——尺寸变了会换纹理句柄，先取的句柄会指向已释放纹理。
+  回归测试 `the_backdrop_is_recaptured_only_when_its_inputs_change` 用真实
+  窗口逐项验证移动/改尺寸/改 DPI/改模糊半径都触发、静止与解除武装都不触发。
+- **不需要为移动限流，有据**：`step_relayout` 在尺寸与原点都没变时早返回，
+  `reposition()` 只有 2 个调用点；自动隐藏是**绘制期偏移**
+  （`hide_cur * (bar_h + margin + 14)`，`dock/paint.rs`），窗口矩形不动。
+  所以重抓只发生在换边/换屏/图标数变化/拖模糊滑杆这些离散事件上。
+  实测单次抓帧+模糊（radius 14）**9.38 ms**，静止时 `refresh_frost`
+  **0.0007 ms**——即静止零成本，离散事件付一次约 9 ms。
+- **整窗辉光在 Dock 上本来就不存在**：`frame/render.rs` 是
+  `let glow = if frost_whole { self.glow } else { None }`，而 Dock 一直
+  `set_frost_whole_window(false)`（整窗 sheet 会糊掉悬停区与倒影留白）。
+  故 `apply_soft` 不发布 corner/glow 没有造成任何缺失，`GlowStrength`
+  影响的是面板而非 Dock 栏。抗锯齿同理不缺：egui 把羽化烘进顶点 alpha，
+  MSAA 只是 GPU 侧额外的几何采样。
+
+**代价**：
+- **Dock 已接线**：`GpuAccel=0` 时 `boot.rs` **不创建 wgpu 设备**，Dock 走
+  `SoftFrame`（`softframe.rs`）；`=1` 时走原 `FrameRenderer`，GPU 路径代码
+  逐字未改。两者由 `bin/dock/frame_slot.rs` 的 `FrameSlot` 枚举分发，覆盖
+  Dock 用到的 16 个方法。设备改为 `Option<Gpu>` + `App::gpu()` 按需创建：
+  面板、菜单、Launchpad、设置窗首次打开时才付驱动地板。
+- **懒创建有四个必须堵的漏**，否则开关等于没开：①`PreloadPanels=1` 会在
+  启动时建齐 6 个 GPU 面板 → CPU 模式直接跳过预载；②`IconLoader::spawn`
+  收 `Option<&Gpu>`，传 `None` 走无着色器路径；③`SmokeFx::with_gpu` 换成
+  `SmokeFx::new()`；④`step_resmon` 每轮都跑，那里的重绘取设备必须用
+  **不创建**的 `App::panel_device(&self.gpu)`（槽位存在即设备已存在）。
+- **第五个漏曾使前四个白做（已修）**：`step_settings` 每轮无条件写
+  `tick_settings(&self.gpu()?, ..)`。**实参先于函数体求值**，所以
+  `tick_settings` 内部那句 `let Some(sw) = slot.as_mut() else { return }`
+  根本挡不住设备创建——CPU 模式在第一轮 tick 就付了驱动地板。
+  故本条一度写的「启动不创建设备」在修复前**是不成立的**。现改为
+  `if self.settings_slot.is_some()` 才取设备，`pump_update()` 仍每轮跑。
+  已把全部 **18 处 `self.gpu()`** 与 **11 处直接字段访问**逐一分类：
+  每轮路径只有 step_settings / step_notes / step_group / step_resmon /
+  preload，其余都在 `take_*` 标志、槽位判空或菜单命令分支之后；
+  字段访问全是 `as_ref()` 或 `panel_device`，都不创建。
+- **空闲释放设备（CPU 模式，5 分钟）**：`step_gpu_idle` 在
+  `!gpu_accel() && gpu.is_some() && !dock_busy() && 菜单/编辑槽皆空`
+  持续 300 秒后，先 `drop_panels_keeping_state()`（交接 cc_order 与计时器
+  快照）再丢设置窗/Launchpad，最后 `gpu = None`。**隐藏的面板仍持有
+  `Gpu` 克隆**，所以必须连面板一起丢；`Gpu` 是一束 Arc，最后一次 drop
+  才真正释放驱动分配。等待取 5 分钟是为了让日常开关面板永远碰不到它，
+  因为残留会随建/丢轮次爬升（见下）。
+- **生产路径端到端实测**（`soft_bench` 的 SoftFrame 相位，ppp 1.5，12 图标，
+  60 帧中位数）：**15.88 ms / 63.0 fps**，该相位常驻 WS 28.96 / 私有 19.35 MiB
+  （含此前设置窗相位的缓冲；纯 Dock 相位为 24.78 / 15.44）。
+- **CPU 路径帧率远低于此前的判断，取舍需重新拍板**：修正坐标空间后完整场景
+  只有 **16.5 fps**（放大 15.0 fps），不是原先以为的 55.6 / 46.4 fps。
+  用户当初「照原计划接线」是基于那组错误数字做的决定，**该决定的前提已不成立**。
+  可选方向：①脏矩形局部重绘（悬停放大只影响少数图标，`present_dirty` 已存在）；
+  ②静态栏缓存 + 只重画动画区；③降低每图标底衬的三角形数；④CPU 模式默认改为
+  开启 GPU，只在明确要求省内存时关。尚未选定。
+- **设置窗尚未强制 GPU**：目前设置窗与其他面板一样按需取设备，效果上等价
+  （它必然创建设备），但「始终 GPU」这条并未写成独立断言。
+- **图标圆角在 CPU 模式下并未丢失**（本条原写「CPU 版未做」，是错的）：
+  `worker/icons.rs` 的 `process()` 在 shader 为 `None` 时走
+  `nooksill_core::icon::apply_round_mask`，与 `icon.wgsl` 是同一套角判定
+  （同样的 `r.min(bw.min(bh)/2)`、同样的 dx/dy 平方测试），两者都是硬边。
+  ADR-066 早已写明「CPU 实现全部保留为回退与像素级基准」，本条曾与之矛盾。
+- **打开过面板后驱动地板会留下，直到空闲释放**：CPU 模式延后了设备创建，
+  并在空闲 5 分钟后归还。`gpu_drop` 探针实测（7 次采样取中位数，600 ms 沉降）：
+  NVIDIA 基线 11.62 →
+  建设备 129.64（**+118.02 MiB WS**）→ 丢弃设备 55.73（**+44.11 vs 基线**），
+  即丢弃归还约 74 MiB，但残留 44 MiB 收不回；AMD 11.08 → 91.22（+80.14）→
+  44.38（+33.30），归还约 47 MiB。**残留随建/丢轮次爬升**：NVIDIA
+  44.11 → 50.18 → 51.97，AMD 33.30 → 38.16 → 45.25，说明反复建丢会渐进恶化。
+  因此「最后一个面板关闭后释放设备」能省约 74 MiB，但代价是面板重开要重付
+  设备创建，且每次循环留一点残留。用户拍板取**空闲若干分钟后释放**，
+  已按 300 秒实现（见上）。这组残留也为 ADR-117 至今未定位的 +48 MiB
+  private 提供了方向，但尚未证实是同一笔。
+- **空闲释放的代价**：触发后面板重开要重建窗口与设备（一次约百毫秒量级），
+  且面板内的瞬时 UI 状态（滚动位置等）丢失——持久状态已按
+  `drop_panels_keeping_state` 交接。5 分钟阈值与残留爬升是同一权衡的两面。
+- **两条路径长期并存**：同一份 UI 要维护两套绘制正确性，kittest 截图
+  比对需要覆盖两种模式，否则 CPU 路径会悄悄劣化。
+- **自研光栅器的维护成本**：抗锯齿依赖 egui 的 feathering，采样与混合
+  规则必须跟着 egui 版本走；升级 egui 时要重跑像素对齐验证。
+
+---
+
+## ADR-120：图形设置改动后自动重启进程
+
+**决定**：改动 `GpuAccel` 或 `[Graphics] Adapter` 后，Dock 立即退出并自动重启，
+不再要求用户手动重开。实现分三段：
+
+1. `nooksill_platform::restart::after_exit()` 写 `%TEMP%\nooksill-restart.cmd`
+   并以 `cmd /C start "" /min` 脱离启动；脚本 `:wait` 轮询
+   `tasklist /FI "IMAGENAME eq <exe>"`，进程消失后才 `start "" "<current>"`，
+   最后 `del "%~f0"` 自删。
+2. `App.gfx_key: (bool, String)` 在 `boot` 快照 `(GpuAccel, Adapter)`；
+   `step_gfx_restart()` 挂在 run_loop 7.5（`step_settings` 之后），
+   变化时 `touch_cfg()` + `pending_restart = true` + `PostQuitMessage(0)`。
+3. `main` 关机段 `flush_pending_writes()` → `RevokeDragDrop` → `drop(app)`
+   之后，若 `pending_restart` 才调 `after_exit()`。
+
+**依据**：
+
+- **两个设置都只在启动时生效**：`FrameSlot` 在 `boot` 按 `GpuAccel` 二选一，
+  `Gpu::new(&cfg.adapter)` 也只在那里调一次。运行期改 ini 不会换渲染路径、
+  也不会换卡——`satellite.rs` 原注释已写明这一点。所以「改了没反应」不是 bug，
+  是设计缺口，重启是最小且确定的补法。
+- **不能直接 spawn 新进程**：单实例互斥量 `SINGLETON_MUTEX` 是全局的，
+  `SingleInstance::acquire()` 靠 `GetLastError() == ERROR_ALREADY_EXISTS` 判定；
+  旧进程还活着时新进程会走 `boot.rs` 的 `summon(WINDOW_CLASS)` 唤起旧窗口然后退出，
+  **结果是「没重启」**。因此必须等旧进程真正退出，这也是更新脚本早就采用的握手。
+- **不能 `process::exit`**：`update.rs::apply_update` 的注释已记过这个坑——
+  跳过析构会丢掉 AppBar 的 `ABM_REMOVE` 和配置写回。故只置标志 + `PostQuitMessage`，
+  真正动作放在 `drop(app)` 之后。
+- **配置一定先落盘**：`flush_pending_writes()` → `DiskWriter::shutdown(job)`
+  内部 `submit(job)` 后 `thread.join()`，**会等写盘线程结束**才返回。
+  新进程因此读到的是新值，不会「重启后设置回滚」。
+- **不会误触发重启循环**：全仓核查 `cfg.adapter` 的写入点只有三处——
+  ini 载入、插件显式 set、设置页下拉框；**显卡回退不回写 cfg**，
+  所以「配置的卡找不到 → 回退核显」不会造成快照与 cfg 长期不一致。
+  `gfx_key` 在 boot 用同一份 cfg 初始化，首轮必然相等。
+- **脚本名与更新脚本分开**：更新用 `nooksill-update.cmd`，重启用
+  `nooksill-restart.cmd`，避免互相覆盖。`main` 里两者是 `if / else if`，
+  更新本身已经会重启，不重复触发。
+
+**代价**：
+
+- 重启会关掉所有面板与设置窗，瞬时 UI 状态（滚动位置等）丢失；持久状态靠
+  退出前写盘保住。这是「设置立即生效」换来的。
+- 依赖 `cmd` + `tasklist` + `ping` 三个系统命令，与更新脚本同一套依赖；
+  极简 WinPE 之类缺 `tasklist` 的环境下等待循环会立刻放行，可能撞上互斥量。
+  正常 Windows 桌面不受影响。
+- 等待粒度是 `ping -n 2`（约 1 秒一轮），所以重启不是瞬时的，栏会消失约 1–2 秒。
+- **未做真机整进程验证**：用户自己的 Dock 在跑，单实例互斥量挡住第二个实例，
+  本轮没有杀用户进程。正确性由平台侧 2 项脚本断言 + 上述代码路径取证保证，
+  真机重启行为待用户实际点一次开关确认。
+- MSAA 仍然是「下次启动生效」，未纳入本次自动重启范围（用户只要求这两项）。

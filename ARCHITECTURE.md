@@ -88,6 +88,15 @@ GetUserDefaultUILanguage ─┴→ i18n::configure → AtomicU8 → t() / fmt()
 `render_rgba` 共用同一份实现 —— 这条链路原先两边各写一遍，逐行相同，任何
 API 变动都要改两处。
 
+像素缓冲按「设备级 / 窗口级」分家（ADR-117）：egui Context、字形图集与 wgpu
+管线属设备级，建一次留终身；`offscreen`（GPU 目标 + 回读缓冲）与 `presenter`
+（分层 DIB）属窗口级，各自一个可空槽位。`new()` 两个都不分配，首帧才建；
+窗口隐藏时只 `release_dib()` 释放 DIB —— 它是唯一**释放后真能换回**进程工作集
+的缓冲，实测 7 个窗口共 13.5 MiB。GPU 目标分配时确实抬 WS（+31 / +17 MiB），
+但释放一点不还、再分配也不再花钱：内存被图形分配器池化留着（ADR-117）。
+`render` 前 `ensure_targets()` 补齐，
+`render_rgba` 只 `ensure_offscreen()`（离屏截图没有窗口，不需要 DIB）。
+
 1. 调用方组装 `egui::RawInput`（含 `screen_rect`、`time`、`viewports`），
    传给 `render(raw, hwnd, pos, |ui| ...)`。
 2. `ctx.run_ui(raw, build)`：闭包里只负责画。
@@ -620,3 +629,13 @@ async 运行时带来的调度开销与栈占用都不划算。
 46. **真机测试不用 `#[ignore]` 藏起来**：硬件/桌面测试统一用 `test_env` 运行时
     探测，有设备就执行，headless CI 快速返回；门禁因此报告 0 ignored，
     测试数真实反映可运行项（761 项）。
+
+47. **隐藏窗口必须交回 DIB，但只交 DIB**：任何新增的常驻窗口在隐藏路径上要调
+    `FrameRenderer::release_dib()`（面板走 `framework::hide_panel` 已统一收口），
+    否则每个空闲窗口都会白占一份 `w × h × 4` 的系统内存。反过来，**不要顺手把
+    `offscreen` 也释放**：GPU 目标分配时确实计入 WS，但释放拿不回来、再分配
+    也不再花钱（分配器池化），所以释放它只有 churn 没有收益，私有提交稳态
+    还抬高约 48 MiB，且该抬高的归属尚未定位（ADR-117）。
+    释放只能发生在窗口确实隐藏之后 —— 可见窗口释放会露出一帧陈旧 DWM 内容。
+    尺寸由 `FrameRenderer::size` 单独记录，释放期间 `resize` 只改记录不重建，
+    所以菜单每次开合仍不会多分配一次。

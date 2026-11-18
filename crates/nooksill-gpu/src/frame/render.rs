@@ -92,14 +92,14 @@ impl FrameRenderer {
 
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
-        (self.offscreen.width(), self.offscreen.height())
+        self.size
     }
 
     /// MSAA sample count. The screenshot tool prints it so the
     /// anti-aliasing level can be verified.
     #[must_use]
     pub const fn samples(&self) -> u32 {
-        self.offscreen.samples()
+        self.samples
     }
 
     /// Sets the reflection parameters, effective on the next frame.
@@ -126,25 +126,27 @@ impl FrameRenderer {
         pos: (i32, i32),
         build: impl FnMut(&mut egui::Ui),
     ) -> Result<FrameOutcome, GpuError> {
+        self.ensure_targets()?;
         let outcome = self.draw_frame(gpu, raw, build);
         {
-            let presenter = &mut self.presenter;
+            let offscreen = self.offscreen.as_ref().expect("targets ensured above");
+            let presenter = self.presenter.as_mut().expect("targets ensured above");
             // Write the mapped pixels straight into the DIB: no full-frame
             // Vec allocation and no extra copy. The readback rows are padded
             // to the 256 byte alignment while the DIB rows are tightly
             // packed, so the stride has to be passed along; the DIB holds
             // premultiplied BGRA, which is what the swap produces.
-            self.offscreen
+            offscreen
                 .with_mapped_pixels(&gpu.device, |data, stride| {
                     presenter.upload_rgba_strided(data, stride as usize);
                     Ok(())
                 })
                 .map_err(GpuError::Wgpu)?;
+            if let Some(spec) = self.reflection {
+                presenter.mirror_below(spec);
+            }
+            presenter.present(hwnd, pos.0, pos.1)?;
         }
-        if let Some(spec) = self.reflection {
-            self.presenter.mirror_below(spec);
-        }
-        self.presenter.present(hwnd, pos.0, pos.1)?;
         Ok(outcome)
     }
 
@@ -156,9 +158,13 @@ impl FrameRenderer {
         raw: egui::RawInput,
         build: impl FnMut(&mut egui::Ui),
     ) -> Result<(Vec<u8>, FrameOutcome), GpuError> {
+        // Offscreen only: no window is involved, so no DIB is needed.
+        self.ensure_offscreen();
         let outcome = self.draw_frame(gpu, raw, build);
         let pixels = self
             .offscreen
+            .as_ref()
+            .expect("offscreen ensured above")
             .read_pixels(&gpu.device)
             .map_err(GpuError::Wgpu)?;
         Ok((pixels, outcome))
@@ -262,7 +268,7 @@ impl FrameRenderer {
         }
 
         let screen = ScreenDescriptor {
-            size_in_pixels: [self.offscreen.width(), self.offscreen.height()],
+            size_in_pixels: [self.size.0, self.size.1],
             pixels_per_point,
         };
         let mut encoder =
@@ -274,11 +280,12 @@ impl FrameRenderer {
             self.renderer
                 .update_buffers(&gpu.device, &gpu.queue, &mut encoder, &jobs, &screen);
 
+        let offscreen = self.offscreen.as_ref().expect("targets ensured above");
         {
             // With MSAA the color goes into the multisampled texture and the
             // hardware resolves it into the offscreen texture; without MSAA
             // `color_target()` points both views at the same texture.
-            let (color, resolve) = self.offscreen.color_target();
+            let (color, resolve) = offscreen.color_target();
             let mut pass = encoder
                 .begin_render_pass(&egui_wgpu::wgpu::RenderPassDescriptor {
                     label: Some("nooksill"),
@@ -303,7 +310,7 @@ impl FrameRenderer {
                 .forget_lifetime();
             self.renderer.render(&mut pass, &jobs, &screen);
         }
-        self.offscreen.copy_to_buffer(&mut encoder);
+        offscreen.copy_to_buffer(&mut encoder);
         gpu.queue
             .submit(buffers.into_iter().chain([encoder.finish()]));
 

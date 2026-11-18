@@ -22,26 +22,18 @@ pub const WM_APP_TRAY: u32 = WM_APP + 2;
 const TRAY_ID: u32 = 1;
 
 /// Why the tray icon could not be created.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TrayError {
     /// `Shell_NotifyIconW(NIM_ADD)` failed (Explorer not ready or blocked).
+    #[error("{}", nooksill_core::i18n::t("The system tray is unavailable"))]
     Add,
     /// Even the system default icon is unavailable.
+    #[error(
+        "{}",
+        nooksill_core::i18n::t("The application icon could not be loaded")
+    )]
     NoIcon,
 }
-
-impl std::fmt::Display for TrayError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Add => f.write_str(nooksill_core::i18n::t("The system tray is unavailable")),
-            Self::NoIcon => f.write_str(nooksill_core::i18n::t(
-                "The application icon could not be loaded",
-            )),
-        }
-    }
-}
-
-impl std::error::Error for TrayError {}
 
 /// Tray icon. RAII: removed on drop, so no dead icon is left in the tray.
 #[derive(Debug)]

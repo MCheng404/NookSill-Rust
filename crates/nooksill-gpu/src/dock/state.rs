@@ -55,7 +55,7 @@ impl Dock {
         self.metrics = m;
 
         // Base centres feed the magnification weights; never use zoomed ones.
-        let base_c = layout::base_centers(&m, &kinds, m.widget_extra);
+        let base_c = layout::base_centers(&m, &kinds, m.signed_widget_extra());
 
         // Magnify animation: exponential approach to the target size.
         let view = layout::View {
@@ -84,7 +84,7 @@ impl Dock {
         }
         // External drop reserves one icon-wide slot at the landing index.
         let insert = self.external_drop.map(|at| (at.min(cur.len()), m.s));
-        let slots = layout::place_slots_insert(&m, &cur, m.widget_extra, insert);
+        let slots = layout::place_slots_insert(&m, &cur, m.signed_widget_extra(), insert);
         let bars = layout::bars(&m);
         self.hot = layout::hit_test(&m, &bars, &slots, &cur, view);
 

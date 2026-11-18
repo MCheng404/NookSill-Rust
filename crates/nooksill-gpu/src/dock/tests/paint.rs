@@ -384,16 +384,14 @@ fn gradient_endpoints_follow_direction() {
 // Separator resize.
 
 #[test]
-fn custom_bar_colour_is_flat_and_ignores_gradient_keys() {
+fn old_custom_bar_colour_is_ignored() {
     use nooksill_core::config::{Config, Key};
 
     let mut cfg = Config::default();
     cfg.apply_i32(Key::BgColor1, 0x00CC_6633);
     cfg.apply_i32(Key::BgColor2, 0x0011_2233);
-    cfg.apply_i32(Key::BG_COLOR3, 0x0044_5566);
     let (a, b) = crate::dock::paint_cards::bar_colors_of(&cfg, false);
-    assert_eq!(a, b, "自定义色必须是纯色，不能再带渐变端点");
-    assert_eq!(a, (51.0, 102.0, 204.0), "COLORREF 是 BGR 字节序");
+    assert_ne!(a, b, "自定义颜色已移除，仍走主题两级色");
 }
 
 #[test]

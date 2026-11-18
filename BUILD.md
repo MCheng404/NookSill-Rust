@@ -36,6 +36,13 @@ source scripts/env.sh              # 必须。注入 INCLUDE/LIB/PATH + CC/CXX/A
 
 PowerShell 等价入口：`powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Mode test`。
 
+**测试会弹系统授权框的坑（Windows 11 24H2）**：`WlanQueryInterface` 取
+`wlan_intf_opcode_current_connection` 被纳入**精确位置**授权，首次调用弹
+「Allow … to access your location?」并**阻塞**测试进程。cargo 每次改依赖都换
+测试 exe 名，系统认成新应用，于是每次门禁都弹。`test_env::consent_probes()`
+默认关掉该探测，要跑就 `NOOKSILL_CONSENT_PROBES=1`。生产 exe 路径固定，只弹一次。
+依据：<https://learn.microsoft.com/zh-cn/windows/win32/nativewifi/wi-fi-access-location-changes>
+
 `env.sh` 的三条注入路径（按优先级）：
 1. PATH 里已有 `cl.exe`（CI 的 `msvc-dev-cmd`、已初始化的 vcvars shell）→ 只补 `CC/CXX/AR`，不动 `INCLUDE/LIB`；
 2. `vswhere` 定位任意 VS 实例 → 取该实例下版本号最大的工具集；
@@ -165,6 +172,10 @@ PrivateUsage）。早期文档写「与界面 RSS 同一口径」已失真：当
 
 **结论二：19 MB 的缓冲在 wgpu 下被放大成 +64 MB 工作集**（DX12 / Vulkan 都是）。
 D3D11 下同样三块只让私有提交 +19 MB、工作集几乎不动（没写过的页不驻留）。
+**两条限定**（2026-11-18 补）：① 这是 ADR-013 调优**之前**的数字，不是现值；
+② 它测的是**分配方向**。`mem_surface` 实测释放方向不对称——GPU 目标分配抬
+WS，释放却一点不还，再分配还不要钱（内存被分配器池化留下）。所以本条与
+ADR-117「释放 GPU 目标不省 WS」**并不矛盾**，别把两者当成互相推翻。
 
 **结论三：OpenGL 是"保住 egui 又省内存"的中间档。** 52 MB，约 wgpu-DX12 的 1/3，
 原生 D3D11 的 1.3 倍。据此曾提议 ADR-011（换 `egui_glow`），**已否决**。
@@ -262,6 +273,48 @@ OpenGL 路径多 ~110 MB），以及一个独立项目把 wgpu-DX12 的空设备
 同一台机器 device 级探针只有 80 MB——差额是 7 套 FrameRenderer 的离屏纹理、
 DIB、egui Context / atlas 与 worker 栈，这部分才是业务侧可优化的空间。
 
+**隐藏窗口 DIB 释放（2026-11-18，ADR-117）**：面板 / 设置窗 / 起动台 / 右键
+菜单 / 编辑窗隐藏时 drop `LayeredPresenter`，GPU 目标、egui Context 与管线全部
+保留，出帧前按需重建；`FrameRenderer::new` 也不再预分配像素缓冲。
+
+同进程 A/B 探针 `examples/mem_targets.rs`（真实分层窗口 + 真实 `render` 上屏
+路径，7 个窗口 = 6 预热面板 + 设置窗，ppp 1.5 / Msaa 4，每相位 7 次采样取中位数）：
+
+| 相位 | NVIDIA WS | AMD WS | NVIDIA private | AMD private |
+|---|---|---|---|---|
+| 全部持有 DIB | 152.6 MiB | 123.5 MiB | 279.3 MiB | 222.2 MiB |
+| 隐藏后释放 DIB | 139.1 MiB | 110.0 MiB | 265.8 MiB | 208.7 MiB |
+| 重新出帧 | 152.6 MiB | 123.5 MiB | 279.3 MiB | 222.2 MiB |
+
+**省 13.49 MiB WS / 13.5 MiB private，两卡逐位一致，restored 与 live 漂移 0.00**
+（第 2 轮起 5 轮稳定）。这 7 个窗口的 DIB 解析字节合计 13.47 MiB，与收益吻合。
+单位口径：`MemStats` 除 1024×1024，所以是 **MiB**，不是 MB。
+
+复现：`cargo run --release -p nooksill-gpu --example mem_targets -- 1.5 4 5`，
+`PROBE_ADAPTER=AMD|NVIDIA` 钉卡。两条踩坑记录：
+
+- **必须走 `render` 而不是 `render_rgba`**：离屏路径不写 DIB，未触碰的 DIB 页
+  不会常驻，用 `render_rgba` 只能测出 0.5 MiB 的假收益。
+- **不要连 GPU 目标一起释放**：WS 收益不变，私有提交稳态却抬高约 48 MiB
+  （283 → 331），6 轮确认收敛而非泄漏。**这 48 MiB 的归属未定位**——不要写成
+  "gpu-allocator 堆不回收"，源码里空块是会销毁的（见 ADR-117 勘误）。
+
+**分解探针 `examples/mem_surface.rs`**（把两类缓冲拆开，**分配与释放分别测**）：
+
+| 方向 | NVIDIA WS | NVIDIA priv | AMD WS | AMD priv |
+|---|---|---|---|---|
+| 分配 GPU 目标（81.17 MiB） | **+31.36** | +143.11 | **+16.92** | +120.11 |
+| 释放 GPU 目标（3 轮） | 0.00 | 0.00 | 0.00 | 0.00 |
+| 再分配（2 轮） | **0.00** | 0.00 | **0.00** | 0.00 |
+| 释放 DIB | **14.46** | 18.24 | **14.14** | 13.52 |
+
+**GPU 目标确实计入 WS，但释放拿不回来，再分配也不再花钱**——内存被分配器
+池化留着。DIB 两个方向都如实进出，这才是只释放 DIB 的理由。
+首轮偶有几 MiB 释放收益是采样时机造成的，多等一个周期就归零。
+同一探针还测得 `CreateDIBSection`（1340×1080，200 次）p50 0.010 ms、
+max 0.06–0.27 ms，以及 Dock 栏窗口 1927×233 → DIB 1.71 MiB。
+复现：`cargo run --release -p nooksill-gpu --example mem_surface -- 1.5 4`。
+
 阈值依据：驱动抖动 ±15 MB；4 小时允许总增长不超过一个抖动带（≈3.75 MB/h），
 取 5 留一倍余量；R² 门槛排除随机游走。RDP / 虚拟机上 GPU 路径可能落到 WARP，
 绝对值不可比——判定一律用趋势与相对差，不做跨机绝对比较。
@@ -339,8 +392,13 @@ cargo run -q -p nooksill-core --example config_table     # 重新生成 CONFIG.m
 1. **Actions 产物**：无条件上传，任何分支都有。分支名不能当版本，所以特性分支
    只留在这里。
 2. **Pre-Release**：只在默认分支（`main`）上发，**永远用同一个 tag `dev`**，
-   标题写 `Development build <版本>`，资产（exe + `.sha256`）每次覆盖
-   （旧资产先删再传，不会堆积）。
+   标题写 `Development build <版本>`。每次发布先删掉旧 release 和 `dev` tag，
+   再基于当前 commit 重建（`gh release create --target $GITHUB_SHA`），资产
+   随 release 一起上传。
+
+   > 为什么删掉重建：`gh release edit` 改不了 `published_at`，只覆盖资产会让
+   > Releases 页一直显示「released 2 weeks ago」，说明里的构建时间也对不上。
+   > 重建让发布时间、标题、说明、资产四者同批刷新。
 
    > 为什么不每次一个新 tag：一天几十次提交就是几十条 release，Releases 页
    > 会被刷屏，而且 `Latest` 旁边的"预发布"永远指向某个半成品。滚动一条，

@@ -3,8 +3,6 @@
 //! Covers only what the updater parses: objects, arrays, strings, numbers,
 //! booleans and null. No writer, no error positions, no integers beyond `f64`.
 
-use std::fmt;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
     Null,
@@ -58,16 +56,9 @@ impl Json {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{}", nooksill_core::i18n::t("JSON parsing failed"))]
 pub struct ParseError;
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(nooksill_core::i18n::t("JSON parsing failed"))
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 /// Parse a complete document; trailing whitespace is allowed.
 pub fn parse(src: &str) -> Result<Json, ParseError> {

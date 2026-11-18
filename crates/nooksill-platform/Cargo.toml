@@ -12,6 +12,7 @@ windows.workspace = true
 windows-collections.workspace = true
 windows-future.workspace = true
 sha2.workspace = true
+thiserror.workspace = true
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

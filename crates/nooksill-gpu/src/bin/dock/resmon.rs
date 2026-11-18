@@ -45,7 +45,7 @@ impl App {
                     } else {
                         let today = nooksill_gpu::calendar_win::today();
                         if self.calendar_slot.is_none() {
-                            let win = CalendarWindow::new(&self.gpu, self.ppp, dark, today)?;
+                            let win = CalendarWindow::new(&self.gpu()?, self.ppp, dark, today)?;
                             self.calendar_slot = Some(win);
                         }
                         let anchor = self.dock.widget_screen_rect(
@@ -67,7 +67,7 @@ impl App {
                         }
                     } else {
                         if self.resmon_slot.is_none() {
-                            let win = ResMonWindow::new(&self.gpu, self.ppp, dark)?;
+                            let win = ResMonWindow::new(&self.gpu()?, self.ppp, dark)?;
                             self.resmon_slot = Some(win);
                         }
                         let anchor = self.dock.widget_screen_rect(
@@ -78,7 +78,12 @@ impl App {
                         if let (Some(win), Some(anchor)) = (self.resmon_slot.as_mut(), anchor) {
                             let order =
                                 nooksill_core::resource::parse_order(&self.dock.cfg.res_order);
-                            win.show_at(&self.gpu, anchor, self.dock.cfg.edge, &order)?;
+                            win.show_at(
+                                Self::panel_device(&self.gpu)?,
+                                anchor,
+                                self.dock.cfg.edge,
+                                &order,
+                            )?;
                         }
                     }
                 }
@@ -98,7 +103,7 @@ impl App {
                             // Tile order is dragged by the user and stored in `[widgets] Order`.
                             let order =
                                 nooksill_core::control::parse_order(&self.dock.cfg.cc_order);
-                            let win = CcWindow::new(&self.gpu, self.ppp, dark, hotspot, &order)?;
+                            let win = CcWindow::new(&self.gpu()?, self.ppp, dark, hotspot, &order)?;
                             self.cc_slot = Some(win);
                         }
                         let anchor = self.dock.widget_screen_rect(
@@ -107,7 +112,11 @@ impl App {
                             self.pos.1,
                         );
                         if let (Some(win), Some(anchor)) = (self.cc_slot.as_mut(), anchor) {
-                            win.show_at(&self.gpu, anchor, self.dock.cfg.edge)?;
+                            win.show_at(
+                                Self::panel_device(&self.gpu)?,
+                                anchor,
+                                self.dock.cfg.edge,
+                            )?;
                         }
                     }
                 }
@@ -129,7 +138,7 @@ impl App {
                         if self.tool_slot.is_none() {
                             // The ini was parsed once at boot; no disk read on open.
                             let win = ToolWindow::new(
-                                &self.gpu,
+                                &self.gpu()?,
                                 self.ppp,
                                 dark,
                                 self.tool_state.clone(),
@@ -156,7 +165,7 @@ impl App {
         let mut need = false;
         if let Some(win) = self.resmon_slot.as_mut() {
             if win.visible() && win.due() {
-                win.render(&self.gpu)?;
+                win.render(Self::panel_device(&self.gpu)?)?;
                 need = true;
             }
         }
@@ -166,7 +175,7 @@ impl App {
         let mut lp_cmds: Vec<nooksill_gpu::launchpad_win::LaunchpadCmd> = Vec::new();
         if let Some(win) = self.launchpad_slot.as_mut() {
             if win.due() {
-                win.render(&self.gpu)?;
+                win.render(Self::panel_device(&self.gpu)?)?;
                 need = true;
             }
             while let Some(cmd) = win.take_cmd() {
@@ -175,6 +184,12 @@ impl App {
         }
         for cmd in lp_cmds {
             match cmd {
+                nooksill_gpu::launchpad_win::LaunchpadCmd::SetGrid { cols, rows } => {
+                    self.dock.cfg.apply_i32(Key::LP_COLS, cols as i32);
+                    self.dock.cfg.apply_i32(Key::LP_ROWS, rows as i32);
+                    self.dock.mark_dirty();
+                    need = true;
+                }
                 nooksill_gpu::launchpad_win::LaunchpadCmd::AddToDock { name, path } => {
                     self.raw.push(Item::new(ItemKind::File, name, path));
                     self.apply_item_change();
@@ -187,7 +202,7 @@ impl App {
         let mut cc_order: Option<Vec<nooksill_core::control::Tile>> = None;
         if let Some(win) = self.cc_slot.as_mut() {
             if win.due() {
-                win.render(&self.gpu)?;
+                win.render(Self::panel_device(&self.gpu)?)?;
                 need = true;
             }
             if win.dirty_theme {
@@ -212,7 +227,7 @@ impl App {
         // Calendar popup: repaint once after interaction, no timer.
         if let Some(win) = self.calendar_slot.as_mut() {
             if win.due() {
-                win.render(&self.gpu)?;
+                win.render(Self::panel_device(&self.gpu)?)?;
                 need = true;
             }
         }
@@ -220,7 +235,7 @@ impl App {
         let now = nooksill_gpu::tool_win::now_ms();
         if let Some(win) = self.tool_slot.as_mut() {
             if win.visible() && win.due() {
-                win.render(&self.gpu, now)?;
+                win.render(Self::panel_device(&self.gpu)?, now)?;
                 need = true;
             }
             if win.dirty {

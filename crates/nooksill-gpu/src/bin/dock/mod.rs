@@ -11,6 +11,7 @@
 
 use std::time::{Duration, Instant};
 
+use frame_slot::FrameSlot;
 use nooksill_core::clock;
 use nooksill_core::clock::ClockLine;
 use nooksill_core::config::{Config, DockMode, Edge, Key};
@@ -27,7 +28,6 @@ use nooksill_gpu::calendar_win::CalendarWindow;
 use nooksill_gpu::cc_win::CcWindow;
 use nooksill_gpu::dock::{Dock, DockItem};
 use nooksill_gpu::edit_win::{EditField, EditRequest, EditSlot};
-use nooksill_gpu::frame::FrameRenderer;
 use nooksill_gpu::frost::Spec as FrostSpec;
 use nooksill_gpu::gpu::Gpu;
 use nooksill_gpu::group_win::{FanSpec, GroupAction, GroupKid, GroupWindow};
@@ -171,6 +171,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // for this process to exit.
     let pending = app.pending_update.take();
     let silent = app.pending_silent;
+    let restart = app.pending_restart;
     drop(app);
     if let Some(staged) = pending {
         // Automatic updates only swap the file; the next manual launch starts
@@ -180,6 +181,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             nooksill_platform::update::apply_and_restart(&staged)?;
         }
+    } else if restart {
+        // An update already relaunches, so the two must not both fire.
+        nooksill_platform::restart::after_exit()?;
     }
     outcome
 }
@@ -246,10 +250,14 @@ mod trace {
 /// All mutable state of a Dock session.
 struct App {
     hwnd: HWND,
-    gpu: Gpu,
-    frame: FrameRenderer,
+    /// Created on first use: CPU mode must not pay the driver floor until a
+    /// panel, menu or the settings window actually needs a device (ADR-119).
+    gpu: Option<Gpu>,
+    frame: FrameSlot,
     /// Owns the global toggle hotkey; `Drop` unregisters it.
     global_hotkey: nooksill_platform::hotkey::GlobalHotkey,
+    /// Second global hotkey; always enabled, opens the Launchpad window.
+    launchpad_hotkey: nooksill_platform::hotkey::GlobalHotkey,
     /// Combo and enabled flag last applied, so rebinding runs only on change.
     hotkey_applied: (nooksill_core::hotkey::Hotkey, bool),
     /// Must be on the heap: `wndproc` stores its address in `GWLP_USERDATA`,
@@ -304,6 +312,11 @@ struct App {
     pending_update: Option<std::path::PathBuf>,
     /// Silent replacement: swap on exit without restarting the process.
     pending_silent: bool,
+    /// Relaunch after exit because a graphics setting changed. Both the frame
+    /// path and the adapter are fixed at boot, so they cannot be applied live.
+    pending_restart: bool,
+    /// `(GpuAccel, Adapter)` as last seen, so a change is detected once.
+    gfx_key: (bool, String),
     /// Last `(instant, bytes)` sample, for the download rate.
     update_rate: Option<(Instant, u64)>,
 
@@ -343,6 +356,9 @@ struct App {
     /// Whether a panel was open in the previous round, used to reset
     /// `watcher` at the moment a panel opens.
     panel_was_open: bool,
+    /// When the CPU path last had nothing open, so the device can be given
+    /// back after a quiet spell. `None` while anything is open or GPU is on.
+    gpu_idle_since: Option<Instant>,
     /// When the last app was launched, in milliseconds since process start.
     ///
     /// See [`LAUNCH_GRACE_MS`]: a freshly launched app often appears maximized
@@ -472,6 +488,8 @@ mod auto_hide;
 mod boot;
 mod clicks;
 mod drag;
+mod frame_slot;
+mod gfx_restart;
 mod item_cmds;
 mod item_edit;
 mod menu_win;

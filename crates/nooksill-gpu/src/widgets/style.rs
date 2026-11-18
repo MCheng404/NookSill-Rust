@@ -16,6 +16,8 @@ static PANEL_OVERLAY: AtomicU8 = AtomicU8::new(28);
 pub fn sync_prefs(cfg: &Config) {
     crate::widgets::framework::prefs::sync_prefs(cfg);
     crate::frost::set_glow_strength(cfg.get_i32(Key::GLOW_STRENGTH));
+    crate::gpu::set_gpu_accel(cfg.get_i32(Key::GPU_ACCEL) != 0);
+    nooksill_platform::net::set_proxy(cfg.get_i32(Key::NET_PROXY), &cfg.proxy);
     PANEL_OPACITY.store(
         cfg.get_i32(Key::PANEL_OPACITY).clamp(0, 100) as u8,
         Ordering::Relaxed,

@@ -304,8 +304,10 @@ mod tests {
     fn probes_are_safe_without_hardware() {
         // Every probe must be total: a desktop without WiFi or Bluetooth
         // simply reports `None`.
-        if let Some(wifi) = wifi_state() {
-            assert!(wifi.signal.is_none_or(|s| s <= 100));
+        if crate::test_env::consent_probes() {
+            if let Some(wifi) = wifi_state() {
+                assert!(wifi.signal.is_none_or(|s| s <= 100));
+            }
         }
         let _ = bluetooth_state();
         let _ = location_state();

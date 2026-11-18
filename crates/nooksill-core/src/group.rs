@@ -11,32 +11,23 @@ use crate::item::{Item, ItemKind};
 use crate::MAX_KIDS;
 
 /// Why a group operation failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// User-facing text goes through the i18n table like every other string;
+/// `Display` is what the status bar interpolates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GroupError {
     /// Index out of range.
+    #[error("{}", crate::i18n::t("The item no longer exists"))]
     NoSuchItem,
     /// Target is not a group, so it cannot take children.
+    #[error("{}", crate::i18n::t("The target is not a group"))]
     NotGroup,
     /// Group already has `MAX_KIDS` children.
+    #[error("{}", crate::i18n::fmt("The group is full (limit {0} items)", &[MAX_KIDS.to_string().as_str()]))]
     Full,
     /// Groups cannot be nested.
+    #[error("{}", crate::i18n::t("A group cannot contain another group"))]
     Nested,
-}
-
-impl std::fmt::Display for GroupError {
-    /// User-facing text goes through the i18n table like every other string;
-    /// `Display` is what the status bar interpolates.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoSuchItem => f.write_str(crate::i18n::t("The item no longer exists")),
-            Self::NotGroup => f.write_str(crate::i18n::t("The target is not a group")),
-            Self::Full => f.write_str(&crate::i18n::fmt(
-                "The group is full (limit {0} items)",
-                &[MAX_KIDS.to_string().as_str()],
-            )),
-            Self::Nested => f.write_str(crate::i18n::t("A group cannot contain another group")),
-        }
-    }
 }
 
 /// Create an empty group.
@@ -203,6 +194,31 @@ pub const fn grid_cells(n: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The derive must keep the i18n lookup and the `MAX_KIDS` interpolation,
+    /// and must add the `Error` impl the hand-written version never had.
+    #[test]
+    fn error_text_and_trait_survive_the_derive() {
+        crate::i18n::set_language(crate::i18n::Language::En);
+        fn assert_error<T: std::error::Error>(_: &T) {}
+        assert_error(&GroupError::Full);
+        assert_eq!(
+            GroupError::NoSuchItem.to_string(),
+            "The item no longer exists"
+        );
+        assert_eq!(
+            GroupError::NotGroup.to_string(),
+            "The target is not a group"
+        );
+        assert_eq!(
+            GroupError::Nested.to_string(),
+            "A group cannot contain another group"
+        );
+        assert_eq!(
+            GroupError::Full.to_string(),
+            format!("The group is full (limit {MAX_KIDS} items)")
+        );
+    }
 
     fn file(name: &str) -> Item {
         Item::new(ItemKind::File, name, "C:\\x.exe")

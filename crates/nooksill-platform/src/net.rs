@@ -5,15 +5,18 @@
 //! `get_raw` exposes status and headers for conditional requests; `get_stream`
 //! writes chunks while they arrive so a partial download can be resumed.
 
-use std::fmt;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Mutex;
 
 use windows::core::PCWSTR;
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
-    WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
-    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF,
-    WINHTTP_QUERY_STATUS_CODE,
+    WinHttpSetOption, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    WINHTTP_ACCESS_TYPE_NAMED_PROXY, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_FLAG_SECURE,
+    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_OPTION_REDIRECT_POLICY,
+    WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_QUERY_FLAG_NUMBER,
+    WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_QUERY_STATUS_CODE,
 };
 
 /// Body caps. API answers and DoH replies are kilobytes; a release asset is a
@@ -22,39 +25,39 @@ use windows::Win32::Networking::WinHttp::{
 pub const SMALL_BODY: usize = 16 * 1024 * 1024;
 pub const LARGE_BODY: usize = 128 * 1024 * 1024;
 
-#[derive(Debug)]
-pub enum NetError {
-    /// URL is not `http(s)://host[:port]/path`.
-    BadUrl,
-    /// WinHTTP refused an operation (DNS, TLS, connect, ...).
-    Win32(&'static str),
-    /// Server answered with a non-2xx status.
-    Status(u32),
-    /// Body exceeded the caller's cap.
-    TooLarge(usize),
-    /// The caller's chunk writer refused the data.
-    Sink,
-}
+/// Proxy mode shared by all update requests. `0` follows the system, `1` uses
+/// [`CUSTOM_PROXY`], `2` forces a direct connection.
+static PROXY_MODE: AtomicU8 = AtomicU8::new(0);
+static CUSTOM_PROXY: Mutex<String> = Mutex::new(String::new());
 
-impl fmt::Display for NetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BadUrl => f.write_str(nooksill_core::i18n::t("The URL is malformed")),
-            Self::Win32(what) => {
-                f.write_str(&nooksill_core::i18n::fmt("Request failed: {0}", &[what]))
-            }
-            // Status codes are language-neutral diagnostics.
-            Self::Status(code) => write!(f, "HTTP {code}"),
-            Self::TooLarge(cap) => f.write_str(&nooksill_core::i18n::fmt(
-                "The response exceeds the {0} MB limit",
-                &[(cap / (1024 * 1024)).to_string().as_str()],
-            )),
-            Self::Sink => f.write_str(nooksill_core::i18n::t("Writing the download failed")),
-        }
+/// Publish the proxy configuration from the settings layer.
+pub fn set_proxy(mode: i32, address: &str) {
+    PROXY_MODE.store(mode.clamp(0, 2) as u8, Ordering::Relaxed);
+    if let Ok(mut guard) = CUSTOM_PROXY.lock() {
+        guard.clear();
+        guard.push_str(address);
     }
 }
 
-impl std::error::Error for NetError {}
+#[derive(Debug, thiserror::Error)]
+pub enum NetError {
+    /// URL is not `http(s)://host[:port]/path`.
+    #[error("{}", nooksill_core::i18n::t("The URL is malformed"))]
+    BadUrl,
+    /// WinHTTP refused an operation (DNS, TLS, connect, ...).
+    #[error("{}", nooksill_core::i18n::fmt("Request failed: {0}", &[.0]))]
+    Win32(&'static str),
+    /// Server answered with a non-2xx status.
+    // Status codes are language-neutral diagnostics.
+    #[error("HTTP {0}")]
+    Status(u32),
+    /// Body exceeded the caller's cap.
+    #[error("{}", nooksill_core::i18n::fmt("The response exceeds the {0} MB limit", &[(*.0 / (1024 * 1024)).to_string().as_str()]))]
+    TooLarge(usize),
+    /// The caller's chunk writer refused the data.
+    #[error("{}", nooksill_core::i18n::t("Writing the download failed"))]
+    Sink,
+}
 
 /// Chunk writer used by streaming downloads; the first argument is the status.
 type Sink<'a> = &'a mut dyn FnMut(u32, &[u8]) -> Result<(), NetError>;
@@ -92,7 +95,7 @@ pub fn get(
     timeout_ms: i32,
     max_body: usize,
 ) -> Result<Response, NetError> {
-    request(url, headers, timeout_ms, max_body, false, None)
+    request(url, headers, timeout_ms, max_body, false, None, true)
 }
 
 /// Like [`get`], but returns 304 / 4xx / 206 responses instead of turning them
@@ -103,7 +106,20 @@ pub fn get_raw(
     timeout_ms: i32,
     max_body: usize,
 ) -> Result<Response, NetError> {
-    request(url, headers, timeout_ms, max_body, true, None)
+    request(url, headers, timeout_ms, max_body, true, None, true)
+}
+
+/// Like [`get`], but leaves a 3xx response intact so its `Location` can be read.
+///
+/// `/releases/latest` encodes the newest tag in that header; following it would
+/// download an HTML page and spend a REST quota the app does not need.
+pub fn get_no_redirect(
+    url: &str,
+    headers: &str,
+    timeout_ms: i32,
+    max_body: usize,
+) -> Result<Response, NetError> {
+    request(url, headers, timeout_ms, max_body, true, None, false)
 }
 
 /// Streams the body into `write` without retaining it in memory. The callback
@@ -116,7 +132,7 @@ pub fn get_stream(
     max_body: usize,
     write: Sink<'_>,
 ) -> Result<Response, NetError> {
-    request(url, headers, timeout_ms, max_body, true, Some(write))
+    request(url, headers, timeout_ms, max_body, true, Some(write), true)
 }
 
 fn request(
@@ -126,20 +142,30 @@ fn request(
     max_body: usize,
     allow_raw: bool,
     mut sink: Option<Sink<'_>>,
+    follow_redirect: bool,
 ) -> Result<Response, NetError> {
     let parts = split_url(url).ok_or(NetError::BadUrl)?;
 
     let agent = wide("NookSill/1.0");
-    // SAFETY: all handles are checked for null and released by `Handle`.
-    let session = unsafe {
-        WinHttpOpen(
-            PCWSTR(agent.as_ptr()),
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            PCWSTR::null(),
-            PCWSTR::null(),
-            0,
-        )
+    // A named proxy needs a wide buffer that lives until WinHttpOpen returns.
+    let custom = if PROXY_MODE.load(Ordering::Relaxed) == 1 {
+        CUSTOM_PROXY
+            .lock()
+            .ok()
+            .map(|g| wide(&g))
+            .filter(|v| v.len() > 1)
+    } else {
+        None
     };
+    let (access, proxy) = match custom {
+        Some(ref w) => (WINHTTP_ACCESS_TYPE_NAMED_PROXY, PCWSTR(w.as_ptr())),
+        None if PROXY_MODE.load(Ordering::Relaxed) == 2 => {
+            (WINHTTP_ACCESS_TYPE_NO_PROXY, PCWSTR::null())
+        }
+        None => (WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null()),
+    };
+    // SAFETY: all handles are checked for null and released by `Handle`.
+    let session = unsafe { WinHttpOpen(PCWSTR(agent.as_ptr()), access, proxy, PCWSTR::null(), 0) };
     let session = Handle::new(session, "WinHttpOpen")?;
     unsafe {
         // The receive timeout is per packet, not for the whole download; a
@@ -178,6 +204,18 @@ fn request(
         )
     };
     let request = Handle::new(request, "WinHttpOpenRequest")?;
+    if !follow_redirect {
+        let policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        let bytes = policy.to_ne_bytes();
+        // SAFETY: the buffer is a u32 for the redirect-policy option.
+        unsafe {
+            let _ = WinHttpSetOption(
+                Some(request.raw()),
+                WINHTTP_OPTION_REDIRECT_POLICY,
+                Some(&bytes),
+            );
+        }
+    }
 
     let header_block = wide(headers);
     let header_slice: Option<&[u16]> = if headers.is_empty() {
@@ -410,5 +448,40 @@ mod tests {
             headers: vec![("etag".to_owned(), "W/\"abc\"".to_owned())],
         };
         assert_eq!(r.header("ETag"), Some("W/\"abc\""));
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_mode_is_clamped_to_the_three_modes() {
+        // Mirrors Config::NET_PROXY's table range; out-of-range values must
+        // never reach WinHttpOpen as an arbitrary access type.
+        let clamp = |v: i32| v.clamp(0, 2);
+        assert_eq!(clamp(-5), 0);
+        assert_eq!(clamp(1), 1);
+        assert_eq!(clamp(99), 2);
+    }
+
+    #[test]
+    fn setting_proxy_roundtrips_the_mode_and_address() {
+        set_proxy(1, "http://127.0.0.1:7890");
+        assert_eq!(PROXY_MODE.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            CUSTOM_PROXY
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_str(),
+            "http://127.0.0.1:7890"
+        );
+        set_proxy(2, "");
+        assert_eq!(PROXY_MODE.load(Ordering::Relaxed), 2);
+        assert!(CUSTOM_PROXY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
+        set_proxy(0, "");
     }
 }

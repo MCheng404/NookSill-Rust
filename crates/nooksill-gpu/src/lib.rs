@@ -56,6 +56,8 @@ pub mod popup;
 pub mod present;
 pub mod settings_win;
 pub mod smoke;
+pub mod soft;
+pub mod softframe;
 #[cfg(test)]
 mod test_env;
 pub(crate) mod text;

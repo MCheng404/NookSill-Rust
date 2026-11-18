@@ -63,6 +63,8 @@ pub enum LaunchpadCmd {
         /// Executable or target path.
         path: String,
     },
+    /// Ctrl+wheel changed the grid density; the main loop persists it.
+    SetGrid { cols: usize, rows: usize },
 }
 
 /// Which context menu is open, and on what.
@@ -74,6 +76,8 @@ enum MenuState {
     App(usize),
     /// Second level: pick a tag group for this app.
     Category(usize),
+    /// Second level: pick a label colour for an app. `(app index, is top-level)`.
+    Color(usize, bool),
     /// Menu of one tag-bar group. The index is 0-based, not the 1-based label.
     Tag(usize),
 }

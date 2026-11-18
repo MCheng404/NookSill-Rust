@@ -84,6 +84,8 @@ pub struct Launchpad {
     /// Keyed by name, not path: the dat file is meant to be read by humans and
     /// the path holds a GUID that changes across reinstalls.
     cat_of: Vec<(String, usize)>,
+    /// App name -> label colour from an official plugin palette (`RRGGBB`).
+    color_of: Vec<(String, [u8; 3])>,
 }
 
 impl Default for Launchpad {
@@ -95,6 +97,7 @@ impl Default for Launchpad {
             hidden: Vec::new(),
             tags: DEFAULT_TAGS.iter().map(|s| (*s).to_owned()).collect(),
             cat_of: Vec::new(),
+            color_of: Vec::new(),
         }
     }
 }

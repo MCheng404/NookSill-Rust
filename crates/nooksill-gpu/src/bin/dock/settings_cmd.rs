@@ -279,6 +279,8 @@ impl App {
                     nooksill_platform::plugin::toggle(&self.dock.cfg.plugin_enabled, &id, on);
                 let enabled = self.dock.cfg.plugin_enabled.clone();
                 nooksill_platform::plugin::apply_all(&mut self.dock.cfg, &enabled);
+                super::item_cmds::sync_plugin_items(&mut self.raw);
+                self.apply_item_change();
                 self.refresh_plugin_state();
                 true
             }
@@ -316,6 +318,13 @@ impl App {
                     nooksill_core::i18n::t("Recycle Bin"),
                     "",
                 ));
+                self.apply_item_change();
+                false
+            }
+            Command::AddLaunchpad => {
+                // Re-adding is the only way back after the user removes the
+                // built-in icon; clicks on the reserved path open Launchpad.
+                self.raw.push(nooksill_core::item::Item::launchpad());
                 self.apply_item_change();
                 false
             }

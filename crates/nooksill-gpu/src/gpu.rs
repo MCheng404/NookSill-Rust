@@ -21,23 +21,31 @@ pub fn msaa_preference() -> u32 {
     MSAA_PREF.load(Ordering::Relaxed)
 }
 
+/// GPU acceleration from config, off by default (ADR-119).
+///
+/// Off means the CPU path: the dock bar rasterizes on the CPU and no device is
+/// created at startup, so the driver floor is only paid when a panel, menu or
+/// the settings window is first opened. Frost captures on demand instead of
+/// running the live thread, and smoke stays dark.
+static GPU_ACCEL: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_gpu_accel(on: bool) {
+    GPU_ACCEL.store(u32::from(on), Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn gpu_accel() -> bool {
+    GPU_ACCEL.load(Ordering::Relaxed) != 0
+}
+
 /// GPU initialization failure.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum GpuError {
+    #[error("wgpu: {0}")]
     Wgpu(String),
+    #[error("Win32: {0}")]
     Win32(&'static str),
 }
-
-impl std::fmt::Display for GpuError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Wgpu(s) => write!(f, "wgpu: {s}"),
-            Self::Win32(s) => write!(f, "Win32: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for GpuError {}
 
 /// Which adapter ended up in use, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +117,10 @@ impl Selection {
     }
 }
 
+/// Cloning bumps wgpu's own refcounts; it does not create a second device.
+/// The dock hands clones out so a caller can read other `App` fields in the
+/// same expression without holding a borrow on the whole struct.
+#[derive(Clone)]
 pub struct Gpu {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -313,6 +325,46 @@ fn pick_by_name(instance: &wgpu::Instance, wanted: &str) -> Option<wgpu::Adapter
 #[cfg(test)]
 mod tests {
     use super::Selection;
+
+    /// The toggle is process-wide, so tests that move it must not overlap.
+    static ACCEL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Off is the shipped default: the CPU path is what a fresh install gets.
+    #[test]
+    fn gpu_accel_defaults_off_and_round_trips() {
+        let _guard = ACCEL_LOCK.lock().unwrap();
+        let before = super::gpu_accel();
+        super::set_gpu_accel(true);
+        assert!(super::gpu_accel());
+        super::set_gpu_accel(false);
+        assert!(!super::gpu_accel(), "CPU mode must be reachable");
+        super::set_gpu_accel(before);
+    }
+
+    /// The config default must agree with the runtime default, or a fresh ini
+    /// would silently turn the GPU path back on.
+    #[test]
+    fn config_default_matches_the_runtime_default() {
+        let _guard = ACCEL_LOCK.lock().unwrap();
+        let cfg = nooksill_core::config::Config::default();
+        let from_cfg = cfg.get_i32(nooksill_core::config::Key::GPU_ACCEL) != 0;
+        super::set_gpu_accel(from_cfg);
+        assert!(!super::gpu_accel(), "GpuAccel defaults to 0");
+    }
+
+    /// These two messages are diagnostics, not UI prose, so they stay literal.
+    #[test]
+    fn gpu_error_text_survives_the_derive() {
+        use super::GpuError;
+        fn assert_error<T: std::error::Error>(_: &T) {}
+        let wgpu = GpuError::Wgpu("no adapter".to_owned());
+        assert_error(&wgpu);
+        assert_eq!(wgpu.to_string(), "wgpu: no adapter");
+        assert_eq!(
+            GpuError::Win32("CreateDIBSection").to_string(),
+            "Win32: CreateDIBSection"
+        );
+    }
 
     #[test]
     fn selection_describes_itself() {

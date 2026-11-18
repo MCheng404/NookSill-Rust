@@ -194,6 +194,10 @@ fn numeric_constants_match_table_rows() {
         (Key::GLOW_STRENGTH, "GlowStrength"),
         (Key::HOST_LINK_ENABLED, "HostLink"),
         (Key::HOST_LINK_AUTOSCAN, "HostLinkAutoScan"),
+        (Key::UPD_INTERVAL, "UpdInterval"),
+        (Key::UPD_MIRROR, "UpdMirror"),
+        (Key::NET_PROXY, "NetProxy"),
+        (Key::GPU_ACCEL, "GpuAccel"),
     ];
     for &(key, name) in pairs {
         assert_eq!(key.name(), name, "常量与表行错位");

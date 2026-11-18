@@ -3,8 +3,8 @@
 use super::*;
 
 impl FrameRenderer {
-    /// Builds the offscreen target, the layered-window DIB and the egui
-    /// renderer.
+    /// Builds the egui context and renderer; the pixel buffers are deferred to
+    /// the first frame.
     ///
     /// `width`/`height` are physical pixels, matching both `CreateWindowExW`
     /// and the offscreen texture.
@@ -30,8 +30,6 @@ impl FrameRenderer {
         let area = u64::from(width) * u64::from(height);
         let wanted = crate::perf::auto_msaa_samples(area, crate::gpu::msaa_preference());
         let samples = crate::perf::resolve_samples(wanted, flags, adapter_specific);
-        let offscreen = Offscreen::new(&gpu.device, width, height, Gpu::COLOR_FORMAT, samples);
-        let presenter = LayeredPresenter::new(width as i32, height as i32)?;
 
         let ctx = egui::Context::default();
         if !nooksill_settings::fonts::install_cjk(&ctx) {
@@ -55,8 +53,12 @@ impl FrameRenderer {
         Ok(Self {
             ctx,
             renderer,
-            offscreen,
-            presenter,
+            // A window that is never drawn must not pay for its pixels: the
+            // six preloaded panels start hidden and stay hidden until clicked.
+            offscreen: None,
+            presenter: None,
+            size: (width, height),
+            samples,
             pixels_per_point,
             device: gpu.device.clone(),
             queue: gpu.queue.clone(),
@@ -71,6 +73,7 @@ impl FrameRenderer {
             frost_whole: true,
             live: None,
             frost_spec: None,
+            frost_hwnd: None,
             next_repaint: None,
         })
     }
@@ -84,24 +87,76 @@ impl FrameRenderer {
     /// file parsing) and the wgpu pipeline compilation, tens of milliseconds
     /// each, and neither depends on the size.
     ///
+    /// A renderer that has not drawn yet only records the size.
+    ///
     /// Returns immediately when the size did not change, so no texture is
     /// rebuilt for nothing.
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) -> Result<(), GpuError> {
-        if self.offscreen.width() == width && self.offscreen.height() == height {
+        if self.size == (width, height) {
             return Ok(());
         }
-        // Build both first: if the presenter fails, the offscreen stays
+        // Build before committing: if the presenter fails, the offscreen stays
         // unchanged too, so the renderer never ends up with mismatched halves.
-        let offscreen = Offscreen::new(
-            &gpu.device,
+        let offscreen = self
+            .offscreen
+            .is_some()
+            .then(|| Offscreen::new(&gpu.device, width, height, Gpu::COLOR_FORMAT, self.samples));
+        let presenter = if self.presenter.is_some() {
+            Some(LayeredPresenter::new(width as i32, height as i32)?)
+        } else {
+            None
+        };
+        if offscreen.is_some() {
+            self.offscreen = offscreen;
+        }
+        if presenter.is_some() {
+            self.presenter = presenter;
+        }
+        self.size = (width, height);
+        Ok(())
+    }
+
+    /// Give the layered-window DIB back while the window is hidden.
+    ///
+    /// The DIB is the only per-window buffer that is plain system memory on
+    /// every adapter, so it is the whole working-set cost of an idle window.
+    /// The GPU target stays: releasing it measured no working-set gain and
+    /// left the D3D12 suballocator holding a higher private-commit watermark.
+    ///
+    /// The context, glyph atlas, pipeline and GPU target all survive, so a
+    /// reopen only pays `CreateDIBSection`. Only call this on a hidden window.
+    pub fn release_dib(&mut self) {
+        self.presenter = None;
+    }
+
+    /// Whether the DIB is currently released.
+    #[must_use]
+    pub const fn dib_released(&self) -> bool {
+        self.presenter.is_none()
+    }
+
+    /// Allocate the GPU target if this renderer has not drawn yet.
+    pub(super) fn ensure_offscreen(&mut self) {
+        if self.offscreen.is_some() {
+            return;
+        }
+        let (width, height) = self.size;
+        self.offscreen = Some(Offscreen::new(
+            &self.device,
             width,
             height,
             Gpu::COLOR_FORMAT,
-            self.offscreen.samples(),
-        );
-        let presenter = LayeredPresenter::new(width as i32, height as i32)?;
-        self.offscreen = offscreen;
-        self.presenter = presenter;
+            self.samples,
+        ));
+    }
+
+    /// Allocate the GPU target and the DIB, whichever is missing.
+    pub(super) fn ensure_targets(&mut self) -> Result<(), GpuError> {
+        self.ensure_offscreen();
+        if self.presenter.is_none() {
+            let (width, height) = self.size;
+            self.presenter = Some(LayeredPresenter::new(width as i32, height as i32)?);
+        }
         Ok(())
     }
 

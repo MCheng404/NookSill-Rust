@@ -148,6 +148,8 @@ pub struct Config {
     pub hotkey: bool,
     /// Key combination for the global toggle, parsed from `[Hotkeys] Toggle`.
     pub hotkey_combo: Hotkey,
+    /// Combination for the global Launchpad hotkey (`[Hotkeys] Launchpad`).
+    pub hotkey_launchpad: Hotkey,
     pub accent_tone: bool,
     pub reflect: bool,
     pub clock: bool,
@@ -192,6 +194,9 @@ pub struct Config {
     pub plugin_enabled: String,
     /// Values before plugin overrides (`[plugins] Base`, `Key=Value,...`).
     pub plugin_base: String,
+    /// Custom proxy address for `[update] Proxy`, e.g. `http://127.0.0.1:7890`.
+    /// Empty means no override regardless of `NetProxy`.
+    pub proxy: String,
     /// Runtime accent color (RGB 0..=255) resolved from the system accent.
     ///
     /// Not persisted: `None` means the theme default.

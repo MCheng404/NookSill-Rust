@@ -3,6 +3,7 @@
 //! is a small script that moves the staged file after this process exits.
 
 mod cache;
+mod chunks;
 mod download;
 mod http;
 mod mirror;
@@ -24,15 +25,13 @@ use crate::net;
 /// Repository the updater talks to.
 pub const REPO: &str = "MCheng404/NookSill-Rust";
 
-/// Reverse proxies, fastest-first by convention; the real order comes from
-/// timing. Keep them all with a trailing slash because [`mirror_url`] relies on it.
-pub const MIRRORS: &[&str] = &[
-    "https://gh-proxy.com/",
-    "https://ghfast.top/",
-    "https://ghproxy.net/",
-    "https://gh.llkk.cc/",
-    "https://mirror.houlang.cloud/",
-];
+/// Reverse proxies that survived the 2026-11 China-network survey.
+///
+/// Two are enough: every extra candidate costs a ranged probe on first use,
+/// and the removed domains (`gh.llkk.cc`, `mirror.houlang.cloud`) were either
+/// frequently timed out or absent from all three independent surveys. Keep
+/// trailing slashes because [`mirror_url`] relies on them.
+pub const MIRRORS: &[&str] = &["https://gh-proxy.com/", "https://ghfast.top/"];
 
 /// A mirror answering faster than this is used without testing the rest.
 pub const FAST_ENOUGH_MS: u128 = 600;

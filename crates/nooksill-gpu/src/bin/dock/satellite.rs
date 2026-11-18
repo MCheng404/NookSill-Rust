@@ -93,16 +93,16 @@ pub(super) fn tick_settings(
             .get_i32(nooksill_core::config::Key::HOST_LINK_AUTOSCAN)
             != 0,
     );
-    // Adapter hint: the device is created once at startup, so editing the ini
-    // at runtime never switches cards. Sync both fields each round and nudge a
-    // frame on change so the hint is painted.
+    // Adapter hint: the device is created once at startup, so a mismatch means
+    // a relaunch is already queued by `step_gfx_restart`. The note only shows
+    // for the round or two before the loop quits.
     let active = gpu.info.name.clone();
     let note = if !gpu.selection.matches_config(&dock.cfg.adapter, &active) {
         if dock.cfg.adapter.is_empty() {
-            nooksill_core::i18n::t("Switched to automatic; applies on next start").to_owned()
+            nooksill_core::i18n::t("Switched to automatic; restarting the dock").to_owned()
         } else {
             nooksill_core::i18n::fmt(
-                "Selected {0}; applies on next start",
+                "Selected {0}; restarting the dock",
                 &[dock.cfg.adapter.to_string().as_str()],
             )
         }

@@ -49,6 +49,10 @@ impl Config {
             .get("Hotkeys", "Toggle")
             .and_then(Hotkey::parse)
             .unwrap_or(Hotkey::DEFAULT);
+        cfg.hotkey_launchpad = ini
+            .get("Hotkeys", "Launchpad")
+            .and_then(Hotkey::parse)
+            .unwrap_or(Hotkey::LAUNCHPAD);
         cfg.cc_order = ini.get("widgets", "Order").unwrap_or_default().to_owned();
         cfg.res_order = ini
             .get("widgets", "ResOrder")
@@ -59,8 +63,21 @@ impl Config {
             .unwrap_or_default()
             .to_owned();
         cfg.plugin_enabled = ini.get("plugins", "Enabled").unwrap_or_default().to_owned();
+        cfg.proxy = Self::sanitize_proxy(ini.get("update", "Proxy").unwrap_or_default());
         cfg.clamp();
         cfg
+    }
+
+    /// Sanitize a proxy address: visible ASCII only, no control characters.
+    ///
+    /// WinHTTP accepts `host:port` and `scheme://host:port`; the scheme check
+    /// belongs to WinHTTP, which reports a precise error if malformed.
+    #[must_use]
+    pub fn sanitize_proxy(raw: &str) -> String {
+        raw.chars()
+            .filter(|c| c.is_ascii_graphic())
+            .take(256)
+            .collect()
     }
 
     /// Write back to the ini, keeping other sections and unknown keys.
@@ -77,6 +94,7 @@ impl Config {
         // the file, which reads as "never configured" while diagnosing.
         ini.set("Graphics", "Adapter", &self.adapter);
         ini.set("Hotkeys", "Toggle", self.hotkey_combo.display());
+        ini.set("Hotkeys", "Launchpad", self.hotkey_launchpad.display());
         // The tile order is only written once dragged; an empty line would
         // just add noise to every user's ini. When the value is cleared again
         // (Reset defaults), the old line has to be removed or the next start
@@ -106,6 +124,11 @@ impl Config {
             ini.remove_key("plugins", "Base");
         } else {
             ini.set("plugins", "Base", &self.plugin_base);
+        }
+        if self.proxy.is_empty() {
+            ini.remove_key("update", "Proxy");
+        } else {
+            ini.set("update", "Proxy", &self.proxy);
         }
     }
 }

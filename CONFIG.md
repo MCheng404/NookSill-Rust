@@ -44,12 +44,12 @@
 | `[behavior]` | 缩放、指示点、标签、弹跳、时钟、文件夹扇面 |
 | `[behavior.group]` | 应用组与扇面参数（多数功能待实现） |
 | `[theme]` | Dock / 设置界面主题、底盘圆角、指示点样式 |
-| `[widgets]` | 小组件条带：位置、顺序、各卡片开关；`Order` 存控制中心磁贴顺序（Rust 版新增 `PanelDismiss` / `Order` / `HostLink` / `HostLinkAutoScan`） |
+| `[widgets]` | 小组件条带：位置、顺序、各卡片开关；`Order` 存控制中心磁贴顺序（Rust 版新增 `PanelDismiss` / `Order` / `HostLink` / `HostLinkAutoScan`）。`CcEnergy` / `CcHotspot` 的独立开关已从设置页移除：前者无消费者，后者按磁贴顺序生效 |
 | `[widgets.clock]` | 时钟显示与格式 |
 | `[menu]` | 右键菜单项开关 |
 | `[advanced]` | 浏览器路径、全局热键 |
 | `[effect.smoke]` | 栏体周围的环境烟雾（Rust 版独有） |
-| `[performance]` | 帧率上限、垂直同步、抗锯齿档位（Rust 版独有，v3 新增） |
+| `[performance]` | 帧率上限、垂直同步、抗锯齿档位（Rust 版独有，v3 新增）、`GpuAccel` GPU 加速开关（默认 0 = 关闭，见 ADR-119） |
 | `[Items]` | 条目列表 |
 | `[Graphics]` | 显卡适配器名（Rust 版独有） |
 
@@ -92,10 +92,10 @@ cargo run -q -p nooksill-core --example config_table
 | `PlateTheme` | 2 | 0–2 | 底盘配色：0 浅 / 1 深 / 2 跟随 Dock 主题 |
 | `PlateOpacity` | 100 | 0–100 | 底盘不透明度（%） |
 | `plate_radius` | 22 | 0–50 | 底盘圆角（%，相对图标边长） |
-| `color1` | -1 | -1 或 0–0xFFFFFF | 唯一的自定义栏体颜色，`-1` = 未启用；值为 COLORREF。启用后为单一纯色 |
+| `color1` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：Dock 自定义颜色已移除，不再读取；值为 COLORREF |
 | `color2` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：渐变终点，单一纯色模型下不再读取 |
-| `BgColor3` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：渐变中间色，单一纯色模型下不再读取 |
-| `accent_tone` | 0 | 0/1 | 跟随系统强调色；开启时优先于 `color1` |
+| `BgColor3` | -1 | -1 或 0–0xFFFFFF | **兼容保留**：渐变中间色，自定义颜色移除后不再读取 |
+| `accent_tone` | 0 | 0/1 | 跟随系统强调色，生成两级栏体色调 |
 | `reflect` | 0 | 0/1 | 图标倒影（仅底部停靠） |
 | `clock` | 0 | 0/1 | 时间与日期卡片 |
 | `folder_fan` | 1 | 0/1 | 文件夹弧形堆叠 |
@@ -107,8 +107,8 @@ cargo run -q -p nooksill-core --example config_table
 | `BorderWidth` | 1 | 1–6 | 边框粗细（px） |
 | `SepColor` | -1 | -1 或 0–0xFFFFFF | 分割线颜色 |
 | `DotColor` | -1 | -1 或 0–0xFFFFFF | 运行指示点颜色 |
-| `GradAngle` | 90 | 0–360 | **兼容保留**：渐变方向，自定义纯色下不读取 |
-| `GradA1` | 100 | 0–100 | **兼容保留**：颜色 1 不透明度，自定义纯色下不读取；统一由 `Opacity` 控制 |
+| `GradAngle` | 90 | 0–360 | **兼容保留**：渐变方向，自定义颜色移除后已不生效 |
+| `GradA1` | 100 | 0–100 | **兼容保留**：不透明度由 `Opacity` 统一控制 |
 | `GradA2` | 100 | 0–100 | **兼容保留**：渐变终点不透明度，单一纯色模型下不再读取 |
 | `GradA3` | 100 | 0–100 | **兼容保留**：渐变中间色不透明度，单一纯色模型下不再读取 |
 | `ClockShow` | 0 | 0–2 | 0 时间+日期 / 1 仅时间 / 2 仅日期 |
@@ -146,6 +146,11 @@ cargo run -q -p nooksill-core --example config_table
 | `UpdChannel` | 0 | 0/1 | 更新通道：0 稳定版 / 1 测试版（Rust 版独有） |
 | `UpdPrompt` | 1 | 0/1 | 检测到更新后，打开设置界面时弹出居中的更新弹窗（默认开，Rust 版独有） |
 | `UpdAuto` | 0 | 0/1 | 有更新时自动下载并在下次启动替换，且完全忽略弹窗（Rust 版独有） |
+| `UpdInterval` | 0 | 0–720 | 自动检查间隔（小时）；`0` = 默认 24 小时（Rust 版独有） |
+| `UpdMirror` | 0 | 0–2 | 下载源：`0` 测速选最快 / `1` 仅内置镜像 / `2` 仅 GitHub 直连（Rust 版独有） |
+| `UpdLast` | 0 | 0–2000000 | 上次成功检查的 Unix 小时数；旧版按「天序号」写入的值会被当成很久以前 |
+| `NetProxy` | 0 | 0–2 | 网络代理：`0` 跟随系统 / `1` 自定义地址 / `2` 直接连接（Rust 版独有） |
+| `[update] Proxy` | *（空）* | 可见 ASCII | 自定义代理地址，如 `http://127.0.0.1:7890`；空 = 跟随系统（Rust 版独有） |
 
 ### 单位：长度键存 96 DPI 逻辑像素
 
@@ -499,17 +504,26 @@ B1=改\n这里
 | `UpdChannel` | `[advanced]` | 更新通道：0 稳定版 / 1 测试版 | 0 | 0/1 |
 | `UpdPrompt` | `[advanced]` | 检测到更新后，打开设置界面时弹出居中的更新弹窗 | 1 | 0/1 |
 | `UpdAuto` | `[advanced]` | 有更新时自动下载并在下次启动替换，且完全忽略弹窗 | 0 | 0/1 |
+| `UpdInterval` | `[update]` | 自动检查间隔（小时），`0` = 24 小时 | 0 | 0–720 |
+| `UpdMirror` | `[update]` | 下载源：0 测速 / 1 仅镜像 / 2 仅直连 | 0 | 0–2 |
+| `NetProxy` | `[update]` | 代理：0 跟随系统 / 1 自定义 / 2 直连 | 0 | 0–2 |
+| `Proxy` | `[update]` | 自定义代理地址，空 = 跟随系统 | *（空）* | 可见 ASCII |
 
-三条关系：
+五条关系：
 
 1. **`UpdAuto` 优先于 `UpdPrompt`**：开着自动更新时静默下载、下次启动替换，
    不弹更新弹窗，也不读 `UpdPrompt`。
 2. **通道切换只影响后续检查**：改 `UpdChannel` 不会追溯已缓存的检查结果或
    已下载的包，下一次联网检查才按新通道取。
-3. 三个键落在 `[advanced]`，与 `UpdChk` / `UpdLast` 同段；上游 C 版不认识，
+3. `UpdInterval` 只影响自动检查；手动「检查更新」随时可用。稳定版检查走
+   网页 302，不消耗 GitHub API 配额；测试版仍走 API。
+4. `UpdMirror=1` 不探测直连，适合系统 DNS 不可信的网络；`UpdMirror=2`
+   跳过镜像，适合已有可信代理的环境。
+5. 三个键落在 `[advanced]`，与 `UpdChk` / `UpdLast` 同段；上游 C 版不认识，
    会原样保留在 ini 里。
 
-这三个键是 `Key::Numeric(116..118)`，追加在 `NUMERIC_KEYS` 末尾。
+`UpdChannel` / `UpdPrompt` / `UpdAuto` 是 `Key::Numeric(116..118)`，
+`UpdInterval` / `UpdMirror` 是 `Key::Numeric(126..127)`，追加在 `NUMERIC_KEYS` 末尾。
 
 ## 五之七、组件弹窗位置与背景（Rust 版独有）
 
@@ -559,9 +573,15 @@ B1=改\n这里
    下次启动才回到懒加载。DPI 变化会销毁所有面板并回到懒加载，同样在下次
    启动恢复预加载。
 
-代价：六个 `FrameRenderer` 常驻（离屏纹理 + DIB + 各自的 egui Context），
-启动时间变长、常驻显存上升；关掉即回到原来的懒加载。此键是
-`Key::Numeric(122)`，追加在 `NUMERIC_KEYS` 末尾。
+代价：六个 `FrameRenderer` 常驻（离屏纹理 + 各自的 egui Context），启动时间
+变长、常驻显存上升；关掉即回到原来的懒加载。此键是 `Key::Numeric(122)`，
+追加在 `NUMERIC_KEYS` 末尾。
+
+2026-11-18 起（ADR-117）预热不再为"没点开过的面板"付像素内存：渲染器首帧才
+分配离屏目标，窗口隐藏时释放分层 DIB、出帧前重建，同进程实测省
+**13.49 MiB 工作集 / 13.5 MiB 私有提交**（两卡一致、零漂移，见 BUILD.md §五）。
+保留 `PreloadPanels=1` 因此既保住首开延迟，又拿回了关掉预热那 32 MB 里的
+约 13.5 MiB；只有内存非常紧张时才需要改 0。
 
 预加载与组件打开路径**不读 ini、不读注册表**：`[Tool]` 在启动时随配置
 解析一次并缓存在 `App::tool_state`，暗色主题沿用主循环的 `system_dark`；

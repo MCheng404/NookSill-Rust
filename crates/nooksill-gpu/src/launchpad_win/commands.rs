@@ -63,6 +63,7 @@ impl LaunchpadWindow {
                         nooksill_core::i18n::t("Open").into(),
                         nooksill_core::i18n::t("Rename…").into(),
                         nooksill_core::i18n::t("Move to tag group…").into(),
+                        nooksill_core::i18n::t("Label colour…").into(),
                         nooksill_core::i18n::t("Add to Dock").into(),
                         nooksill_core::i18n::t("Remove from Launchpad").into(),
                     ];
@@ -73,8 +74,16 @@ impl LaunchpadWindow {
                 out = vec![
                     nooksill_core::i18n::t("Open").into(),
                     nooksill_core::i18n::t("Move to tag group…").into(),
+                    nooksill_core::i18n::t("Label colour…").into(),
                     nooksill_core::i18n::t("Add to Dock").into(),
                 ];
+            }
+            Some(MenuState::Color(_, _)) => {
+                for (name, _) in nooksill_platform::plugin::label_palette() {
+                    out.push(name);
+                }
+                out.push(nooksill_core::i18n::t("Reset colour").into());
+                out.push(nooksill_core::i18n::t("(Back)").into());
             }
             Some(MenuState::Category(ai)) => {
                 let cur = self.lp.category_of(ai);
@@ -114,6 +123,30 @@ impl LaunchpadWindow {
         let Some(label) = labels.get(i).map(String::as_str) else {
             return;
         };
+        if let MenuState::Color(ai, top) = state {
+            if label == nooksill_core::i18n::t("(Back)") {
+                self.menu = Some(if top {
+                    MenuState::Cell(self.sel.unwrap_or(0))
+                } else {
+                    MenuState::App(ai)
+                });
+            } else if label == nooksill_core::i18n::t("Reset colour") {
+                let name = self.lp.apps()[ai].name.clone();
+                self.lp.set_color(&name, None);
+                self.dirty_save = true;
+                self.menu = None;
+            } else if let Some((_, rgb)) = nooksill_platform::plugin::label_palette()
+                .into_iter()
+                .find(|(n, _)| n == label)
+            {
+                let name = self.lp.apps()[ai].name.clone();
+                self.lp.set_color(&name, Some(rgb));
+                self.dirty_save = true;
+                self.menu = None;
+            }
+            self.next_repaint = Instant::now();
+            return;
+        }
         // The menu of a tag group.
         if let MenuState::Tag(ti) = state {
             match label {
@@ -181,6 +214,11 @@ impl LaunchpadWindow {
                 _ if label == nooksill_core::i18n::t("Move to tag group…") => {
                     self.menu = Some(MenuState::Category(ai))
                 }
+                _ if label == nooksill_core::i18n::t("Label colour…") => {
+                    self.menu = Some(MenuState::Color(ai, false));
+                    self.next_repaint = Instant::now();
+                    return;
+                }
                 _ if label == nooksill_core::i18n::t("Add to Dock") => {
                     self.menu = None;
                     let app = &self.lp.apps()[ai];
@@ -215,6 +253,13 @@ impl LaunchpadWindow {
             _ if label == nooksill_core::i18n::t("Move to tag group…") => {
                 if let Some(Top::App(ai)) = self.lp.top().get(idx).copied() {
                     self.menu = Some(MenuState::Category(ai));
+                }
+            }
+            _ if label == nooksill_core::i18n::t("Label colour…") => {
+                if let Some(Top::App(ai)) = self.lp.top().get(idx).copied() {
+                    self.menu = Some(MenuState::Color(ai, true));
+                    self.next_repaint = Instant::now();
+                    return;
                 }
             }
             _ if label == nooksill_core::i18n::t("Remove from Launchpad") => {

@@ -26,6 +26,7 @@ pub mod occlusion;
 pub mod paths;
 pub mod plugin;
 pub mod radio;
+pub mod restart;
 pub mod shortcut;
 pub mod single_instance;
 pub mod sysact;

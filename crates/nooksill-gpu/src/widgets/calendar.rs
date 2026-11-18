@@ -39,6 +39,9 @@ pub const CLASS_NAME: &str = "NookSillCalendar";
 const PANEL_W: f32 = 420.0;
 const PANEL_H: f32 = 568.0;
 
+/// Panel logical size (offscreen previews and memory probes).
+pub const SIZE: (f32, f32) = (PANEL_W, PANEL_H);
+
 /// Window margin in logical px.
 const PM: f32 = 8.0;
 

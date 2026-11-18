@@ -18,7 +18,14 @@ impl App {
             .cfg
             .dock_is_dark(nooksill_platform::theme::is_dark());
         if self.note_slot.is_none() {
-            match NoteWindow::new(&self.gpu, self.ppp, dark) {
+            let gpu = match self.gpu() {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("速记面板创建失败：{e}");
+                    return;
+                }
+            };
+            match NoteWindow::new(&gpu, self.ppp, dark) {
                 Ok(w) => self.note_slot = Some(w),
                 Err(e) => {
                     eprintln!("速记面板创建失败：{e}");
@@ -33,12 +40,14 @@ impl App {
 
     /// Notes panel: render a frame and handle its action.
     pub(super) fn step_notes(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some(w) = self.note_slot.as_mut() else {
+        if self.note_slot.is_none() {
             return Ok(false);
-        };
+        }
+        let gpu = self.gpu()?;
+        let w = self.note_slot.as_mut().expect("checked above");
         let mut need_frame = false;
         if w.due() {
-            w.render(&self.gpu)?;
+            w.render(&gpu)?;
             need_frame = true;
         }
         match w.take_action() {
@@ -177,8 +186,15 @@ impl App {
             .dock
             .cfg
             .dock_is_dark(nooksill_platform::theme::is_dark());
+        let gpu = match self.gpu() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("分组面板创建失败：{e}");
+                return;
+            }
+        };
         if self.group_slot.is_none() {
-            match GroupWindow::new(&self.gpu, self.ppp, dark) {
+            match GroupWindow::new(&gpu, self.ppp, dark) {
                 Ok(w) => self.group_slot = Some(w),
                 Err(e) => {
                     eprintln!("分组面板创建失败：{e}");
@@ -188,7 +204,7 @@ impl App {
         }
         if let Some(w) = self.group_slot.as_mut() {
             let fan = FanSpec::from_config(&self.dock.cfg);
-            if let Err(e) = w.open(&self.gpu, &name, kids, anchor, fan, self.dock.cfg.edge) {
+            if let Err(e) = w.open(&gpu, &name, kids, anchor, fan, self.dock.cfg.edge) {
                 eprintln!("分组面板打开失败：{e}");
                 return;
             }
@@ -198,12 +214,14 @@ impl App {
 
     /// Group panel: render a frame and handle the action it produced.
     pub(super) fn step_group(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some(w) = self.group_slot.as_mut() else {
+        if self.group_slot.is_none() {
             return Ok(false);
-        };
+        }
+        let gpu = self.gpu()?;
+        let w = self.group_slot.as_mut().expect("checked above");
         let mut need_frame = false;
         if w.due() {
-            w.render(&self.gpu)?;
+            w.render(&gpu)?;
             need_frame = true;
         }
         let action = w.take_action();

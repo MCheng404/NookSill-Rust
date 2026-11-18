@@ -261,7 +261,13 @@ impl LaunchpadWindow {
             }
             WM_MOUSEWHEEL => {
                 let delta = ((wparam.0 >> 16) & 0xffff) as u16 as i16;
-                if delta > 0 {
+                // Ctrl+wheel changes density; plain wheel keeps paging.
+                const MK_CONTROL: usize = 0x0008;
+                if (wparam.0 & MK_CONTROL) != 0 {
+                    let (cols, rows) = self.grid_after_density_step(delta > 0);
+                    self.set_grid(cols, rows);
+                    self.cmds.push(LaunchpadCmd::SetGrid { cols, rows });
+                } else if delta > 0 {
                     self.turn_page(-1);
                 } else if delta < 0 {
                     self.turn_page(1);

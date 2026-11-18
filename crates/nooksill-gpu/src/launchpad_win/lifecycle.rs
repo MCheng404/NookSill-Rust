@@ -234,6 +234,15 @@ impl LaunchpadWindow {
         if self.dirty_save {
             self.save();
         }
+        self.renderer.release_dib();
+    }
+
+    /// Apply official plugin name rules to uncoloured labels.
+    pub fn apply_color_rules(&mut self, rules: &[(String, [u8; 3])]) {
+        if self.lp.apply_color_rules(rules) > 0 {
+            self.dirty_save = true;
+            self.next_repaint = Instant::now();
+        }
     }
 
     /// Takes one command for the main loop to handle.

@@ -7,4 +7,5 @@ mod io;
 mod keys;
 mod language;
 mod migrate;
+mod proxy;
 mod ui;

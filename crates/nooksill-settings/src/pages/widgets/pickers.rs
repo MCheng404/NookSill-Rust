@@ -176,33 +176,3 @@ pub(crate) fn accent_row(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         palette(ctx, ui, key, rgb);
     }
 }
-
-/// Custom colour: pill switch disables it with `-1`, otherwise a COLORREF.
-pub(crate) fn color_row(ctx: &mut Ctx<'_>, ui: &mut Ui, key: Key, label: &str) {
-    let cur = ctx.cfg.get_i32(key);
-    let mut enabled = cur >= 0;
-    let rgb = rgb_of(ctx.cfg, key);
-    let was_open = ctx.state.color_edit == Some(key);
-    let mut open = was_open && enabled;
-    row(ui, ctx.state, label, "", |ui, id| {
-        switch_widget(ui, id, &mut enabled);
-        if enabled {
-            swatch(ui, rgb, id, &mut open);
-        }
-    });
-    if enabled != (cur >= 0) {
-        let v = if enabled { 0x0033_6699 } else { -1 };
-        ctx.cfg.apply_i32(key, v);
-        ctx.out.changed = true;
-        open = false;
-    } else if enabled {
-        store(ctx, key, rgb);
-    }
-    if open != was_open {
-        ctx.state.color_edit = if open { Some(key) } else { None };
-        ctx.state.color_hex = hex(rgb);
-    }
-    if open {
-        palette(ctx, ui, key, rgb);
-    }
-}

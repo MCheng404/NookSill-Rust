@@ -45,7 +45,53 @@ pub(crate) fn headers(etag: Option<&str>) -> String {
     block
 }
 
+/// Extract the tag from a `/releases/latest` redirect target.
+///
+/// The web endpoint answers `302` with a `Location` ending in `/releases/tag/<tag>`.
+/// Only that exact shape is accepted: a login page or a changed redirect must
+/// fail rather than be read as a version.
+#[must_use]
+pub(crate) fn tag_from_location(location: &str) -> Option<&str> {
+    let (_, tail) = location.split_once("/releases/tag/")?;
+    let tag = tail.split(['?', '#']).next()?.trim_end_matches('/');
+    if tag.is_empty() || tag.len() > 64 {
+        return None;
+    }
+    tag.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        .then_some(tag)
+}
+
+/// Resolve the newest stable tag through the web front end, not the REST API.
+///
+/// This request does not consume the shared 60/hour quota, which is the whole
+/// point: a NAT or corporate proxy no longer blocks the daily check. `None` on
+/// any deviation so the caller can fall back to the API unchanged.
+fn web_tag() -> Option<Release> {
+    let url = format!("https://github.com/{REPO}/releases/latest");
+    let res = net::get_no_redirect(
+        &url,
+        &format!("User-Agent: {UA}\r\n"),
+        TIMEOUT_MS,
+        net::SMALL_BODY,
+    )
+    .ok()?;
+    if !(300..400).contains(&res.status) {
+        return None;
+    }
+    let location = res.header("location")?;
+    Release::from_tag(tag_from_location(location)?)
+}
+
 pub fn latest(channel: Channel) -> Result<Release, UpdateError> {
+    // The web redirect only knows stable releases; beta users need the API to
+    // see the rolling pre-release, so they keep the existing path.
+    if channel == Channel::Stable {
+        if let Some(release) = web_tag() {
+            return Ok(release);
+        }
+    }
+
     let now = now_secs();
     if let Some(until) = cache::retry_until() {
         if until > now {

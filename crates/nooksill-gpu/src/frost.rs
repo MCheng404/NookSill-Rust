@@ -109,7 +109,8 @@ pub struct Backdrop {
 
 impl Spec {
     /// Capture once before the panel is shown. Falls back to CPU blur when the
-    /// GPU pipeline is unavailable.
+    /// GPU pipeline is unavailable, and takes that path outright when GPU
+    /// acceleration is off (ADR-119).
     pub fn apply(self, renderer: &mut FrameRenderer, hwnd: HWND, ppp: f32) {
         let mut cap = match DesktopCapture::new(true) {
             Ok(c) => c,
@@ -130,12 +131,39 @@ impl Spec {
         renderer.set_frost_corner(self.corner_pt);
         // One low-frequency field per capture; live frames refresh it too.
         renderer.set_frost_glow(glow::Field::sample(bits, w as usize, h as usize));
-        if renderer.set_frost_gpu(bits, w, h, self, ppp) {
+        if crate::gpu::gpu_accel() && renderer.set_frost_gpu(bits, w, h, self, ppp) {
             return;
         }
         match compose(bits, w, h, self, ppp) {
             Some(image) => renderer.set_frost(image),
             None => renderer.clear_frost(),
+        }
+    }
+
+    /// Same capture and CPU compose, aimed at the GPU-free frame path.
+    ///
+    /// Separate from `apply` because that one drives a `FrameRenderer`: no
+    /// corner or glow is published here, since the dock paints its backdrop per
+    /// piece and never draws the whole-window sheet those two feed.
+    pub fn apply_soft(self, frame: &mut crate::softframe::SoftFrame, hwnd: HWND, ppp: f32) {
+        let mut cap = match DesktopCapture::new(true) {
+            Ok(c) => c,
+            Err(_) => {
+                frame.clear_frost();
+                return;
+            }
+        };
+        let captured = cap
+            .capture_behind_pct(hwnd.0 as isize, CAPTURE_PCT)
+            .ok()
+            .flatten();
+        let Some((bits, w, h)) = captured else {
+            frame.clear_frost();
+            return;
+        };
+        match compose(bits, w, h, self, ppp) {
+            Some(image) => frame.set_frost(image),
+            None => frame.clear_frost(),
         }
     }
 }

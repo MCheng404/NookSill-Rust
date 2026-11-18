@@ -346,6 +346,9 @@ pub(super) fn draw(
 
         // Name, truncated when too wide. The dragged one is drawn dimmer.
         let ghost = drag_src == Some(k);
+        let label_color = lp
+            .color_of(&name)
+            .map(|c| Color32::from_rgb(c[0], c[1], c[2]));
         crate::text::draw_truncated(
             &painter,
             Pos2::new(cell.center().x, icon_rect.bottom() + 8.0),
@@ -353,7 +356,11 @@ pub(super) fn draw(
             &name,
             cw - 12.0,
             11.5,
-            if ghost { sub } else { tc },
+            if ghost {
+                sub
+            } else {
+                label_color.unwrap_or(tc)
+            },
         );
 
         // The keyboard selection is a halo around the icon. Hover uses a

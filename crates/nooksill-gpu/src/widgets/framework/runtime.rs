@@ -164,13 +164,14 @@ fn show_panel_with(
     (x, y)
 }
 
-/// Hide a panel and release its backdrop in one step.
+/// Hide a panel and release its backdrop and pixel buffers in one step.
 pub fn hide_panel(renderer: &mut FrameRenderer, hwnd: HWND) {
     release_backdrop(renderer, hwnd);
     // SAFETY: same reasoning as `show_panel`.
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
+    renderer.release_dib();
 }
 
 /// Tear a panel down: stop the capture, clear the user-data pointer, then

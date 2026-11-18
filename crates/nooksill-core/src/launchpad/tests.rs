@@ -407,3 +407,25 @@ fn serialize_cleans_delimiters() {
     assert_eq!(back.name_of(back.top()[0]), "坏 名字 第二行");
     assert_eq!(back.serialize(), dat, "清洗后仍可无损往返");
 }
+
+#[test]
+fn label_colors_roundtrip_and_name_rules_skip_manual_choices() {
+    let mut lp = with(&["Game One", "Editor"]);
+    lp.set_color("Editor", Some([1, 2, 3]));
+    let rules = vec![
+        ("Game".to_owned(), [255, 0, 0]),
+        ("Editor".to_owned(), [0, 255, 0]),
+    ];
+    assert_eq!(lp.apply_color_rules(&rules), 1, "manual colour must win");
+    assert_eq!(lp.color_of("Game One"), Some([255, 0, 0]));
+    assert_eq!(lp.color_of("Editor"), Some([1, 2, 3]));
+
+    let text = lp.serialize();
+    assert!(text.contains("K\tGame One\tFF0000"));
+    let back = Launchpad::parse(&text);
+    assert_eq!(back.color_of("Game One"), Some([255, 0, 0]));
+    assert_eq!(back.color_of("Editor"), Some([1, 2, 3]));
+
+    lp.set_color("Game One", None);
+    assert_eq!(lp.color_of("Game One"), None);
+}

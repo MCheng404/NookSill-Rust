@@ -5,6 +5,305 @@
 
 ---
 
+## 未发布 — 2.0.1 之后（2026-11-17）
+
+### 图形设置改动后自动重启（2026-11-18）
+
+`GpuAccel` 与 `[Graphics] Adapter` 都只在 `boot` 生效（FrameSlot 二选一、
+`Gpu::new` 只调一次），此前改了要手动重开才生效。现在改完自动重启。
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| Add 重启助手 | `nooksill_platform::restart::after_exit()`：写 `%TEMP%\nooksill-restart.cmd`，`cmd /C start "" /min` 脱离启动，脚本轮询 tasklist 等本进程消失后再 `start` 自身并自删 | 单实例互斥量全局，提前 spawn 只会 `summon` 旧窗口然后退出＝没重启 |
+| Add 变更检测 | `App.gfx_key` 在 boot 快照 `(GpuAccel, Adapter)`；`step_gfx_restart()` 挂 run_loop 7.5，变化则 `touch_cfg()` + `pending_restart` + `PostQuitMessage(0)` | 每轮跑，外部改 ini 也能捕获；先比较后克隆，常态无分配 |
+| Add 关机分支 | `main` 在 `drop(app)` 后 `else if restart` 调 `after_exit()` | 与更新路径互斥，更新本身已会重启 |
+| Fix 提示文案 | 显卡说明「下次启动生效」→「切换会自动重启 Dock」；GPU 加速 hint 补同句；`satellite.rs` 两条 adapter note 改为「正在重启 Dock」 | 原文案与新行为矛盾 |
+| Add 测试 | 2 项：重启必须在等待循环之后、含空格路径保持引号、脚本不得出现 `move` | 平台 136 项 |
+
+**取证要点**：①不能 `process::exit`（跳过析构会丢 AppBar `ABM_REMOVE` 与配置写回，
+`apply_update` 注释已记）；②配置一定先落盘——`DiskWriter::shutdown` 内部
+`submit` 后 `thread.join()`，会等写盘线程结束；③**不会重启循环**：全仓
+`cfg.adapter` 只有 ini 载入 / 插件 set / 设置页下拉三处写入，**显卡回退不回写 cfg**。
+
+**验证**：`./scripts/build.sh --gate` 通过，**829 项 0 失败**（platform 134→136）。
+真机整进程重启未验证：用户 Dock 在跑，单实例互斥量挡住第二个实例，未杀用户进程。
+
+### 修 CPU 模式高 DPI 下 Dock 栏画错位置与尺寸（2026-11-18）
+
+**根因**：egui 的 `ClippedPrimitive` 顶点位置与 `clip_rect` **都是逻辑点**。
+`egui-wgpu` 把 `screen_size_in_points` 喂给着色器、物理分辨率由 viewport 提供，
+裁剪另由 `ScissorRect::new` 乘 ppp。软件光栅没有 viewport，原实现两者都没乘，
+ppp=1 时恰好重合，ppp=1.5 时整条栏按 2/3 尺寸画在左上角并被裁掉。
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| Fix 坐标空间 | `SoftRenderer::paint` 增 `pixels_per_point` 参数，**顶点与裁剪框同时**按 ppp 缩放 | `epaint::tessellate_clipped_shape` 原样传 clip；实测 ppp=2 时 32 点矩形顶点仍是 `0.2 / 32.2`；`UniformBuffer.screen_size_in_points` |
+| Fix 错误注释 | 原写「Positions and clips are physical pixels」→ 改为说明两者都是逻辑点及为何必须在此缩放 | 该注释就是错误假设的源头 |
+| Add 回归测试 | `clip_rect_is_scaled_by_pixels_per_point`：ppp=2 真实 egui 帧，断言 (40,40) 与 (60,60) 仍被填充 | 修复前两点都是 `[0,0,0,0]` |
+| 调用点 | `softframe.rs` 传 `FullOutput.pixels_per_point`；`soft_bench` 3 处传 ppp；15 处既有测试传 1.0（逐字节不变） | — |
+
+**此前所有 CPU 帧耗时数字偏乐观，已重测**（ppp 1.5 / 12 图标 / 中位数）：
+
+| 场景 | 旧值（错缩放） | 修正后 |
+|---|---|---|
+| 完整场景 静止（1424 三角形） | 17.95 ms / 55.7 fps | **60.77 ms / 16.5 fps** |
+| 完整场景 最大放大 | 21.51 ms / 46.5 fps | **66.45 ms / 15.0 fps** |
+| 设置窗 1.45 Mpx | 36.77 ms / 27.2 fps | **112.70 ms / 8.9 fps** |
+| SoftFrame 相位（无每图标底衬） | 15.65 ms / 63.9 fps | **18.84 ms / 53.1 fps** |
+
+真实 Dock 画每图标底衬，故应以 **16.5 fps** 为准。常驻内存基本不变
+（WS 24.71 / 私有 15.34 MiB，缓冲尺寸一直是对的）。
+**当初「接受 46–56 fps」的决定基于错误数字，前提已不成立，取舍需重新拍板。**
+
+**验证**：`./scripts/build.sh --gate` 通过，827 项 0 失败（nooksill-gpu 264 项）。
+
+### 修「CPU 模式仍在第一轮建设备」的真漏，并加空闲 5 分钟释放设备（2026-11-18）
+
+**上一节的「启动不创建设备」在修复前不成立**：`step_settings` 每轮写
+`tick_settings(&self.gpu()?, ..)`，实参先于函数体求值，`tick_settings` 内部的
+槽位判空挡不住设备创建。CPU 模式因此在第一轮 tick 就付了驱动地板。
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| Fix 每轮建设备 | `step_settings` 改为 `settings_slot.is_some()` 才取设备，`pump_update()` 仍每轮跑 | 全部 18 处 `self.gpu()` + 11 处直接字段访问逐一分类：每轮路径只有 settings/notes/group/resmon/preload，其余都在 `take_*` 标志、槽位判空或菜单命令分支之后 |
+| Add 空闲释放 | `step_gpu_idle`：CPU 模式下无任何面板/菜单/设置窗/Launchpad 打开且持续 300 秒，交接持久状态后丢面板与设备 | 用户拍板「空闲若干分钟后释放」 |
+| Add 状态交接复用 | `reset_panels_for_scale` 更名 `drop_panels_keeping_state`，DPI 变化与空闲释放共用（cc_order 进配置、计时器快照进写盘队列） | 隐藏面板仍持有 `Gpu` 克隆，只置 `App.gpu = None` 无效 |
+| Add 克隆前提实测 | `gpu_drop` 增一段：`clone()` 后丢原始句柄 WS 仅 −2.23 MiB，丢最后一个克隆才 −40.83 MiB | 证明必须连面板一起丢 |
+
+**丢弃设备收益**（7 次采样中位数）：NVIDIA 归还约 74 MiB、残留 +44 MiB；
+AMD 归还约 47 MiB、残留 +33 MiB。残留随建/丢轮次爬升（NVIDIA 44→50→52），
+故阈值取 5 分钟，让日常开关面板碰不到它。触发后面板重开需重建，瞬时 UI 状态丢失。
+
+**验证**：`./scripts/build.sh --gate` 通过，826 项 0 失败。
+
+### 修 CPU 模式毛玻璃在窗口移动/改尺寸后永久错位，并更正两条错误结论（2026-11-18）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| Fix 毛玻璃失效判定 | `SoftFrame` 记录 `CaptureKey{rect,size,ppp,spec}`，新增 `refresh_frost`，只在键变化时重抓；`FrameSlot::refresh_frost` 对 GPU 是空操作（Live 线程自愈） | `capture_behind_pct` 读窗口当前矩形，CPU 无 Live 线程则旧桌面切片永久拉伸在新位置 |
+| Fix 调用顺序 | `render.rs` 在取 `frost_backdrop()` **之前**调 `refresh_frost` | 尺寸变化会换纹理句柄，先取的句柄会指向已释放纹理 |
+| Fix 文档错误结论 | ADR-119 原写「图标圆角 CPU 版未做」→ 更正为并未丢失 | `worker/icons.rs` 的 `process()` 在 shader 为 `None` 时走 `core::icon::apply_round_mask`，与 `icon.wgsl` 同一套角判定；ADR-066 早已写明 CPU 实现全部保留 |
+| Fix 过时注释 | `gpu.rs` 的 `GPU_ACCEL` 文档原写「raster switch not wired yet」→ 改为描述已接线后的真实行为 | 接线已于上一节完成 |
+| Add 回归测试 | `the_backdrop_is_recaptured_only_when_its_inputs_change`：真实窗口逐项验证移动/改尺寸/改 DPI/改模糊半径都触发重抓，静止与解除武装都不触发 | 新增 `#[cfg(test)]` 捕获计数 |
+| Add 探针 | `examples/gpu_drop.rs`：量丢弃整个 wgpu 设备能归还多少常驻内存 | 见下 |
+
+**不需要为移动限流**：`step_relayout` 在尺寸与原点未变时早返回，自动隐藏是绘制期
+偏移（`hide_cur * (bar_h + margin + 14)`）而非移动窗口。实测单次抓帧+模糊
+（radius 14）**9.38 ms**，静止时 `refresh_frost` **0.0007 ms**。
+
+**整窗辉光并未丢失**：`frame/render.rs` 是 `if frost_whole { self.glow } else { None }`，
+Dock 一直 `set_frost_whole_window(false)`，所以 GPU 模式下 Dock 也没有整窗辉光。
+
+**丢弃设备实测**（7 次采样中位数）：NVIDIA 11.62 → 129.64（+118.02 MiB WS）→
+丢弃后 55.73（+44.11 vs 基线），归还约 74 MiB、残留 44 MiB 收不回；AMD
+11.08 → 91.22（+80.14）→ 44.38（+33.30）。残留随轮次爬升（NVIDIA 44→50→52）。
+故「面板全关后释放设备」可省约 74 MiB，但要重付面板重开的设备创建成本，
+**未实现，待拍板**。
+
+**验证**：`./scripts/build.sh --gate` 通过，826 项 0 失败（nooksill-gpu 263 项）。
+
+### Dock 栏接上 CPU 光栅，GPU 设备改为按需创建（2026-11-18）
+
+**产品行为已改变**：`GpuAccel=0`（默认）时进程启动**不再创建 wgpu 设备**，
+Dock 栏由 CPU 光栅绘制；打开面板/菜单/设置窗时才创建设备。GPU 路径代码逐字未改。
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 新增 `softframe.rs` | `SoftFrame`：egui → `SoftRenderer` → 分层 DIB，全程不碰 wgpu。含一帧式毛玻璃、反射、重绘调度 | ADR-119；3 项状态机测试（空载不待帧、backdrop 用逻辑点、resize 保留字体） |
+| 新增 `bin/dock/frame_slot.rs` | `FrameSlot` 枚举分发 Dock 用到的 16 个方法；两个变体都装箱（GPU 渲染器 ~1.8 KB，CPU 侧内联 1 KB sRGB 解码表） | clippy `large_enum_variant` |
+| `frost::Spec::apply_soft` | 与 `apply` 同样的抓帧 + CPU compose，但不发布 corner/glow（Dock 按块画背景，不画整窗 sheet） | 复用现成 `compose`/`blur_rgba` |
+| GPU 懒创建 | `App.gpu` 改 `Option<Gpu>`，`App::gpu()` 首次使用时创建；`Gpu` 加 `Clone`（wgpu 句柄是引用计数，不是第二个设备），返回 owned 句柄以避开借用冲突 | 23 处面板调用点改 `&self.gpu()?` |
+| 堵住三处会提前创建设备的漏 | CPU 模式跳过 `preload_panels`；`IconLoader::spawn` 传 `None`；`SmokeFx::new()` 替代 `with_gpu` | 用户配置 `PreloadPanels=1`，不跳过则启动即建齐 6 个 GPU 面板 |
+| 每轮重绘不创建设备 | `App::panel_device(&self.gpu)` 只取不建（槽位存在即设备已存在），用于 `step_resmon` 的 7 处 | `step_resmon` 每轮都跑，用 `gpu()?` 会在第一轮 tick 建起设备 |
+
+**生产路径端到端实测**（`soft_bench` 新增 SoftFrame 相位，ppp 1.5 / 12 图标 /
+60 帧中位数）：**15.88 ms、63.0 fps**；该相位常驻 WS 28.96 / 私有 19.35 MiB
+（含前一设置窗相位的缓冲；纯 Dock 相位 24.78 / 15.44）。对照真实 GPU Dock 的
+WS 207 / 私有 381.6 MiB。
+
+**验证**：`./scripts/build.sh --gate` 通过，825 项 0 失败（nooksill-gpu 262 项）。
+
+### GPU 加速开关：设置项与特效降级已落地，Dock 接线未做（2026-11-18）
+
+新增「GPU 加速」设置，**默认关闭**。本次改变的产品行为**只有毛玻璃与烟雾**：
+`boot.rs` 仍无条件创建 GPU 设备，故**常驻内存尚未下降**。
+（Dock 接线与懒创建已由上一节补齐。）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 新增配置键 `GpuAccel` | `[performance]` 段，布尔，默认 0；`NUMERIC_KEYS` 表尾索引 129 | 新增键需同时改 5 处：表行、`Key` 常量、section 映射、`key_query.rs` 的 `EXTRA`、`config/tests/keys.rs` 的 pairs；漏 `EXTRA` 会挂 `every_numeric_key_is_persisted` |
+| 设置页开关 | 性能页 Graphics 卡片内，显卡选择下方 | 两条文案入 en/zh_cn 表；zh_tw 刻意部分覆盖，缺失回落英文 |
+| 毛玻璃一帧式 | CPU 模式走 `Spec::apply` 的 compose 分支且不启动 `frost::Live`；spec 变化时重抓一帧 | 用户拍板；复用现成 `blur_rgba`，未新增模糊实现 |
+| 烟雾关闭 | CPU 模式下 `smoke.paint` / `step_smoke` / 重绘等待三处均短路 | 用户拍板；开关放 dock 层，core 的 `Tuning` 保持与宿主无关 |
+| 运行时开关 | `gpu::set_gpu_accel` / `gpu_accel`，启动与 `sync_prefs` 两处同步 | `gpu_accel_defaults_off_and_round_trips`、`config_default_matches_the_runtime_default`；进程全局量，测试用互斥量串行 |
+
+**光栅器提速 2.43×，全部位精确**（43.04 → 17.72 ms）：1×1 纹理直接取样、
+顶点色相同时跳过插值、白色调制透传，以及**按行解析求跨度**取代逐像素包围盒
+测试（单项 34.92 → 18.85 ms）。跨度只作保守裁剪，最终仍由原精确内点测试判定，
+13 项像素测试逐字节不变。
+
+**新增探针 `examples/soft_bench.rs`**：真实纹理图标 + 圆角 + 放大动画，
+分段计时。ppp 1.5 / 12 图标 / 120 帧中位数：Dock 静止 **17.98 ms（55.6 fps）**、
+最大放大 21.55 ms（46.4 fps）；设置窗 1.45 Mpx **36.54 ms（27.4 fps）**。
+tessellate 0.04 ms、present 0.22 ms，**99% 时间在光栅**。同进程常驻
+WS 24.77 / 私有 15.44 MiB。**CPU 路径达不到 60 fps**，是接线的决策前提。
+
+**修掉一个 debug 下直接 abort 的溢出**：按行求跨度时近水平边的 `d[1]` 趋零，
+`k/d[1]` 饱和成 `i32::MAX`，再 `+2` 整数溢出 → `STATUS_STACK_BUFFER_OVERRUN`。
+改用饱和运算并挡非有限值，回归测试 `near_horizontal_edges_still_rasterize`。
+
+**验证**：`./scripts/build.sh --gate` 通过（nooksill-gpu 259 项，含 16 项 soft
+像素测试）。
+
+### CPU 软件光栅器：双渲染路径的第一步（2026-11-18）
+
+**产品行为暂未改变**——本次只落地光栅器本体与探针，设置项与 Dock 接线尚未做。
+（设置项与特效降级已由上一节补齐；Dock 接线仍未做。）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 新增 `soft` 模块 | 自研扫描线光栅器，吃 egui `ClippedPrimitive`，输出**带真实 alpha** 的预乘 RGBA8，直接喂 `LayeredPresenter` | ADR-119；13 项像素级测试 |
+| 色彩管线 | 按 egui-wgpu `fs_main_linear_framebuffer` 顺序：gamma 采样与调制 → RGB 转线性 → 线性预乘混合 → 编码回 sRGB | 取证 `egui-wgpu-0.37.0/src/egui.wgsl:173-188`；`transfer_round_trips_every_byte` 覆盖全部 256 字节 |
+| 覆盖规则 | 边函数 + top-left 填充规则 | `shared_edge_blends_once`：共享对角线的像素与内部像素逐位一致，否则每个圆角/字形都会有亮缝 |
+| 新增探针 | `examples/mem_nogpu.rs`：完全不创建 wgpu 设备的进程内存 | 空基线 WS 10.25 / 私有 1.83；+Dock 栏 **23.78 / 13.84**；+7 面板 53.99 / 43.84 MiB |
+
+**修掉一个会毁掉整个画面的采样 bug**：双线性在 uv=0 处若钳制**坐标**而非
+**每个采样点索引**，`fx=-0.5` 会保留 0.5 权重混入相邻透明像素，把 egui 用于
+所有无纹理图形的白像素稀释——实测中心像素 `[10,20,40,64]`，应为
+`[40,80,160,255]`，即整个 UI 掉到约 25% 不透明度。已改为钳制索引，
+回归测试 `edge_texel_is_not_diluted_by_its_neighbour`。
+
+**否决现成 crate**：`dream-soft-render` 2.0.0 输出不透明（alpha 恒 255），
+喂不了分层窗口；另有 1280×720 表面上限（设置窗 1340×1080 超限）与 8 MiB
+纹理上限。详见 ADR-119。
+
+验证：`./scripts/build.sh --gate` 六步全过，**818 项 / 0 失败 / 0 跳过**。
+
+### 错误类型改用 thiserror derive（2026-11-18）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 错误类型 | GpuError / GroupError / ParseError / MutexError / PathsError / TrayError / NetError 转 `#[derive(thiserror::Error)]` | ADR-118；文案逐字不变 |
+| 保留手写 | LaunchError（按 Shell 值分流）与 UpdateError（按 Net 嵌套变体分流）无法 per-variant derive，保留 Display；LaunchError 补 `impl Error` | 强行 derive 会丢分派文案 |
+| 依赖 | workspace 加 `thiserror = "2.0"`；core / platform / gpu 各显式声明 | 已在 Cargo.lock（wgpu / naga / gpu-allocator 等带入），零新增 crate |
+| core 约束 | `[dependencies]` 由空改为允许 thiserror，注释改述为「只允许与宿主无关的 crate」 | 跨平台 proc-macro，编译期展开、无运行时产物 |
+| 测试 | 新增 `platform/tests/error_display.rs` 7 项；core/group.rs 与 gpu.rs 各 +1 项 | 语言切换用 Mutex 串行化（set_language 是进程全局） |
+
+验证：`./scripts/build.sh --gate` **六步全过，805 项测试通过 / 0 失败 / 0 跳过**。
+release 体积 **8328704 → 8329216 字节（+512，一个 PE 对齐单位）**，
+增量来自新增的 `source()` / `Error` impl，非 thiserror 运行时。
+after SHA256 `66ED841619CF3791CD916A8DECA1CAAB33686C4C5538C373B3C585A907B41640`。
+
+### 修掉定位授权弹窗阻塞门禁（2026-11-18）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| test_env | 新增 `consent_probes()`，由 `NOOKSILL_CONSENT_PROBES=1` opt-in | Windows 11 24H2 把 WLAN 当前连接查询纳入精确位置授权 |
+| radio 测试 | `probes_are_safe_without_hardware` 默认跳过 `wifi_state()`，保留蓝牙与注册表探测 | 改前挂起 >60s 等系统弹窗，改后 **0.03s 通过** |
+
+依据：微软《Wi-Fi 访问和位置的 API 行为变更》列出
+`WlanQueryInterface(wlan_intf_opcode_current_connection)` 等 API 需要精确位置
+同意，并弹**每应用一次性**提示；cargo 每次改依赖都换测试 exe 名，故反复弹。
+生产 exe 路径固定，不受影响。
+
+### 常驻内存：隐藏窗口释放分层 DIB（2026-11-18）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 渲染器 | `offscreen` / `presenter` 拆为两个可空槽位，`new()` 不再预分配像素缓冲，首帧才建 | ADR-117；预热的六个面板点开前零像素开销 |
+| 隐藏路径 | `framework::hide_panel`、设置窗 `hide`、起动台 `close`、右键菜单与编辑窗关闭时 `release_dib()` | 只 drop DIB，GPU 目标 / Context / 管线保留 |
+| 出帧 | `render` 前 `ensure_targets()` 按需重建；`render_rgba` 只保证 offscreen，不再为离屏截图建 DIB | 释放重建后逐像素一致 |
+| 探针 | 新增 `examples/mem_targets.rs`（三相位 A/B）与 `examples/mem_surface.rs`（DIB / GPU 目标分解 + 建 DIB 计时） | 两卡稳态 WS −13.49 MiB / private −13.5 MiB，漂移 0.00 |
+
+验证：`./scripts/build.sh --gate`（796 项通过 / 0 失败），新增 3 条回归
+（隐藏渲染器不持缓冲、释放重建后逐像素一致、释放态 resize 不重建 DIB）。
+`mem_targets 1.5 4 5` 在 NVIDIA 与 AMD 上第 2 轮起逐位稳定：
+持有 152.6 / 123.5 MiB → 释放 139.1 / 110.0 MiB → 重建回到原值。
+7 个窗口 DIB 解析字节合计 13.47 MiB，与收益吻合。
+另记录一条否决：连 GPU 目标一起释放拿不到可重复的 WS 收益，私有提交稳态
+还抬高约 48 MiB（归属未定位），故只释放 DIB。
+
+**ADR-117 事实核查修订（2026-11-18）**：初稿有三处结论未经实测或归因错误，
+已按源码与实测改写，决策本身不变。
+
+| 初稿写法 | 核查结果 |
+|---|---|
+| "placed resource 归还 gpu-allocator 后堆不回收" | **证伪**：`d3d12/mod.rs:474-502` 的 `free` 会销毁空块，只保留最后一个通用块 |
+| "GPU 纹理与 MSAA 在两种卡上都不计入进程 WS" | **部分证伪**：独显各轮≈0，核显首轮 9.19 MiB、churn 后归零 |
+| "CreateDIBSection 亚毫秒级" / "Dock 栏 DIB 约 2 MB" | 换成实测：p50 0.010–0.011 ms；Dock 1927×233 → 1.71 MiB |
+
+同时统一单位口径为 MiB（`MemStats` 除 1024×1024，原文误标 MB），
+并补 Microsoft Learn《Residency》与 wgpu-hal `suballocation.rs` 的取证。
+
+**第二轮：全量 ADR 审查（122 条）**，最重要的发现是**分配与释放不对称**：
+
+| 方向 | NVIDIA WS | AMD WS |
+|---|---|---|
+| 分配 81.17 MiB GPU 目标 | **+31.36** | **+16.92** |
+| 释放（3 轮） | 0.00 | 0.00 |
+| 再分配（2 轮） | **0.00** | **0.00** |
+| 释放 DIB | **14.46** | **14.14** |
+
+即 **GPU 目标确实计入进程 WS**（此前 ADR 说不计入，错），但释放拿不回来、
+再分配也不再花钱——内存被分配器池化留着。这同时调和了 BUILD.md 结论二
+（分配方向 +64 MB）与 ADR-117（释放方向 −0），两者并不矛盾。
+
+其余修订：
+- ADR-109 删掉未取证的「MSAA 附件走显存，不进本进程 RSS」，保留其完整进程观测。
+- ADR-107 / ADR-108 的「PreloadPanels=0 省 32 MB / 三项合计 39 MB」标注为
+  ADR-117 **之前**的口径（隐藏窗口现在会交回 DIB，剩余收益缩水）。
+- BUILD.md 结论二补两条限定：ADR-013 调优前的数字、且只测分配方向。
+- 修掉 4 处漂移的行号引用（`BUILD.md:233`、`gpu.rs:245-259`、
+  `dock/mod.rs:32-35`、`icons.rs:39` 路径歧义），改为章节或符号引用。
+- 文件头补全**四组重复编号**对照表（049 / 104 / 105 / 110），不重编号以免断引用。
+- ADR-029 标题补【已作废，见 ADR-063】（此前只有正文写了作废）。
+
+### 插件接口扩展与官方 Wiki（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 插件 | 新增 text/dockItems/iconPack/hotkeys/labelColors 贡献，全部白名单校验与还原 | ADR-116；11 项插件测试 |
+| 模块 | plugin.rs 拆为 mod/parse/apply/tests，公开 API 不变 | 门禁 size 通过 |
+| 官方插件 | official-colors 升级 1.1.0，带 Dock 项与 Wiki 链接 | manifest 解析通过 |
+| Wiki | docs/wiki/ 6 页 + GitHub Wiki 同步 | 6 页 HTTP 200 |
+
+验证：`./scripts/build.sh --gate`（793 项通过 / 0 失败）。
+
+
+### 四项收尾（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| Dock 颜色 | 删除自定义颜色卡片、`color_row` 与渲染分支；`color1` 等键保留兼容 | ADR-115；颜色单测改为断言旧值不再生效 |
+| 起动台 | 新增 `AddLaunchpad` 命令与 `Item::launchpad()`，添加页/条目页可恢复图标 | ini 往返单测 |
+| 左侧居中 | `Metrics::signed_widget_extra()`，左侧条带时栏体右移半个占位 | 2 项左右对称布局单测 |
+| 控制中心 | 移除节能/热点磁贴两个设置开关，配置键保留 | 设置页与 core 门禁通过 |
+
+验证：`./scripts/build.sh --gate`（785 项通过 / 0 失败）。
+
+### 网络代理三态与 dev 滚动发布日期（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 代理 | 新增 `NetProxy`（跟随系统/自定义/直连）与 `[update] Proxy` 地址；WinHTTP 按模式选 `AUTOMATIC_PROXY`/`NAMED_PROXY`/`NO_PROXY` | ADR-114；2 项配置往返 + 2 项模式单测 |
+| 设置页 | 更新网络页加代理下拉与地址输入，空地址自动退回跟随系统 | kittest 无障碍标签挂到输入框 |
+| CI | dev 发布改为删除 release 与 tag 后基于当前 commit 重建，`published_at` 刷新 | ADR-114；workflow 缩进与 tag 触发条件核对 |
+
+验证：`./scripts/build.sh --gate`（784 项通过 / 0 失败）。
+
+### 国内更新检查与下载优化（2026-11-17）
+
+| 项 | 改了什么 | 依据 / 验证 |
+|---|---|---|
+| 检查 | 稳定版用 `/releases/latest` 的 302 Location 取 tag，按固定命名拼 URL；API 留作 beta 与回退 | ADR-113；2 项解析/构造单测 |
+| 镜像 | 内置镜像从 5 个收敛到 2 个；sticky 命中跳过测速 | 三份 2026-11 国内实测；1 项列表单测 |
+| 下载 | 四路 Range 并发 + 8 MiB 分片 + 严格 206/identity；200 回退单连接 | 2 项分片/协议单测 |
+| 配置 | 新增 `UpdInterval`（小时）与 `UpdMirror`（模式），`UpdLast` 改存 Unix 小时 | 设置页 combo；core 键表与 i18n 门禁通过 |
+
+验证：`./scripts/build.sh --gate`（780 项通过 / 0 失败）、
+`./scripts/package.sh --release` 产物 `dist/NookSill-2.0.1-win64.exe`
+（sha256 `3bc0c97a…`）校验通过。
+
 ## 2.0.1 — 正式版（2026-11-17）
 
 本节汇总 `2.0.0` 之后的全部改动，以 `2.0.1` 正式版发布。各节内记录的产物名是

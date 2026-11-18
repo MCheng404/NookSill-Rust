@@ -29,14 +29,10 @@ impl App {
                     .dock
                     .cfg
                     .dock_is_dark(nooksill_platform::theme::is_dark());
-                let lw = ensure_launchpad(
-                    &self.gpu,
-                    &mut self.launchpad_slot,
-                    &self.paths,
-                    self.ppp,
-                    dark,
-                )?;
-                lw.place_on_target(&self.gpu, self.ppp)?;
+                let gpu = self.gpu()?;
+                let lw =
+                    ensure_launchpad(&gpu, &mut self.launchpad_slot, &self.paths, self.ppp, dark)?;
+                lw.place_on_target(&gpu, self.ppp)?;
                 lw.set_grid(
                     self.dock.cfg.get_i32(Key::LP_COLS).max(3) as usize,
                     self.dock.cfg.get_i32(Key::LP_ROWS).max(2) as usize,
@@ -46,7 +42,7 @@ impl App {
             }
             "settings" => {
                 let sw = ensure_settings(
-                    &self.gpu,
+                    &self.gpu()?,
                     &mut self.settings_slot,
                     &self.paths,
                     settings_win::effective_ppp(&self.dock.cfg, self.dpi),
@@ -86,14 +82,14 @@ impl App {
         self.panels().iter().flatten().any(|(visible, _)| *visible)
     }
 
-    /// Drop the scale-baked panels after a DPI change.
+    /// Drop the panels, handing their persistent state over first.
     ///
-    /// Each of these fixes its physical size and `pixels_per_point` in `new`,
-    /// so it cannot follow the dock to another monitor in place. Persistent
-    /// state is handed over first: a pending tile order goes into the config
-    /// and the timer snapshot into the disk queue; everything else is rebuilt
-    /// from `App` / `raw` when the panel opens again.
-    pub(super) fn reset_panels_for_scale(&mut self) {
+    /// Two callers: a DPI change (each panel fixes its physical size and
+    /// `pixels_per_point` in `new`, so it cannot follow the dock to another
+    /// monitor in place) and the CPU path's idle device release. A pending tile
+    /// order goes into the config and the timer snapshot into the disk queue;
+    /// everything else is rebuilt from `App` / `raw` when the panel opens again.
+    pub(super) fn drop_panels_keeping_state(&mut self) {
         if let Some(win) = self.cc_slot.as_mut() {
             if let Some(order) = win.take_order() {
                 self.dock.cfg.cc_order = nooksill_core::control::order_text(&order);
@@ -122,6 +118,42 @@ impl App {
         self.tool_slot = None;
         self.group_slot = None;
         self.note_slot = None;
+    }
+
+    /// Give the GPU device back after a quiet spell. CPU mode only: with GPU
+    /// acceleration on, the bar itself needs the device every frame.
+    ///
+    /// Hidden panels keep their `Gpu` clones, so the device only goes once they
+    /// are dropped too. `Gpu` is a bundle of Arc handles, so the last drop is
+    /// what releases the driver's allocations.
+    ///
+    /// The wait is deliberately long: dropping returns most of the floor
+    /// (measured ~74 MiB on NVIDIA, ~47 on AMD) but a residue stays and creeps
+    /// up a little per create/drop cycle, so ordinary panel use must never
+    /// reach this. The cost when it does fire is a rebuild on the next open.
+    pub(super) fn step_gpu_idle(&mut self) {
+        const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(300);
+        if nooksill_gpu::gpu::gpu_accel() || self.gpu.is_none() {
+            self.gpu_idle_since = None;
+            return;
+        }
+        if self.dock_busy() || self.menu_slot.is_some() || self.edit_slot.is_some() {
+            self.gpu_idle_since = None;
+            return;
+        }
+        let since = *self.gpu_idle_since.get_or_insert_with(Instant::now);
+        if since.elapsed() < IDLE_RELEASE {
+            return;
+        }
+        self.gpu_idle_since = None;
+        self.drop_panels_keeping_state();
+        // Neither is visible here (`dock_busy` checked), and both hold a clone.
+        self.settings_slot = None;
+        self.launchpad_slot = None;
+        self.gpu = None;
+        if trace::geom() {
+            eprintln!("[gpu] 空闲 {} 秒，释放设备与面板", IDLE_RELEASE.as_secs());
+        }
     }
 
     /// Whether the user is busy with the dock; auto-hide stays expanded then.

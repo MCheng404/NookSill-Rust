@@ -320,6 +320,22 @@ pub struct Metrics {
     pub lh: i32,
 }
 
+impl Metrics {
+    /// Signed horizontal space the bar yields to the widget strip.
+    ///
+    /// The strip occupies the right of the bar by default, so the bar shifts
+    /// left by half the extra. On the left side the sign flips: the bar must
+    /// shift right, otherwise it stays centred as if no strip existed.
+    #[must_use]
+    pub const fn signed_widget_extra(&self) -> f32 {
+        if self.widgets.on_left {
+            -self.widget_extra
+        } else {
+            self.widget_extra
+        }
+    }
+}
+
 /// Clamps `v` into `lo..=hi`.
 #[must_use]
 pub fn clampf(v: f32, lo: f32, hi: f32) -> f32 {

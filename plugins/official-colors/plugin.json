@@ -1,0 +1,30 @@
+{
+  "schema": "mc.dock-plugin/v1",
+  "plugin": {
+    "id": "mc.dock.official.colors",
+    "name": "Official label colours",
+    "version": "1.1.0",
+    "author": "MCheng404",
+    "homepage": "https://github.com/MCheng404/NookSill-Rust/wiki/Plugins",
+    "description": "Palette, name rules and a sample Dock entry for coloured Launchpad labels."
+  },
+  "contributes": {
+    "labelColors": {
+      "palette": [
+        { "name": "Coral", "rgb": [255, 112, 112] },
+        { "name": "Amber", "rgb": [255, 185, 64] },
+        { "name": "Mint", "rgb": [96, 210, 160] },
+        { "name": "Sky", "rgb": [96, 165, 250] },
+        { "name": "Violet", "rgb": [178, 132, 255] },
+        { "name": "Rose", "rgb": [255, 122, 186] }
+      ],
+      "rules": [
+        { "match": "Game", "rgb": [255, 112, 112] },
+        { "match": "Steam", "rgb": [96, 165, 250] }
+      ]
+    },
+    "dockItems": [
+      { "name": "Terminal", "path": "C:/Windows/System32/cmd.exe", "kind": 0 }
+    ]
+  }
+}

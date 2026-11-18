@@ -44,6 +44,10 @@ impl std::fmt::Display for LaunchError {
     }
 }
 
+// Hand-written Display stays: the message dispatches on the ShellExecuteW
+// return value (0/2/3/5), which a per-variant derive cannot express.
+impl std::error::Error for LaunchError {}
+
 /// NUL-terminated UTF-16, as `ShellExecuteW` requires.
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

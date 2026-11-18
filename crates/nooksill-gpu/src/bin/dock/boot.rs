@@ -96,6 +96,9 @@ impl App {
         nooksill_core::i18n::configure(&cfg.language, nooksill_platform::locale::ui_language_id());
         // Mutable: drag-reordering edits this list alongside the dock.
         let mut raw: Vec<Item> = store::load_items(&ini);
+        // Plugin entries are in-memory only; every boot rebuilds them from the
+        // enabled packs so disabling one never leaves a stale icon behind.
+        super::item_cmds::sync_plugin_items(&mut raw);
         // Host Link widgets stored no target in older configs. Without the
         // real exe path the running scanner cannot match them, so it adds a
         // second icon for the live process. Fill it before the first scan.
@@ -222,9 +225,33 @@ impl App {
             );
         }
 
-        let gpu = Gpu::new(&dock.cfg.adapter)?;
         nooksill_gpu::gpu::set_msaa_preference(dock.cfg.get_i32(Key::MSAA));
-        let mut frame = FrameRenderer::new(&gpu, win_w as u32, win_h as u32, ppp)?;
+        let accel = dock.cfg.get_i32(Key::GPU_ACCEL) != 0;
+        // Snapshot before `dock` moves into App: a later change to either value
+        // needs a relaunch, since both are fixed here.
+        let gfx_adapter = dock.cfg.adapter.clone();
+        nooksill_gpu::gpu::set_gpu_accel(accel);
+        // CPU mode builds no device here: removing the driver/shader floor is
+        // the point of the toggle. Panels and menus pull one up on first use.
+        let gpu = if accel {
+            Some(Gpu::new(&dock.cfg.adapter)?)
+        } else {
+            None
+        };
+        let mut frame = if let Some(g) = &gpu {
+            FrameSlot::Gpu(Box::new(nooksill_gpu::frame::FrameRenderer::new(
+                g,
+                win_w as u32,
+                win_h as u32,
+                ppp,
+            )?))
+        } else {
+            FrameSlot::Soft(Box::new(nooksill_gpu::softframe::SoftFrame::new(
+                win_w as u32,
+                win_h as u32,
+                ppp,
+            )?))
+        };
         // The bar frosts its pieces, not its window: the window also holds the
         // hover area above the bar and the reflection strip below it.
         frame.set_frost_whole_window(false);
@@ -241,7 +268,7 @@ impl App {
         // largest blocking call at startup; moving it off lets the window show
         // first.
         let waker = Waker::new(hwnd);
-        let icons = IconLoader::spawn(waker, Some(&gpu))?;
+        let icons = IconLoader::spawn(waker, gpu.as_ref())?;
         let scanner = Scanner::spawn(hwnd.0 as isize, waker)?;
         let sampler = nooksill_gpu::SysSampler::spawn(waker);
         let resmon_slot: Option<Pin<Box<ResMonWindow>>> = None;
@@ -265,13 +292,38 @@ impl App {
             dock.cfg.hotkey,
         );
         let hotkey_applied = (dock.cfg.hotkey_combo, dock.cfg.hotkey);
+        // Win+L is reserved by Windows; GlobalHotkey logs the failure, so try
+        // the working fallback on the same id.
+        let mut launchpad_hotkey = nooksill_platform::hotkey::GlobalHotkey::register_id(
+            hwnd,
+            nooksill_platform::hotkey::HOTKEY_LAUNCHPAD_ID,
+            dock.cfg.hotkey_launchpad,
+            true,
+        );
+        if launchpad_hotkey.is_unregistered() {
+            launchpad_hotkey = nooksill_platform::hotkey::GlobalHotkey::register_id(
+                hwnd,
+                nooksill_platform::hotkey::HOTKEY_LAUNCHPAD_ID,
+                nooksill_core::hotkey::Hotkey::LAUNCHPAD_FALLBACK,
+                true,
+            );
+        }
+        nooksill_platform::hotkey::set_launchpad_active(
+            launchpad_hotkey
+                .active()
+                .unwrap_or(dock.cfg.hotkey_launchpad),
+        );
 
-        let smoke = SmokeFx::with_gpu(&gpu);
+        let smoke = match &gpu {
+            Some(g) => SmokeFx::with_gpu(g),
+            None => SmokeFx::new(),
+        };
         let mut app = Self {
             hwnd,
             gpu,
             frame,
             global_hotkey,
+            launchpad_hotkey,
             hotkey_applied,
             dock,
             paths,
@@ -307,10 +359,13 @@ impl App {
             update_staged: None,
             pending_update: None,
             pending_silent: false,
+            pending_restart: false,
+            gfx_key: (accel, gfx_adapter),
             update_rate: None,
             debug_opened,
             watcher: nooksill_gpu::popup::Watcher::default(),
             panel_was_open: false,
+            gpu_idle_since: None,
             last_launch_ms,
             tool_state,
             tool_save_at,

@@ -10,7 +10,7 @@ impl Key {
     /// writes back in the same order, so round-tripping between two
     /// implementations produces no row-order diff.
     ///
-    /// 118 keys: 35 typed plus 83 table-driven (`Numeric`).
+    /// 121 keys: 35 typed plus 86 table-driven (`Numeric`).
     pub const ALL: &'static [Key] = &[
         Key::IconSize,
         Key::ZoomSize,
@@ -192,6 +192,10 @@ impl Key {
         Key::GLOW_STRENGTH,
         Key::HOST_LINK_ENABLED,
         Key::HOST_LINK_AUTOSCAN,
+        Key::UPD_INTERVAL,
+        Key::UPD_MIRROR,
+        Key::NET_PROXY,
+        Key::GPU_ACCEL,
     ];
 
     /// Every key that needs reading and writing: the row-order table first,

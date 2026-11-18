@@ -93,11 +93,17 @@ impl LaunchpadWindow {
                 continue;
             }
             self.asked.insert(app.path.clone(), ai);
+            let icon_src = nooksill_platform::plugin::active()
+                .icon_map
+                .iter()
+                .find(|(key, _)| key == &app.name || key == &app.path)
+                .map(|(_, file)| file.to_string_lossy().into_owned())
+                .unwrap_or_default();
             loader.submit(IconRequest {
                 index: ai,
                 kind: nooksill_core::item::ItemKind::File,
                 path: app.path.clone(),
-                icon_src: String::new(),
+                icon_src,
                 fit: 0,
                 kids: Vec::new(),
             });

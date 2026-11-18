@@ -41,6 +41,9 @@ const PANEL_W: f32 = 360.0;
 /// blank area. The height is computed from the real count, see [`panel_h`].
 const PANEL_H_BASE: f32 = 330.0;
 
+/// Panel logical size with no todo rows (offscreen previews, memory probes).
+pub const SIZE: (f32, f32) = (PANEL_W, PANEL_H_BASE);
+
 /// Height of one todo row in logical px.
 const TODO_ROW_H: f32 = 25.0;
 

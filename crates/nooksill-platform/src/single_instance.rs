@@ -2,8 +2,6 @@
 //! A named mutex plus a message makes a second launch raise the existing dock.
 //! The `Local\` prefix is load-bearing: `Global\` would block other users.
 
-use std::fmt;
-
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, WPARAM,
 };
@@ -58,21 +56,11 @@ impl Drop for SingleInstance {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("{}", nooksill_core::i18n::fmt("CreateMutexW failed with code {0}", &[format!("0x{:08X}", .code).as_str()]))]
 pub struct MutexError {
     pub code: i32,
 }
-
-impl fmt::Display for MutexError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&nooksill_core::i18n::fmt(
-            "CreateMutexW failed with code {0}",
-            &[format!("0x{:08X}", self.code).as_str()],
-        ))
-    }
-}
-
-impl std::error::Error for MutexError {}
 
 /// Find an existing instance by window class name.
 #[must_use]

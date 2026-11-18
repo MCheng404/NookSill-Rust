@@ -133,15 +133,6 @@ pub(super) fn it_visible(dock: &Dock, i: usize) -> bool {
     dock.items.get(i).is_some_and(|it| it.cur > 1.0)
 }
 
-/// `0xAARRGGBB` to f32 channels for blending.
-pub(super) fn to_rgb(c: color::Argb) -> (f32, f32, f32) {
-    (
-        color::red(c) as f32,
-        color::green(c) as f32,
-        color::blue(c) as f32,
-    )
-}
-
 /// Font size for one clock card row, in logical points.
 ///
 /// The input is logical row height; multiplying `p.k` or using physical

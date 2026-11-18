@@ -2,18 +2,14 @@
 
 use super::*;
 
-/// Resolved bar colours: custom solid wins, then accent wash, then theme.
+/// Resolved bar colours: accent wash, then theme default.
 ///
-/// A custom colour repeats one RGB so callers can draw a single flat fill;
-/// the old gradient keys are deliberately not read when it is active.
+/// Custom bar colours were removed; the old `color1`/gradient keys stay in the
+/// ini for compatibility but no longer reach this function.
 pub(super) fn bar_colors_of(
     cfg: &nooksill_core::config::Config,
     dark: bool,
 ) -> ((f32, f32, f32), (f32, f32, f32)) {
-    if !cfg.accent_tone && cfg.bg_color1 >= 0 {
-        let rgb = to_rgb(color::from_colorref(cfg.bg_color1 as u32));
-        return (rgb, rgb);
-    }
     if let Some(a) = cfg.runtime_accent {
         let t = [a[0] as f32, a[1] as f32, a[2] as f32];
         let mix = |base: [f32; 3], k: f32| {
@@ -432,67 +428,55 @@ impl Dock {
             painter.add(rounded_frost(rect, rad, frost));
         }
         let (c1, c2) = self.bar_colors(dark);
-        // A deliberate custom colour is flat: none of the old gradient keys
-        // (BgColor2/3, GradAngle, GradA1/2/3) take part in this path.
-        if !self.cfg.accent_tone && self.cfg.bg_color1 >= 0 {
-            let fill = Color32::from_rgba_unmultiplied(
-                c1.0 as u8,
-                c1.1 as u8,
-                c1.2 as u8,
-                (op * 255.0).round() as u8,
-            );
-            painter.rect_filled(rect, CornerRadius::same(r8(rad)), fill);
-        } else {
-            // Each stop has its own alpha; `BgColor3 < 0` disables the mid stop.
-            let alpha = |key: Key| -> u8 {
-                let pct = self.cfg.get_i32(key).clamp(0, 100) as f32 / 100.0;
-                (op * 255.0 * pct).round() as u8
-            };
-            let from = Color32::from_rgba_unmultiplied(
-                c1.0 as u8,
-                c1.1 as u8,
-                c1.2 as u8,
-                alpha(Key::GRAD_A1),
-            );
-            let to = Color32::from_rgba_unmultiplied(
-                c2.0 as u8,
-                c2.1 as u8,
-                c2.2 as u8,
-                alpha(Key::GRAD_A2),
-            );
-            let mid_rgb = self.cfg.get_i32(Key::BG_COLOR3);
-            let mid = (mid_rgb >= 0).then(|| {
-                let v = mid_rgb as u32;
-                Color32::from_rgba_unmultiplied(
-                    (v >> 16) as u8,
-                    ((v >> 8) & 0xff) as u8,
-                    (v & 0xff) as u8,
-                    alpha(Key::GRAD_A3),
-                )
-            });
-            // Angle defaults to 90; vertical docks keep the old per-edge direction.
-            let raw_angle = self.cfg.get_i32(Key::GRAD_ANGLE);
-            let angle_deg = if raw_angle == 90 {
-                if self.cfg.edge.is_horizontal() {
-                    0.0
-                } else {
-                    90.0
-                }
+        // Each stop has its own alpha; `BgColor3 < 0` disables the mid stop.
+        let alpha = |key: Key| -> u8 {
+            let pct = self.cfg.get_i32(key).clamp(0, 100) as f32 / 100.0;
+            (op * 255.0 * pct).round() as u8
+        };
+        let from = Color32::from_rgba_unmultiplied(
+            c1.0 as u8,
+            c1.1 as u8,
+            c1.2 as u8,
+            alpha(Key::GRAD_A1),
+        );
+        let to = Color32::from_rgba_unmultiplied(
+            c2.0 as u8,
+            c2.1 as u8,
+            c2.2 as u8,
+            alpha(Key::GRAD_A2),
+        );
+        let mid_rgb = self.cfg.get_i32(Key::BG_COLOR3);
+        let mid = (mid_rgb >= 0).then(|| {
+            let v = mid_rgb as u32;
+            Color32::from_rgba_unmultiplied(
+                (v >> 16) as u8,
+                ((v >> 8) & 0xff) as u8,
+                (v & 0xff) as u8,
+                alpha(Key::GRAD_A3),
+            )
+        });
+        // Angle defaults to 90; vertical docks keep the old per-edge direction.
+        let raw_angle = self.cfg.get_i32(Key::GRAD_ANGLE);
+        let angle_deg = if raw_angle == 90 {
+            if self.cfg.edge.is_horizontal() {
+                0.0
             } else {
-                raw_angle.rem_euclid(360) as f32
-            };
-            let grad = BarGradient {
-                from,
-                mid,
-                to,
-                angle_deg,
-            };
-            // `BgMode::Solid` draws one colour; gradient and frost share this path.
-            if self.cfg.get_i32(Key::BgMode) == 0 {
-                painter.rect_filled(rect, CornerRadius::same(r8(rad)), from);
-            } else {
-                painter.add(rounded_gradient(rect, rad, grad));
+                90.0
             }
+        } else {
+            raw_angle.rem_euclid(360) as f32
+        };
+        let grad = BarGradient {
+            from,
+            mid,
+            to,
+            angle_deg,
+        };
+        // `BgMode::Solid` draws one colour; gradient and frost share this path.
+        if self.cfg.get_i32(Key::BgMode) == 0 {
+            painter.rect_filled(rect, CornerRadius::same(r8(rad)), from);
+        } else {
+            painter.add(rounded_gradient(rect, rad, grad));
         }
         if self.cfg.border {
             let base = if dark { 90.0 } else { 150.0 };

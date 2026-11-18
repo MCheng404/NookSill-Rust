@@ -114,6 +114,8 @@ impl App {
         // A reflection is this frame's mirrored pixels, so it belongs in the
         // presentation layer; hand it the geometry first.
         self.frame.set_reflection(self.dock.reflection_spec());
+        // Before resolving the handle: a CPU re-capture can replace the texture.
+        self.frame.refresh_frost(self.hwnd);
         // Resolve the backdrop once: `render` borrows the renderer mutably, so
         // the texture handle cannot be looked up inside the closure.
         let frost = self.frame.frost_backdrop();
@@ -133,12 +135,16 @@ impl App {
             now_s: self.start.elapsed().as_secs_f64(),
         };
         let smoke = &mut self.smoke;
+        // Smoke is GPU compute; CPU mode keeps it dark (ADR-119).
+        let smoke_on = tune.enabled && nooksill_gpu::gpu::gpu_accel();
         let raw = raw_input(self.frame.size(), ppp, self.start);
         self.frame
-            .render(&self.gpu, raw, self.hwnd, self.pos, |ui| {
+            .render(self.gpu.as_ref(), raw, self.hwnd, self.pos, |ui| {
                 // Smoke is a background glow and must come first; painting it
                 // on top would tint the icons.
-                smoke.paint(ui, ppp, &tune, view);
+                if smoke_on {
+                    smoke.paint(ui, ppp, &tune, view);
+                }
                 dock.paint(ui, ppp, dark, clock.as_deref(), frost);
             })?;
         self.dump_widgets();
@@ -149,7 +155,10 @@ impl App {
     /// frame cap / VSync setting, not a per-effect timer.
     pub(super) fn step_smoke(&mut self) -> bool {
         let tune = Tuning::from_config(&self.dock.cfg, self.accent);
-        tune.enabled && !self.fs_hidden && !self.dock.fully_hidden()
+        tune.enabled
+            && nooksill_gpu::gpu::gpu_accel()
+            && !self.fs_hidden
+            && !self.dock.fully_hidden()
     }
 
     /// Where the current edge, reservation and size put the window.
@@ -191,6 +200,7 @@ impl App {
     /// a frame interval would spin the loop at 1 ms for no work.
     pub(super) fn wait(&mut self, yielded: bool) {
         let smoke_on = !yielded
+            && nooksill_gpu::gpu::gpu_accel()
             && Tuning::from_config(&self.dock.cfg, self.accent).enabled
             && !self.fs_hidden
             && !self.dock.fully_hidden();

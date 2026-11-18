@@ -162,4 +162,48 @@ impl Launchpad {
         }
         (usize::MAX, 0)
     }
+
+    /// Apply plugin name-prefix rules to labels without a manual colour.
+    ///
+    /// Returns the number of labels changed, so callers only save when needed.
+    pub fn apply_color_rules(&mut self, rules: &[(String, [u8; 3])]) -> usize {
+        let names: Vec<String> = self.apps.iter().map(|app| app.name.clone()).collect();
+        let additions: Vec<(String, [u8; 3])> = names
+            .into_iter()
+            .filter(|name| self.color_of(name).is_none())
+            .filter_map(|name| {
+                rules
+                    .iter()
+                    .find(|(prefix, _)| {
+                        name.to_ascii_lowercase()
+                            .starts_with(&prefix.to_ascii_lowercase())
+                    })
+                    .map(|(_, rgb)| (name, *rgb))
+            })
+            .collect();
+        for (name, rgb) in &additions {
+            self.set_color(name, Some(*rgb));
+        }
+        additions.len()
+    }
+
+    /// Label colour for an app name, when set by an official plugin palette.
+    #[must_use]
+    pub fn color_of(&self, name: &str) -> Option<[u8; 3]> {
+        self.color_of
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, c)| *c)
+    }
+
+    /// Set or clear a label colour. Renames keep the entry because colours are
+    /// keyed by the displayed name, matching the category rules.
+    pub fn set_color(&mut self, name: &str, color: Option<[u8; 3]>) {
+        self.color_of.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        if let Some(rgb) = color {
+            if self.color_of.len() < 512 {
+                self.color_of.push((name.to_owned(), rgb));
+            }
+        }
+    }
 }

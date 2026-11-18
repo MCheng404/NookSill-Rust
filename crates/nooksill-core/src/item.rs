@@ -6,6 +6,9 @@
 
 use crate::MAX_KIDS;
 
+/// Reserved path of the built-in Launchpad entry.
+pub const LAUNCHPAD_PATH: &str = "nooksill:launchpad";
+
 /// `name` buffer size including NUL. Mirrors `Item.name[128]`.
 pub const NAME_CAP: usize = 128;
 /// `path` buffer size. Mirrors `Item.path[1024]`.
@@ -129,6 +132,12 @@ impl Item {
             bounce: 0,
             kids: Vec::new(),
         }
+    }
+
+    /// Build the built-in Launchpad entry used when restoring a deleted icon.
+    #[must_use]
+    pub fn launchpad() -> Self {
+        Self::new(ItemKind::File, crate::i18n::t("Launchpad"), LAUNCHPAD_PATH)
     }
 
     /// Parse a `type|appmode|name|path|icon_src|fit|args` line.
@@ -347,5 +356,16 @@ mod tests {
         assert!(it.is_persistable());
         it.temp = true;
         assert!(!it.is_persistable());
+    }
+
+    #[test]
+    fn launchpad_entry_roundtrips_through_the_ini_line() {
+        let it = Item::launchpad();
+        assert_eq!(it.path, LAUNCHPAD_PATH);
+        assert_eq!(it.kind, ItemKind::File);
+        let line = it.to_line();
+        let back = Item::parse_line(&line).expect("a built-in entry is a normal file item");
+        assert_eq!(back.path, LAUNCHPAD_PATH);
+        assert_eq!(back.name, it.name);
     }
 }

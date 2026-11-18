@@ -382,6 +382,8 @@ pub enum Command {
     MoveKid(usize, usize, i32),
     /// Add a note item to the dock.
     AddNote,
+    /// Re-add the built-in Launchpad entry deleted from the bar.
+    AddLaunchpad,
     /// Open the notes panel.
     OpenNotes,
     HostLinkRescan,

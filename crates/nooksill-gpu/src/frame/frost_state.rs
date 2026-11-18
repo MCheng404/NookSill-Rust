@@ -72,17 +72,33 @@ impl FrameRenderer {
     }
 
     /// Starts the live background capture.
-    pub fn start_live_frost(&mut self, hwnd: HWND, spec: crate::frost::Spec, _ppp: f32) {
+    ///
+    /// CPU mode takes a single frame instead: the live thread would re-capture
+    /// and re-convolve a backdrop that is allowed to go stale (ADR-119).
+    pub fn start_live_frost(&mut self, hwnd: HWND, spec: crate::frost::Spec, ppp: f32) {
         self.frost_spec = Some(spec);
-        self.live = crate::frost::Live::start(hwnd);
+        if crate::gpu::gpu_accel() {
+            self.frost_hwnd = None;
+            self.live = crate::frost::Live::start(hwnd);
+        } else {
+            self.frost_hwnd = Some(hwnd);
+            spec.apply(self, hwnd, ppp);
+        }
     }
 
     /// Changes the blur parameters without restarting the capture.
     ///
     /// A different radius rebuilds the convolution target on the next frame, so
-    /// dragging the blur slider costs no thread churn.
+    /// dragging the blur slider costs no thread churn. CPU mode has no next
+    /// frame to wait for, so it re-captures once here instead.
     pub fn set_frost_spec(&mut self, spec: crate::frost::Spec) {
+        let changed = self.frost_spec != Some(spec);
         self.frost_spec = Some(spec);
+        if changed && !crate::gpu::gpu_accel() {
+            if let Some(hwnd) = self.frost_hwnd {
+                spec.apply(self, hwnd, self.pixels_per_point);
+            }
+        }
     }
 
     /// Whether a captured frame is waiting to be blurred.
@@ -102,6 +118,7 @@ impl FrameRenderer {
         self.live = None;
         self.frost_spec = None;
         self.frost_size = None;
+        self.frost_hwnd = None;
     }
 
     /// The current frost parameters.

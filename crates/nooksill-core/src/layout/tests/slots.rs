@@ -229,3 +229,34 @@ fn sep_scale_roundtrip_returns_to_start() {
     // dy=0 restores the start because the base is always icon0/zoom0.
     assert_eq!(sep_scale(0.0, 64, 96), (64, 96));
 }
+
+/// A strip on the left must shift the bar right, not left.
+#[test]
+fn left_widget_strip_shifts_the_bar_right() {
+    use crate::config::Key;
+
+    let mut c = cfg96();
+    c.apply_i32(Key::W_SIDE, 1);
+    let m = calc_metrics(&c, 96, 3, 0, work());
+    assert!(m.widgets.on_left);
+    assert!(m.widget_extra > 0.0, "the strip still reserves width");
+    assert_eq!(m.signed_widget_extra(), -m.widget_extra);
+
+    let plain = base_centers(&m, &kinds(3), 0.0);
+    let shifted = base_centers(&m, &kinds(3), m.signed_widget_extra());
+    assert!(
+        (shifted[0] - plain[0] - m.widget_extra / 2.0).abs() < 0.01,
+        "左侧条带应让栏体右移半个占位宽度"
+    );
+}
+
+/// A strip on the right keeps the historical left shift.
+#[test]
+fn right_widget_strip_keeps_the_left_shift() {
+    let m = calc_metrics(&cfg96(), 96, 3, 0, work());
+    assert!(!m.widgets.on_left);
+    assert_eq!(m.signed_widget_extra(), m.widget_extra);
+    let plain = base_centers(&m, &kinds(3), 0.0);
+    let shifted = base_centers(&m, &kinds(3), m.signed_widget_extra());
+    assert!((plain[0] - shifted[0] - m.widget_extra / 2.0).abs() < 0.01);
+}

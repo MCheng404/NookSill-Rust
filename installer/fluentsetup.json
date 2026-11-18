@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/TIANLI0/FluentSetup/main/shared/schemas/fluentsetup.project.schema.json",
+  "schemaVersion": 1,
+  "variables": {
+    "Version": "2.0.1"
+  },
+  "app": {
+    "id": "MCheng404.NookSill",
+    "name": "NookSill",
+    "publisher": "MCheng404",
+    "version": "$(Version)",
+    "description": "A desktop Dock for Windows.",
+    "website": "https://github.com/MCheng404/NookSill-Rust",
+    "mainExecutable": "nooksill-dock.exe",
+    "appUserModelId": "MCheng404.NookSill"
+  },
+  "files": {
+    "source": "installer/bin",
+    "include": ["**/*"],
+    "exclude": ["**/*.pdb"],
+    "extra": [
+      { "source": "plugins", "target": "plugins" }
+    ]
+  },
+  "install": {
+    "scope": "userOrMachine",
+    "defaultScope": "user",
+    "desktopShortcut": "optionalOff",
+    "startMenuShortcut": "on",
+    "startMenuFolder": "NookSill",
+    "launchAfterInstall": "optionalOn",
+    "closeProcesses": ["nooksill-dock.exe"],
+    "adoptExistingInstall": true,
+    "restartManager": "auto"
+  },
+  "ui": {
+    "title": "NookSill",
+    "theme": "system"
+  },
+  "output": {
+    "directory": "dist/setup",
+    "fileName": "NookSill-$(Version)-Setup.exe",
+    "compression": "normal",
+    "architecture": "x64"
+  }
+}

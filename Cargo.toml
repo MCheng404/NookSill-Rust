@@ -37,6 +37,11 @@ sha2 = "0.10"
 
 pollster = "1.0"
 
+# std::error::Error 的 derive。wgpu / egui-wgpu / naga / gpu-allocator 已经把它
+# 带进依赖树并参与编译，显式声明不新增 crate；proc-macro 只在编译期展开成
+# 原本手写的那份 impl，不进二进制，与体积优先的 release profile 不冲突。
+thiserror = "2.0"
+
 # Pinned rev: upstream can change the uniform layout without notice.
 # Only capture (GDI BitBlt), blur CPU weights and SDF math are used (ADR-057).
 # No swapchain in our pipeline: egui -> offscreen texture -> DIB -> ULW.

@@ -15,8 +15,17 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
         "",
         |ctx, ui| {
             adapter_combo(ctx, ui);
+            toggle(
+                ctx,
+                ui,
+                Key::GPU_ACCEL,
+                nooksill_core::i18n::t("GPU acceleration"),
+                nooksill_core::i18n::t(
+                    "Off keeps the CPU path: frost captures a single frame and smoke stays dark. Switching restarts the dock.",
+                ),
+            );
             ui.label(
-            RichText::new(nooksill_core::i18n::t("Automatic: the backend picks by power preference, usually the integrated GPU. Applies on next start."))
+            RichText::new(nooksill_core::i18n::t("Automatic: the backend picks by power preference, usually the integrated GPU. Switching restarts the dock."))
                 .small()
                 .weak(),
         );

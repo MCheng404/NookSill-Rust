@@ -4,7 +4,7 @@ use egui::Ui;
 use nooksill_core::config::Key;
 
 use super::options::{BG_OPTS, MENU_THEME_OPTS, THEME_OPTS};
-use super::widgets::{accent_row, card, color_row, combo, slider, toggle, Ctx};
+use super::widgets::{accent_row, card, combo, slider, toggle, Ctx};
 
 pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
     card(
@@ -148,23 +148,6 @@ pub(super) fn page(ctx: &mut Ctx<'_>, ui: &mut Ui) {
                 Key::AccentTone,
                 nooksill_core::i18n::t("Follow the Windows accent (solid / gradient)"),
                 nooksill_core::i18n::t("Generate a Material You palette from the Windows accent"),
-            );
-        },
-    );
-
-    card(
-        ctx,
-        ui,
-        nooksill_core::i18n::t("Custom colours"),
-        "",
-        |ctx, ui| {
-            // One deliberate colour: the old gradient stops, angles and per-stop
-            // opacities are no longer offered (keys stay for old configs).
-            color_row(
-                ctx,
-                ui,
-                Key::BgColor1,
-                nooksill_core::i18n::t("Accent colour"),
             );
         },
     );
